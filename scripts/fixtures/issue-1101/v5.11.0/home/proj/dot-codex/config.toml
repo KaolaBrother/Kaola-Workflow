@@ -1,0 +1,69 @@
+# BEGIN kaola-workflow agents
+[features]
+multi_agent = true
+
+[agents.code-explorer]
+description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affected files, patterns, tests, and config without editing."
+config_file = "./agents/kaola-workflow/code-explorer.toml"
+nickname_candidates = ["Explorer", "Mapper", "Scout"]
+
+[agents.knowledge-lookup]
+description = "Kaola-Workflow for Codex Phase 1 knowledge researcher: checks curated library/API docs (Context7) and, when runtime allows, the open web only when external behavior or expertise matters."
+config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
+nickname_candidates = ["Docs", "Reference", "Lookup"]
+
+[agents.planner]
+description = "Kaola-Workflow for Codex Phase 2 strategist: compares grounded implementation approaches and scope tradeoffs."
+config_file = "./agents/kaola-workflow/planner.toml"
+nickname_candidates = ["Planner", "Strategist", "Options"]
+
+[agents.code-architect]
+description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands."
+config_file = "./agents/kaola-workflow/code-architect.toml"
+nickname_candidates = ["Architect", "Blueprint", "Designer"]
+
+[agents.tdd-guide]
+description = "Kaola-Workflow for Codex Phase 4 executor: implements assigned tasks with RED -> GREEN -> REFACTOR evidence."
+config_file = "./agents/kaola-workflow/tdd-guide.toml"
+nickname_candidates = ["TDD", "Executor", "Builder"]
+
+[agents.implementer]
+description = "Kaola-Workflow for Codex adaptive implementer: implements work without test-first ceremony (refactors, scaffolding, config, UI, migrations), verified by change-type-appropriate checks."
+config_file = "./agents/kaola-workflow/implementer.toml"
+nickname_candidates = ["Implementer", "Builder", "Executor"]
+
+[agents.build-error-resolver]
+description = "Kaola-Workflow for Codex repair specialist: resolves build, type, lint, dependency, and tooling failures with scoped evidence."
+config_file = "./agents/kaola-workflow/build-error-resolver.toml"
+nickname_candidates = ["Resolver", "Repair", "Buildfix"]
+
+[agents.code-reviewer]
+description = "Kaola-Workflow for Codex Phase 5 reviewer: performs detached correctness, scope, maintainability, and test coverage review."
+config_file = "./agents/kaola-workflow/code-reviewer.toml"
+nickname_candidates = ["Reviewer", "Critic", "Inspector"]
+
+[agents.security-reviewer]
+description = "Kaola-Workflow for Codex conditional Phase 5 security reviewer: audits sensitive changes without editing files."
+config_file = "./agents/kaola-workflow/security-reviewer.toml"
+nickname_candidates = ["Security", "Audit", "Threat"]
+
+[agents.doc-updater]
+description = "Kaola-Workflow for Codex Finalization documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
+config_file = "./agents/kaola-workflow/doc-updater.toml"
+nickname_candidates = ["Docs", "Docking", "Writer"]
+
+[agents.adversarial-verifier]
+description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to disprove a recorded claim (refute-if-uncertain); read-only, never a gate."
+config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
+nickname_candidates = ["Adversary", "Refuter", "Breaker"]
+
+[agents.contractor]
+description = "Kaola-Workflow for Codex lean-orchestrator bookkeeper: mechanically runs scripts and transcribes evidence into durable state; never dispatches a role and never judges."
+config_file = "./agents/kaola-workflow/contractor.toml"
+nickname_candidates = ["Contractor", "Bookkeeper", "Scribe"]
+
+[agents.workflow-planner]
+description = "Kaola-Workflow for Codex adaptive front end: claims the project + worktree and authors the workflow-plan.md DAG; never freezes, judges, asks, or dispatches."
+config_file = "./agents/kaola-workflow/workflow-planner.toml"
+nickname_candidates = ["Workflow Planner", "DAG Author", "Front End"]
+# END kaola-workflow agents

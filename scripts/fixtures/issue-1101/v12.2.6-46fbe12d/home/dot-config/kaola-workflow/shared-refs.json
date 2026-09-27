@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "blocks": {
+    "kaola-config": {
+      "claude": {
+        "scopes": [
+          "global"
+        ],
+        "surface": "global-contract",
+        "target_ids": [
+          "claude-local"
+        ],
+        "records": "@@HOME@@/.config/kaola-workflow/global-contract-targets",
+        "registered_at": "2026-09-27T01:22:06.583Z"
+      },
+      "codex": {
+        "scopes": [
+          "global"
+        ],
+        "surface": "global-contract",
+        "target_ids": [
+          "codex-local"
+        ],
+        "records": "@@HOME@@/.config/kaola-workflow/global-contract-targets",
+        "registered_at": "2026-09-27T01:22:06.896Z"
+      },
+      "grok": {
+        "scopes": [
+          "global"
+        ],
+        "surface": "global-contract",
+        "target_ids": [
+          "grok-local"
+        ],
+        "records": "@@HOME@@/.config/kaola-workflow/global-contract-targets",
+        "registered_at": "2026-09-27T01:22:07.623Z"
+      },
+      "cursor": {
+        "scopes": [
+          "global"
+        ],
+        "surface": "global-contract",
+        "target_ids": [
+          "cursor-cli-local",
+          "cursor-app-local"
+        ],
+        "records": "@@HOME@@/.config/kaola-workflow/global-contract-targets",
+        "registered_at": "2026-09-27T01:22:08.922Z"
+      }
+    }
+  }
+}

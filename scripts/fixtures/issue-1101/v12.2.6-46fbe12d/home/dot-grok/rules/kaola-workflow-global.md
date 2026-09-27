@@ -1,0 +1,115 @@
+<!-- KW-COMPACT-RECOVERY-START -->
+# Kaola-Workflow compact recovery
+
+Recovery marker: `KW-COMPACT-RECOVERY-V2`.
+
+# Global Workflow Contract
+
+Universal contract. Project instructions supplement verified local facts and constraints. A
+project exception must state its scope and must not weaken higher-priority instructions or host
+safety boundaries.
+
+## First Principles
+
+1. Machines decide facts; humans decide values. Continue inside already-granted authorization and
+   scope. Unauthorized irreversible or value-laden calls still go to the user.
+2. Own your own verdicts. Local evidence, not an external system, decides done.
+
+## Premise and evidence
+
+- Read the target before writing.
+- Keep changes surgical. Serve the user's goal and proven problems; avoid speculative mechanisms.
+
+## Backlog and durable state
+
+- The forge's open issue list is backlog truth; later comments with explicit corrections win.
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives. Nothing
+  else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.
+- Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.
+- `kaola-workflow/{project}/workflow-state.md` records the claim;
+  `kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout records the run.
+- Organizing issues does not auto-claim and does not auto-create a mission ledger. Daily governance
+  does not auto-create a run; when an active run exists, other operations respect it.
+
+## Mission Ledger
+
+- One run has one mission ledger at `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, where `N`
+  is the run's `issue_number`. It is gitignored, lives only in the main checkout, and is never
+  copied into a worktree.
+- One JSON object per line, one line per mission, keys exactly `n`, `name`, `details`, `status`;
+  `status` is `todo`, `in-flight`, `done`, `failed`, or `blocked`. No header and no other keys.
+- Only the run's Main Orchestrator writes it, rewriting the whole file, at three write moments:
+  create with `todo`; before the work goes out, set `in-flight` and add to `details` where it went,
+  including where the output will land; then set the terminal status and add where the outcome
+  landed. A `done` or `failed` line is immutable. One dispatch has one result, including `failed`
+  or `blocked`.
+- A mission is a recoverable outcome. A failed command, intermediate finding, repair attempt, or
+  review round does not create another mission. `blocked` means the current owner cannot safely or
+  legitimately continue.
+- Resume by trusting done lines, reconciling in-flight locators, and continuing the frontier: the
+  ledger minus done minus in-flight.
+- Mutation invalidates affected PASS evidence.
+- Finalization, issue closure, archive, and sink are not missions. Archive moves the ledger to
+  `kaola-workflow/archive/<project>/mission-ledger.jsonl`. The last mission only establishes
+  readiness; lifecycle records own the transaction's final truth.
+
+## Resume the active operation
+
+Read project `AGENTS.md`, active `workflow-state.md`, and the run's mission ledger
+(`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`). With open work,
+completely reload the installed Workflow Next prompt and resume its frontier without intake or
+claim. When all missions are done,
+completely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.
+
+<!-- KW-RUNTIME-DISPATCH-START -->
+## Delegation
+
+**Runtime dispatch contract (always loaded).**
+
+Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, lets a clean context check what your own cannot, or enables genuinely
+independent parallel work. Both modes are first-class; width follows the true work frontier. No
+dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the
+judgment.
+
+A subagent is an executor in a clean context, not a judge; where Kaola installs profiles it runs the
+subagent default binding. Its handback is evidence. You hold the verdict, and you reach it by reading
+the candidate — the diff, the findings, the command output — never the `result` prose alone. Ask for
+small, structured handbacks rather than fanning out and reading everything. Fan out where breadth
+pays and every handback stays small: exploring, measuring, refuting one stated claim, reviewing the
+same frozen diff along different cuts (correctness, test custody, trust boundary), or producing
+candidates you then choose between. When the cheaper child keeps failing an item, take it over and
+finish it inline.
+
+Use named, built-in, and generic routes only under their real identities. The subagent default
+binding guides selection but never disables a task-sensitive override the host actually exposes. If
+an exact role is absent, inspect adequate native routes; use one only when it satisfies custody,
+evidence, and stop boundaries. Otherwise work inline, record the specific `capability_gap`, and
+re-evaluate the next item. Never let a generic route claim a named role's identity. On a runtime
+that installs no Kaola role profiles, the absence of a named role is design, not a capability gap;
+choose a native route or work inline per item.
+
+Send a bounded, self-sufficient brief naming the outcome, evidence, worktree or commit, custody, and
+stop condition.
+
+<!-- KW-RUNTIME-DELEGATION-START -->
+## Runtime adapter facts
+
+Host: Grok. If the running host is not Grok, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
+
+Find named profiles in the project `.grok/agents/` directory or the user `~/.grok/agents/` directory.
+Dispatch with `spawn_subagent` and `subagent_type: "<role>"`; preserve native background, isolation, resume, and cwd options, but omit per-call model and effort because the profile pins both.
+
+**Subagent default:** every installed Kaola profile pins `model: grok-4.7` with `effort: medium`; omit per-call model and effort because the profile pins both.
+**Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
+
+The named profile's native `tools` allowlist carries the role tool boundary.
+Native alternatives include full `general-purpose`, read/shell `explore`, and read/shell `plan`, plus background and isolated children; use the closest truthful contract.
+Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities.
+<!-- KW-RUNTIME-DELEGATION-END -->
+<!-- KW-RUNTIME-DISPATCH-END -->
+<!-- KW-COMPACT-RECOVERY-END -->

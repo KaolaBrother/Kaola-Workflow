@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "kind": "cursor_global_authority",
+  "kaola_workflow_version": "11.1.1",
+  "forge": "github",
+  "files": {
+    "agents/adversarial-verifier.md": {
+      "sha256": "b661c6520ea522f0b1a1c5dc8946ffb4a678fb78959817eced33ca8df9280864",
+      "mode": 420
+    },
+    "agents/build-error-resolver.md": {
+      "sha256": "738edf49247e3068989647c20c5cb63e16e6a522bf920d3a7841102fe213258c",
+      "mode": 420
+    },
+    "agents/code-architect.md": {
+      "sha256": "e5ff1e87c6c11445f6433d9572ee41db3b7bca894f83c080b8b71493b9b666a4",
+      "mode": 420
+    },
+    "agents/code-explorer.md": {
+      "sha256": "8cda12d588f8bb2d93510cc4120a63608a8a2527c29c4735e55c2f600d509f23",
+      "mode": 420
+    },
+    "agents/code-reviewer.md": {
+      "sha256": "a0e42279f488edc1841d9af7a7747a48ef3c53c138da5864b2204dcc01289302",
+      "mode": 420
+    },
+    "agents/doc-updater.md": {
+      "sha256": "0a5147fe7612191df9abdd88dd5c616d41745049e8ff904f03b61540094ecd37",
+      "mode": 420
+    },
+    "agents/implementer.md": {
+      "sha256": "36ae6cf5b78059097e9bf34e0d00d6f93b179bb58ee9b94282d7474f8b852ad9",
+      "mode": 420
+    },
+    "agents/investigator.md": {
+      "sha256": "65b01cf1ae9e28512fbc5fe279130a3ca58a2474c97af95be7c9d140879b29ed",
+      "mode": 420
+    },
+    "agents/knowledge-lookup.md": {
+      "sha256": "2af57644634c44287a28ba8b423136b23fc7e35f1a95c5baf27aca4ffaa7f790",
+      "mode": 420
+    },
+    "agents/metric-optimizer.md": {
+      "sha256": "1ff0fd72d5dcd19faff278a6416eb9afdf67d2ce6297e77a8c788ce9f2988ec3",
+      "mode": 420
+    },
+    "agents/planner.md": {
+      "sha256": "62ef5194544b8dbec704685194c573989eb501d3e6d78dfcb50a930ac124df99",
+      "mode": 420
+    },
+    "agents/security-reviewer.md": {
+      "sha256": "3fe7ad309626211ba38c6c330f667bddaf1b9cd7ee487c96127fada14e0264f0",
+      "mode": 420
+    },
+    "agents/synthesizer.md": {
+      "sha256": "28c1373b4d60ddef176cfc5ba1910e23b8291f29a3859d1d31f18c2007ed771d",
+      "mode": 420
+    },
+    "agents/tdd-guide.md": {
+      "sha256": "ce66aeb1e912e55a118e596cef7d2a4afd431023ef6d24c4150fb3b9ee705545",
+      "mode": 420
+    },
+    "commands/kaola-workflow-finalize.md": {
+      "sha256": "915649c3b4e35322089825e2255a757860516d4ef87168d9402c55fd129212bd",
+      "mode": 420
+    },
+    "commands/workflow-init.md": {
+      "sha256": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3",
+      "mode": 420
+    },
+    "commands/workflow-next.md": {
+      "sha256": "243737c233cc12a54a29657e53e796bd6e01978e0824beeeb96cb80eea498bde",
+      "mode": 420
+    },
+    "kaola-workflow/scripts/kaola-workflow-active-folders.js": {
+      "sha256": "b7b21a2eb66022aa62a2c00cbbf4d519e2389fe1a66509a53b58ab863eb287b7",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": {
+      "sha256": "987168ff76a18fd2a296d1603e7c40d01beba6a1d9fd82d4724f8f6c0359a1e4",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-claim.js": {
+      "sha256": "5477c4b0fc49eac7451f3635ab0bf363c2790a4024d662c6d684ef2b9a4b3154",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-classifier.js": {
+      "sha256": "11a60d3dba4f4687b2d285e28f28d4b326b11d0a46e67bfcb71896dc7738534c",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-closure-audit.js": {
+      "sha256": "0c4cb10ca370d807a9f09bed54eecadcb589c4ea1792a48208e21b005a4d659a",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-closure-contract.js": {
+      "sha256": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-codex-preflight.js": {
+      "sha256": "0bde744aa98783b9a6439fb3ae0746ac3775be1f90319bf40d8e266b25ea1b2e",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-cursor-surface.js": {
+      "sha256": "2bebbda8d8dd60be49e84120c18fcc3033736fa9c7619f8aa196c0833933982a",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-gap-sweep.js": {
+      "sha256": "85efecc0333eb043df3718cb8da1ef2a5abac8cac4f088d55764b7e8921903c4",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-ledger-compare.js": {
+      "sha256": "5122f60285cb129ddf14941ce79a9d06a234cced77f4bb508d4e312da7c9f245",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js": {
+      "sha256": "d05e66eec2295a71a245e3955663d6c9d81096fbee997f587f18205a39acac13",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-run-chains.js": {
+      "sha256": "0d8b6dcf084f318445636677022dc79fcf1fdeb806035d4224993bedd18352ca",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-sink-merge.js": {
+      "sha256": "4987c87de3ba3cf472b3c979a2b579efa7046251455dd7948dda00c8bb6fde60",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-sink-pr.js": {
+      "sha256": "5798e1e9dd8a3357100a9f9fc7faa6b7de5fdde55111989149a632373ec6880f",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-telemetry-report.js": {
+      "sha256": "ad22086e4adf909e78145ecd26b3acebb484f8aa3556b6c74149467cef757da0",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-validation-runner.js": {
+      "sha256": "c5e0191c45dd3744e8698ec0eaa89046daa6f0d5c00c13e1255fc0eda77cfb21",
+      "mode": 493
+    },
+    "kaola-workflow/templates/agents/runtime-capabilities.json": {
+      "sha256": "03ce66c8ad72fec3ba9837342eb3271696242a078c64702f175e00106b00184f",
+      "mode": 420
+    }
+  },
+  "hook_entries": {}
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "global_contract_target",
+  "id": "grok-local",
+  "runtime": "grok",
+  "host": "local",
+  "status": "DORMANT",
+  "path": "@@HOME@@/.grok/rules/kaola-workflow-global.md",
+  "carrier": "dedicated",
+  "carrier_group": "grok-user-rule",
+  "source_sha256": "48c9540f7ac8ea4d1a7d5c6c4ec32b8e779306b693e8adea49d245f8bd6d780a",
+  "target_sha256": "232b252ec626f1d2b720b851cd4f2c5e533aa6a09d3c036a4056fa61093dd212",
+  "render_sha256": "415b730bbb51fdddd96bc22074196a1db5f4cb19d782f75108a0c28c964acfc1",
+  "install_sha256": "415b730bbb51fdddd96bc22074196a1db5f4cb19d782f75108a0c28c964acfc1",
+  "before_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "nonce": null,
+  "candidate_sha": "1461d7fbfe27b716cca737d9788b66db08e614d3",
+  "installed_at": "2026-09-27T01:22:07.617Z"
+}

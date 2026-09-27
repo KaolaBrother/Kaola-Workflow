@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "plugin": "kaola-workflow",
+  "plugin_version": "12.2.6",
+  "installed_at": "2026-09-27T01:22:06.832Z",
+  "source_plugin_root": "@@SRC@@/plugins/kaola-workflow",
+  "roles": [
+    "code-explorer",
+    "code-reviewer",
+    "doc-updater",
+    "implementer",
+    "investigator",
+    "knowledge-lookup",
+    "tdd-guide"
+  ],
+  "files": {
+    "code-explorer.toml": "sha256:9a190d8144b678e8c101fc81377ef02292355081244da4ddd842e444b79f0605",
+    "code-reviewer.toml": "sha256:2b6c5dfb4f1a90d2352196c73e5958375ca91ee1e7abde21fe910c156b659e80",
+    "doc-updater.toml": "sha256:057f1a940edaabd324240d37e62d883c7dfdc140dc185e585d4df043a79c836d",
+    "implementer.toml": "sha256:2e2232cd7e9086b5cbb9d8cbb320cf51195c6e863a0741da926111c9b4ba866b",
+    "investigator.toml": "sha256:de1e629d8e38b901c4972b2262143e6fcb0c052616bc4ae29fc873573548acac",
+    "knowledge-lookup.toml": "sha256:3eb6112d0b882e28b3be99205e0a8a3fa26de8792a4701071a3051d7a4f14440",
+    "tdd-guide.toml": "sha256:4b2250cda1bbe03544f81cbb628a5e66b558b765b1200a238b99bdc3ab519380"
+  },
+  "retired_files_removed": []
+}

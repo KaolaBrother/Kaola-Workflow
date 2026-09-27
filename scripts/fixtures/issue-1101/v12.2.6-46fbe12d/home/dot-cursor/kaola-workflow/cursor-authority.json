@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "kind": "cursor_global_authority",
+  "kaola_workflow_version": "12.2.6",
+  "forge": "github",
+  "files": {
+    "agents/code-explorer.md": {
+      "sha256": "6c23a200c0d1421272167a6d837d6e3571eb93201b7cbfeea8011b054e870fa4",
+      "mode": 420
+    },
+    "agents/code-reviewer.md": {
+      "sha256": "a6e57f45d4a022cdb0b50f2b6584a4db0238f4d4b24a796bcbb40e83e6f492c8",
+      "mode": 420
+    },
+    "agents/doc-updater.md": {
+      "sha256": "88dd06b8111b2583eb28084b05115b5b4114cf3d96d5915c0fd771a7beafee5e",
+      "mode": 420
+    },
+    "agents/implementer.md": {
+      "sha256": "60223c69ce28c5d0048c72b997c4f3101a2661411803636071716041e9bd8747",
+      "mode": 420
+    },
+    "agents/investigator.md": {
+      "sha256": "71d6cde8d82f951c8d7dbff2b37d66c96d1be1f492d4b309e5116383c79f9d31",
+      "mode": 420
+    },
+    "agents/knowledge-lookup.md": {
+      "sha256": "0919cc74ebb75e2044c794fd18096db39abcc85bacc29e97fb47a9a25e8a4cd9",
+      "mode": 420
+    },
+    "agents/tdd-guide.md": {
+      "sha256": "0826fbd8c5af8c4f9a4dbd0e34c928709393ecb172e87360b83511a18d57a309",
+      "mode": 420
+    },
+    "commands/kaola-workflow-finalize.md": {
+      "sha256": "7b1dac91bbf71de79cdb1153c37995aa962de66030802e038aae930c91f98d21",
+      "mode": 420
+    },
+    "commands/workflow-init.md": {
+      "sha256": "4d64139f8f32a4ca0aa8593e975c7b52186909609fa1f081267e264d6ab8c474",
+      "mode": 420
+    },
+    "commands/workflow-next.md": {
+      "sha256": "7229ce9d9e1f5614c7bf50790de9e8134dd9cbf88f87c455c13ec8f8fc96c625",
+      "mode": 420
+    },
+    "kaola-workflow/scripts/kaola-workflow-active-folders.js": {
+      "sha256": "b7b21a2eb66022aa62a2c00cbbf4d519e2389fe1a66509a53b58ab863eb287b7",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": {
+      "sha256": "29136d87d2f474ff837b6a147d3f61a8b874cd3e0077260e03362f703996ff74",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-claim.js": {
+      "sha256": "b354f2a6299ed90ca5f51d794ecead83e6ffc8a334e779121cb5c034108c5c79",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-classifier.js": {
+      "sha256": "11a60d3dba4f4687b2d285e28f28d4b326b11d0a46e67bfcb71896dc7738534c",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-closure-audit.js": {
+      "sha256": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-closure-contract.js": {
+      "sha256": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-codex-preflight.js": {
+      "sha256": "11ec09a88a9e54dd8508c58afe0565f8bd81c98c8061187b7eef06e9f137a0d8",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-cursor-surface.js": {
+      "sha256": "c291334475a48b1854a554930f471d97d58f5d49f2059598b2fa50bd5656f7bc",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-gap-sweep.js": {
+      "sha256": "85efecc0333eb043df3718cb8da1ef2a5abac8cac4f088d55764b7e8921903c4",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js": {
+      "sha256": "1abcd38f4ef53fb8adba72de911951463a911d4a93a303bd9437c8d912e8528f",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-run-chains.js": {
+      "sha256": "de8a7744d3004e04445fe933afcda487ca9e0898138e9cebb6125061bee78dae",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-sink-merge.js": {
+      "sha256": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-sink-pr.js": {
+      "sha256": "afb507aba272b480edac93d613594aecaabe6fece5400674e959614f80b87cf4",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-telemetry-report.js": {
+      "sha256": "ad22086e4adf909e78145ecd26b3acebb484f8aa3556b6c74149467cef757da0",
+      "mode": 493
+    },
+    "kaola-workflow/scripts/kaola-workflow-validation-runner.js": {
+      "sha256": "c5e0191c45dd3744e8698ec0eaa89046daa6f0d5c00c13e1255fc0eda77cfb21",
+      "mode": 493
+    },
+    "kaola-workflow/templates/agents/runtime-capabilities.json": {
+      "sha256": "08b26ac503203d080d7631c4f3daac9c083f3fb40fbc0c168c332253dd36294a",
+      "mode": 420
+    }
+  },
+  "hook_entries": {}
+}

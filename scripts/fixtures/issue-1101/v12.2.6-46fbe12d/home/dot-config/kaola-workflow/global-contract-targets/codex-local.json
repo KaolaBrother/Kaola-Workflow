@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "global_contract_target",
+  "id": "codex-local",
+  "runtime": "codex",
+  "host": "local",
+  "status": "INSTALLED",
+  "path": "@@HOME@@/.codex/AGENTS.md",
+  "carrier": "managed_region",
+  "carrier_group": "codex-global-agents",
+  "source_sha256": "48c9540f7ac8ea4d1a7d5c6c4ec32b8e779306b693e8adea49d245f8bd6d780a",
+  "target_sha256": "803ba881e43e945335fe72f55ac682324b506c950fc888fc246de4f11e465e2a",
+  "render_sha256": "48c9540f7ac8ea4d1a7d5c6c4ec32b8e779306b693e8adea49d245f8bd6d780a",
+  "install_sha256": "bcdf033fbf16febad1d71ca54031de2bd65726eae56045c5061df4f1cba85a3c",
+  "before_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "managed_origin": {
+    "kind": "absent",
+    "insert_prefix_bytes": 0,
+    "insert_suffix_bytes": 1
+  },
+  "nonce": null,
+  "candidate_sha": "1461d7fbfe27b716cca737d9788b66db08e614d3",
+  "installed_at": "2026-09-27T01:22:06.892Z"
+}

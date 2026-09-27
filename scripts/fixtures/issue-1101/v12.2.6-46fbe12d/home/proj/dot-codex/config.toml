@@ -1,0 +1,30 @@
+# BEGIN kaola-workflow agents
+[agents.code-explorer]
+description = "Code explorer. Explains how specified code works and locates its implementation, call relationships, and dependencies; reads and traces, and writes only its own findings."
+config_file = "./agents/kaola-workflow/code-explorer.toml"
+
+[agents.code-reviewer]
+description = "Code reviewer. Independently examines the exact frozen candidate for defects it introduces and delivers verifiable findings; the brief may focus the review on refuting a stated claim, on trust-boundary and exploitability risks, or on correctness and test custody, and the orchestrator holds the verdict."
+config_file = "./agents/kaola-workflow/code-reviewer.toml"
+nickname_candidates = ["Reviewer", "Critic", "Inspector"]
+
+[agents.doc-updater]
+description = "Documentation updater. Makes the project documentation state the real behavior and usage after a change, transcribing actual signatures, commands, and outputs, following the project's existing documentation conventions."
+config_file = "./agents/kaola-workflow/doc-updater.toml"
+
+[agents.implementer]
+description = "Implementer. Writes the production change for an assigned outcome — behavior, fixes, refactors, scaffolding, config, migrations, glue — and delivers it with the verification it actually ran; does not alter acceptance meaning."
+config_file = "./agents/kaola-workflow/implementer.toml"
+
+[agents.investigator]
+description = "Investigator. Answers fact questions that must be run to be known — builds, tests, reproductions, measurements, bisects, and A/B legs — and delivers reviewable measurements; never edits tracked files and never chooses the fix."
+config_file = "./agents/kaola-workflow/investigator.toml"
+
+[agents.knowledge-lookup]
+description = "Knowledge lookup. Finds authoritative external sources for facts the local codebase cannot establish and delivers sourced conclusions with verified dates and explicit unknowns."
+config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
+
+[agents.tdd-guide]
+description = "Test author. Holds custody of the acceptance tests: writes tests that distinguish correct from incorrect behavior for the assigned outcome, proves they fail on the recorded baseline, and never writes production code."
+config_file = "./agents/kaola-workflow/tdd-guide.toml"
+# END kaola-workflow agents

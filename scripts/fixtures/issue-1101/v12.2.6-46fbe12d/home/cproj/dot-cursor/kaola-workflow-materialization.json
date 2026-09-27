@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "kind": "cursor_project_materialization",
+  "kaola_workflow_version": "12.2.6",
+  "forge": "github",
+  "target": "@@HOME@@/cproj",
+  "authority_receipt_sha256": "fa8e0b55d87ce1eb3e2d771ecc3566105779a51abb2f0cad06c506d0374019db",
+  "files": {
+    "agents/code-explorer.md": {
+      "sha256": "6c23a200c0d1421272167a6d837d6e3571eb93201b7cbfeea8011b054e870fa4",
+      "mode": 420
+    },
+    "agents/code-reviewer.md": {
+      "sha256": "a6e57f45d4a022cdb0b50f2b6584a4db0238f4d4b24a796bcbb40e83e6f492c8",
+      "mode": 420
+    },
+    "agents/doc-updater.md": {
+      "sha256": "88dd06b8111b2583eb28084b05115b5b4114cf3d96d5915c0fd771a7beafee5e",
+      "mode": 420
+    },
+    "agents/implementer.md": {
+      "sha256": "60223c69ce28c5d0048c72b997c4f3101a2661411803636071716041e9bd8747",
+      "mode": 420
+    },
+    "agents/investigator.md": {
+      "sha256": "71d6cde8d82f951c8d7dbff2b37d66c96d1be1f492d4b309e5116383c79f9d31",
+      "mode": 420
+    },
+    "agents/knowledge-lookup.md": {
+      "sha256": "0919cc74ebb75e2044c794fd18096db39abcc85bacc29e97fb47a9a25e8a4cd9",
+      "mode": 420
+    },
+    "agents/tdd-guide.md": {
+      "sha256": "0826fbd8c5af8c4f9a4dbd0e34c928709393ecb172e87360b83511a18d57a309",
+      "mode": 420
+    },
+    "commands/kaola-workflow-finalize.md": {
+      "sha256": "7b1dac91bbf71de79cdb1153c37995aa962de66030802e038aae930c91f98d21",
+      "mode": 420
+    },
+    "commands/workflow-init.md": {
+      "sha256": "4d64139f8f32a4ca0aa8593e975c7b52186909609fa1f081267e264d6ab8c474",
+      "mode": 420
+    },
+    "commands/workflow-next.md": {
+      "sha256": "7229ce9d9e1f5614c7bf50790de9e8134dd9cbf88f87c455c13ec8f8fc96c625",
+      "mode": 420
+    }
+  },
+  "hook_entries": {}
+}

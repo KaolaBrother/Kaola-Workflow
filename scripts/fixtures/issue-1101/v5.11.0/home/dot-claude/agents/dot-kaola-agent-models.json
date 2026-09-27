@@ -1,0 +1,15 @@
+{
+  "code-explorer": "sonnet",
+  "knowledge-lookup": "sonnet",
+  "planner": "opus",
+  "code-architect": "opus",
+  "tdd-guide": "sonnet",
+  "implementer": "sonnet",
+  "build-error-resolver": "sonnet",
+  "code-reviewer": "opus",
+  "security-reviewer": "opus",
+  "doc-updater": "sonnet",
+  "adversarial-verifier": "sonnet",
+  "contractor": "sonnet",
+  "workflow-planner": "opus"
+}

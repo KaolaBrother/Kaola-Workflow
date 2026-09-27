@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "global_contract_target",
+  "id": "cursor-app-local",
+  "runtime": "cursor",
+  "host": "app-local",
+  "status": "DORMANT",
+  "path": "@@HOME@@/.cursor/rules/kaola-workflow-global.mdc",
+  "carrier": "dedicated",
+  "carrier_group": "cursor-local-user-rule",
+  "source_sha256": "48c9540f7ac8ea4d1a7d5c6c4ec32b8e779306b693e8adea49d245f8bd6d780a",
+  "target_sha256": "78e35e9287188312696b4d528ea2e3d61b633ece717547ff9310d37d3a157928",
+  "render_sha256": "d2e6fd5b1e58c47d8f79e74e3ee2f1064b7fc17371c70f5895d03ebbfe9aeef4",
+  "install_sha256": "d2e6fd5b1e58c47d8f79e74e3ee2f1064b7fc17371c70f5895d03ebbfe9aeef4",
+  "before_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "nonce": null,
+  "candidate_sha": "1461d7fbfe27b716cca737d9788b66db08e614d3",
+  "installed_at": "2026-09-27T01:22:08.920Z"
+}
