@@ -895,6 +895,24 @@ function createOwnedHookFileBackup(target, expectedStat) {
     `could not create a collision-free hook backup for ${target}`);
 }
 
+// Promoting the stage drops the backup's link count, which advances its ctime, so the version
+// recorded at reservation can no longer match (#1108). Re-record it only while the backup is the
+// same inode with unchanged size and mtime and still holds the original bytes; otherwise return
+// null so cleanup refuses. The stat is taken before the read: a later write advances ctime again.
+function promotedHookBackupStat(backup, originalBytes) {
+  const current = lstatIfPresent(backup.path);
+  if (!current || current.isSymbolicLink() || !current.isFile()
+      || !sameFileIdentity(current, backup.stat)
+      || current.size !== backup.stat.size || current.mtimeMs !== backup.stat.mtimeMs) {
+    return null;
+  }
+  try {
+    return read(backup.path) === originalBytes ? current : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function updateHooks() {
   let transaction = null;
   let hooksStage = null;
@@ -979,7 +997,7 @@ function updateHooks() {
     }
 
     transaction.finalize();
-    if (hooksBackup) cleanupOwnedFile(hooksBackup.path, hooksBackup.stat);
+    if (hooksBackup) cleanupOwnedFile(hooksBackup.path, promotedHookBackupStat(hooksBackup, current));
     return { status: hooksChanged ? 'updated' : 'unchanged', stableCopy: transaction.summary };
   } catch (error) {
     if (hooksInstalled) {

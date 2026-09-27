@@ -602,6 +602,112 @@ function enableMultiAgentV2(homeRoot) {
       }
     });
 
+  // #1108: the owned hooks.json backup is a hard link, so promoting the stage drops its link
+  // count and advances its ctime. A successful update must still remove it; a backup that is no
+  // longer the owned original must still survive, and rollback must still restore from it.
+  {
+    const priorHooks = '{"hooks":{"SessionStart":[{"id":"user:keep","hooks":[]}]}}\n';
+    const hookSiblings = hooksPath => fs.readdirSync(path.dirname(hooksPath))
+      .filter(name => name.startsWith('hooks.json.kaola-')).sort();
+    const isPromotion = (source, target, hooksPath) =>
+      String(source).includes('hooks.json.kaola-stage-')
+      && path.resolve(String(target)) === path.resolve(hooksPath);
+
+    withHookUpdateFixture('issue-1108-success-leaves-no-backup', priorHooks,
+      ({ fixtureInstaller, hooksPath }) => {
+        assert.strictEqual(fixtureInstaller.updateHooks().status, 'updated',
+          '#1108 fixture must update an existing hooks.json');
+        assert.notStrictEqual(fs.readFileSync(hooksPath, 'utf8'), priorHooks);
+        assert.deepStrictEqual(hookSiblings(hooksPath), [],
+          '#1108: a successful hooks.json update must not leave a .kaola-backup-* file behind');
+        assert.strictEqual(fixtureInstaller.updateHooks().status, 'unchanged');
+        assert.deepStrictEqual(hookSiblings(hooksPath), [],
+          '#1108: an unchanged hooks.json refresh leaves no sibling behind');
+      });
+
+    withHookUpdateFixture('issue-1108-backup-replaced-after-promotion', priorHooks,
+      ({ fixtureInstaller, hooksPath }) => {
+        const originalRenameSync = fs.renameSync;
+        let replacedBackup = null;
+        try {
+          fs.renameSync = function replaceBackupAfterPromotion(source, target) {
+            const result = originalRenameSync.call(fs, source, target);
+            if (!replacedBackup && isPromotion(source, target, hooksPath)) {
+              replacedBackup = path.join(path.dirname(hooksPath), hookSiblings(hooksPath)
+                .find(name => name.startsWith('hooks.json.kaola-backup-')));
+              fs.unlinkSync(replacedBackup);
+              fs.writeFileSync(replacedBackup, 'foreign backup after promotion\n');
+            }
+            return result;
+          };
+          assert.strictEqual(fixtureInstaller.updateHooks().status, 'updated');
+          assert(replacedBackup, '#1108 fixture must replace the backup after promotion');
+          assert.strictEqual(fs.readFileSync(replacedBackup, 'utf8'),
+            'foreign backup after promotion\n',
+          '#1108: success cleanup must not delete a replacement backup inode it does not own');
+        } finally {
+          fs.renameSync = originalRenameSync;
+        }
+      });
+
+    withHookUpdateFixture('issue-1108-backup-rewritten-after-promotion', priorHooks,
+      ({ fixtureInstaller, hooksPath }) => {
+        const originalRenameSync = fs.renameSync;
+        // Same length and a whole-second mtime restored exactly: only the byte check can refuse.
+        const tampered = priorHooks.replace('user:keep', 'user:edit');
+        const pinnedTime = 1700000000;
+        fs.utimesSync(hooksPath, pinnedTime, pinnedTime);
+        let rewrittenBackup = null;
+        try {
+          fs.renameSync = function rewriteBackupAfterPromotion(source, target) {
+            const result = originalRenameSync.call(fs, source, target);
+            if (!rewrittenBackup && isPromotion(source, target, hooksPath)) {
+              rewrittenBackup = path.join(path.dirname(hooksPath), hookSiblings(hooksPath)
+                .find(name => name.startsWith('hooks.json.kaola-backup-')));
+              fs.writeFileSync(rewrittenBackup, tampered);
+              fs.utimesSync(rewrittenBackup, pinnedTime, pinnedTime);
+            }
+            return result;
+          };
+          assert.strictEqual(fixtureInstaller.updateHooks().status, 'updated');
+          assert(rewrittenBackup, '#1108 fixture must rewrite the backup in place');
+          assert.strictEqual(fs.readFileSync(rewrittenBackup, 'utf8'), tampered,
+            '#1108: success cleanup must not delete a backup whose bytes are no longer the original');
+        } finally {
+          fs.renameSync = originalRenameSync;
+        }
+      });
+
+    withHookUpdateFixture('issue-1108-rollback-after-promotion', priorHooks,
+      ({ fixtureInstaller, stableDir, hooksPath }) => {
+        const originalRenameSync = fs.renameSync;
+        const stableBefore = treeSnapshot(stableDir);
+        let injected = false;
+        try {
+          fs.renameSync = function reinodeLiveAfterPromotion(source, target) {
+            const result = originalRenameSync.call(fs, source, target);
+            if (!injected && isPromotion(source, target, hooksPath)) {
+              const promoted = fs.readFileSync(target);
+              fs.unlinkSync(target);
+              fs.writeFileSync(target, promoted);
+              injected = true;
+            }
+            return result;
+          };
+          assert.throws(() => fixtureInstaller.updateHooks(), /hook_refresh_failed/,
+            '#1108 fixture must fail after promotion');
+          assert(injected);
+          assert.strictEqual(fs.readFileSync(hooksPath, 'utf8'), priorHooks,
+            '#1108: a post-promotion failure still restores hooks.json from the owned backup');
+          assert.deepStrictEqual(hookSiblings(hooksPath), [],
+            '#1108: the restored backup is consumed, not duplicated');
+          assert.deepStrictEqual(treeSnapshot(stableDir), stableBefore);
+        } finally {
+          fs.renameSync = originalRenameSync;
+        }
+      });
+  }
+
   function assertAtomicUpdate(label, injectCopyFailure) {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-hook-atomic-'));
     const fixturePlugin = path.join(fixtureRoot, 'plugin');
