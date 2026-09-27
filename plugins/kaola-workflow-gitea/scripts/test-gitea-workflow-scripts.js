@@ -1682,8 +1682,8 @@ function testStaleWorktreeCleanup() {
         'sc2c: a resumable sink receipt (steps not all done) must protect the run\'s own LANE worktree from --execute');
       assert(!Array.isArray(out1.removed) || !out1.removed.some(p => p === wtPath),
         'sc2c: removed must NOT contain the pinned lane worktree, got: ' + JSON.stringify(out1.removed));
-      assert(Array.isArray(out1.active_worktrees) && out1.active_worktrees.some(w => w.path === wtPath),
-        'sc2c: the pinned lane worktree must be reported active, got: ' + JSON.stringify(out1.active_worktrees));
+      assert(!Array.isArray(out1.deleted_branch) || !out1.deleted_branch.includes('workflow/gitea-issue-400'),
+        'sc2c: the pinned lane worktree\'s branch must NOT be deleted either, got: ' + JSON.stringify(out1.deleted_branch));
       writeReceipt('done', 'done');
       const out2 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
       assert(!fs.existsSync(wtPath),

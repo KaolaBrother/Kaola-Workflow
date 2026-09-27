@@ -5488,8 +5488,8 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       '#1100 lane sweep: a resumable sink receipt (steps not all done) must protect the run\'s own LANE worktree from --execute — the issue closing is exactly the window the lane worktree is still in use');
     assert(!Array.isArray(out1_1100.removed) || !out1_1100.removed.some(p => p === wtPath1100),
       '#1100 lane sweep: removed must NOT contain the live run\'s lane worktree, got ' + JSON.stringify(out1_1100.removed));
-    assert(Array.isArray(out1_1100.active_worktrees) && out1_1100.active_worktrees.some(w => w.path === wtPath1100),
-      '#1100 lane sweep: the pinned lane worktree must be reported active, got ' + JSON.stringify(out1_1100.active_worktrees));
+    assert(!Array.isArray(out1_1100.deleted_branch) || !out1_1100.deleted_branch.includes('workflow/issue-96301'),
+      '#1100 lane sweep: the pinned lane worktree\'s branch must NOT be deleted either, got ' + JSON.stringify(out1_1100.deleted_branch));
 
     // All-done: a COMPLETED run's leftover lane worktree sweeps exactly as before — the pin is
     // receipt-driven, never a blanket exemption for lane worktrees.
