@@ -579,6 +579,78 @@ try {
       `once the block can go, the kept record still proves the profiles and all retire\n${r3.out}`);
   });
 
+  // #1109 — Codex keys hook trust by position (`hooks.state."<hooks.json>:<event>:<i>:<j>"`), so a
+  // reinstall must keep every hooks.json entry where it is: a managed entry is replaced in place by
+  // id, only a new managed entry is appended, a managed entry the template no longer carries is still
+  // dropped, and a foreign entry never moves. An unchanged reinstall is byte-identical and says so.
+  const HOOKS_UNCHANGED = 'Kaola-Workflow Codex hooks: unchanged at ~/.codex/hooks.json';
+  const HOOKS_UPDATED = 'Kaola-Workflow Codex hooks: updated at ~/.codex/hooks.json';
+  const foreignHook = id => ({
+    matcher: 'compact',
+    hooks: [{ type: 'command', command: `echo ${id}`, timeout: 5 }],
+    id,
+  });
+  const writeHooks = (file, doc) => fs.writeFileSync(file, JSON.stringify(doc, null, 2) + '\n');
+  const idsOf = (doc, event) => ((doc.hooks || {})[event] || []).map(e => e && e.id);
+  for (const edition of EDITIONS) {
+    section(`#1109 reinstall keeps hooks.json positions; unchanged is byte-identical (${edition})`, () => {
+      const home = makeHome(`hooks-position-${edition}`);
+      check(installGlobal(home, edition).status === 0, 'the first install exits 0');
+      const hooksFile = path.join(home, '.codex', 'hooks.json');
+      const managed = JSON.parse(readText(hooksFile)).hooks.SessionStart[0];
+      check(managed && managed.id === 'kaola-workflow:compact-context', 'the managed compact hook is installed');
+
+      // The measured v12.3.0 layout: ours at [0], another tool's at [1].
+      writeHooks(hooksFile, { hooks: { SessionStart: [managed, foreignHook('kaola-project-runner:user-compact-context')] } });
+      const before = readText(hooksFile);
+      const r = installGlobal(home, edition);
+      check(r.status === 0, `reinstall exits 0\n${r.out}`);
+      check(readText(hooksFile) === before,
+        `an unchanged reinstall leaves hooks.json byte-identical\n--- got:\n${readText(hooksFile)}`);
+      check(hasLine(r.out, HOOKS_UNCHANGED), `an unchanged reinstall reports unchanged\n${r.out}`);
+
+      // A changed managed entry is replaced where it stands; the foreign entries on both sides stay.
+      const stale = Object.assign({}, managed, { hooks: [{ type: 'command', command: 'echo old', timeout: 1 }] });
+      writeHooks(hooksFile, { hooks: {
+        SessionStart: [foreignHook('user:first'), stale, foreignHook('user:last')],
+        Stop: [foreignHook('user:stop')],
+      } });
+      const r2 = installGlobal(home, edition);
+      check(r2.status === 0, `reinstall over a changed managed entry exits 0\n${r2.out}`);
+      const after = JSON.parse(readText(hooksFile));
+      check(JSON.stringify(idsOf(after, 'SessionStart'))
+        === JSON.stringify(['user:first', 'kaola-workflow:compact-context', 'user:last']),
+      `the managed entry keeps index 1 and the foreign entries keep 0 and 2: ${JSON.stringify(idsOf(after, 'SessionStart'))}`);
+      check(JSON.stringify(after.hooks.SessionStart[1]) === JSON.stringify(managed),
+        'the managed entry at index 1 carries the template content');
+      check(JSON.stringify(idsOf(after, 'Stop')) === JSON.stringify(['user:stop']), 'an unmanaged event is untouched');
+      check(hasLine(r2.out, HOOKS_UPDATED), `a changed managed entry reports updated\n${r2.out}`);
+      const settled = readText(hooksFile);
+      const r3 = installGlobal(home, edition);
+      check(r3.status === 0 && readText(hooksFile) === settled && hasLine(r3.out, HOOKS_UNCHANGED),
+        `the next reinstall is byte-identical and unchanged\n${r3.out}`);
+    });
+  }
+
+  section('#1109 mergeHooks replaces in place, appends only new entries, drops stale ones, keeps id-less entries', () => {
+    const { mergeHooks } = require(installerOf(EDITIONS[0]));
+    const m = (id, v) => ({ id, hooks: [{ type: 'command', command: `echo ${v}` }] });
+    const idless = { hooks: [{ type: 'command', command: 'echo no-id' }] };
+    const merged = mergeHooks({ hooks: {
+      SessionStart: [m('user:a', 0), m('kaola-workflow:retired', 0), m('kaola-workflow:kept', 'old'),
+        idless, m('kaola-workflow:kept', 'dup'), m('user:b', 0)],
+      PostToolUse: [m('kaola-workflow:orphan', 0), m('user:post', 0)],
+    } }, { hooks: { SessionStart: [m('kaola-workflow:kept', 'new'), m('kaola-workflow:added', 'new')] } });
+    check(JSON.stringify(merged.hooks.SessionStart) === JSON.stringify([
+      m('user:a', 0), m('kaola-workflow:kept', 'new'), idless, m('user:b', 0), m('kaola-workflow:added', 'new'),
+    ]), `SessionStart: replaced in place, stale and duplicate dropped, new appended: ${JSON.stringify(merged.hooks.SessionStart)}`);
+    check(JSON.stringify(merged.hooks.PostToolUse) === JSON.stringify([m('user:post', 0)]),
+      'a managed entry under an event the template no longer manages is dropped; the foreign entry stays');
+    const fresh = mergeHooks({ hooks: {} }, { hooks: { SessionStart: [m('kaola-workflow:kept', 'new')] } });
+    check(JSON.stringify(fresh.hooks) === JSON.stringify({ SessionStart: [m('kaola-workflow:kept', 'new')] }),
+      'a fresh merge appends the managed entries');
+  });
+
   // C12 (H6) — pre-rename codex-workflow leftovers are reported, never touched.
   section('C12 pre-rename codex-workflow leftovers are only reported', () => {
     const home = makeHome('pre-rename');
