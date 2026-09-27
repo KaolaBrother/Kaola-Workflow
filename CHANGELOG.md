@@ -173,6 +173,12 @@
   also reaches the non-symlink layer check for a symlinked `~/.codex`, which fails earlier with
   exit 2 `plugin_cache_path_unsafe` instead of exit 1 `stale`. All four preflight copies carry the
   fix.
+- **Two pre-existing broken documentation references, fixed alongside #1101's docs.** The Grok,
+  Cursor, and opencode edition guides linked `README.md#installation`, a heading the README does
+  not have; they now link `README.md#quick-start`, where `./install-all.sh --yes` lives.
+  `docs/opencode-edition.md` described a tracked hook plugin at `templates/opencode/plugins/`, a
+  path that no longer exists (`PLUGIN_SCRIPTS` is empty); the guide now says no adapter plugin is
+  shipped and `.opencode/plugins/` is kept only to prune the retired one.
 
 ## [12.2.6] - 2026-09-24
 

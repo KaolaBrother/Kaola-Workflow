@@ -49,7 +49,6 @@ Everything under `.opencode/` is **generated from canonical** by
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
 | `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked runtime dispatch block carries the native-only dispatch contract plus the OpenCode adapter facts — native `task`/`@name` routes and limit guidance. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
-| `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 No Kaola role profiles are rendered or installed (OpenCode has been native-only since #1062). A
 subagent inherits the session's model and variant, and OpenCode's own harness is the dispatch
@@ -137,17 +136,10 @@ read the github tree and stay green.
 ## Hooks
 
 opencode's hook model is **plugin-based** (TS/JS modules), not the shell +
-`settings.json` model Claude Code uses. The opencode edition ships an adapter
-plugin — `.opencode/plugins/kaola-workflow-hooks.js` — that adds compact-resume
-context inline from claim facts and the mission ledger. `throw` = deny (opencode's
-documented pattern).
-
-The adapter plugin has a tracked canonical source at
-`templates/opencode/plugins/kaola-workflow-hooks.js` (outside the gitignored `.opencode/`
-tree). `sync-opencode-edition.js --write` byte-copies it to `.opencode/plugins/`; `--check`
-asserts parity (missing or drifted plugin = parity failure). `install-opencode.sh` deploys the
-plugin from the tracked canonical source, never from a self-referential `.opencode/` copy — a
-missing plugin is a loud install error (no silent `2>/dev/null || true`).
+`settings.json` model Claude Code uses. The opencode edition ships no adapter plugin:
+`PLUGIN_SCRIPTS` in `sync-opencode-edition.js` is empty and `templates/opencode/plugins/` does not
+exist. `sync-opencode-edition.js --write` keeps ownership of `.opencode/plugins/` only to prune the
+retired compact-resume plugin (`kaola-workflow-hooks.js`) from generated trees.
 
 **Plugin allowlist guard.** `sync-opencode-edition.js` maintains a `PLUGIN_SCRIPTS` allowlist
 naming every managed plugin. The installer deploys via a `templates/opencode/plugins/*.js`
@@ -206,7 +198,7 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 `install.sh`):
 
 > The opencode runtime is also covered by the top-level **`./install-all.sh`**
-> ("install/refresh every runtime" — see [README](../README.md#installation)),
+> ("install/refresh every runtime" — see [README](../README.md#quick-start)),
 > which invokes this installer unchanged (`--global` by default) as one leg of
 > its nine-runtime sequence. `install-all.sh` is a thin orchestrator: it does
 > **not** fold opencode into `install.sh`/`edition-sync.js`/`npm test` — the

@@ -86,7 +86,7 @@ replace the runtime dispatch block with the pointer to the always-loaded Rule; c
 does not run through `install.sh --forge`.
 
 > The Grok runtime is also covered by the top-level **`./install-all.sh`**
-> ("install/refresh every runtime" — see [README](../README.md#installation)),
+> ("install/refresh every runtime" — see [README](../README.md#quick-start)),
 > which invokes this installer unchanged (`--global` by default) as the fifth
 > leg of its nine-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
 > a thin orchestrator — it does **not** fold Grok into
