@@ -220,6 +220,23 @@
   All-done and missing-receipt behavior is unchanged, and all four claim copies (root, Codex,
   GitLab, Gitea) carry the same change.
 
+- **The resumability pin also reads a collision-renamed archive (#1103).** The archive half of the
+  receipt read was a single literal path, `kaola-workflow/archive/<project>/.cache/`, but
+  `archiveProjectDir` renames a colliding destination to
+  `kaola-workflow/archive/<project>.archived-<ts>/`. For a run whose closure had already moved the
+  folder, that half found nothing and, with the live folder gone, the pin returned false and the
+  sweep fell back to `(closed || archived) && !active` — removing a resumable sink's own worktree.
+  Both arms now resolve the archive folders through one helper: the exact
+  `archive/<project>/.cache/` first, then every `archive/<project>.archived-<ts>/.cache/` sibling,
+  newest suffix first, the same scan discipline as the sink's own `resolveSinkReceiptPath` and the
+  same `startsWith(project + '.archived-')` convention the file already used. The set is widened,
+  never the identity: the lane arm's #1102 owner resolution still decides first (it already read
+  suffixed archives as records), so this default set is reached only when no record names the
+  branch; an ambiguous owner still reads nothing from its set, and an older run's receipt still
+  cannot pin a newer run. A project name that is not a safe name reads the exact path only.
+  All-done and missing-receipt behavior is unchanged, and all four claim copies (root, Codex,
+  GitLab, Gitea) carry the same change.
+
 - **Codex preflight keeps the plugin identity check when HOME is reached through a symlink
   (#1104).** `readPluginIdentity` compared the realpath-resolved script directory against an
   unresolved `<home>/.codex/plugins/cache`, so a `--home`/HOME given through a symlink (macOS

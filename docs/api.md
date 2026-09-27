@@ -1820,9 +1820,17 @@ stale while its run holds a `sink-receipt.json` whose `steps` are not all `done`
 (a pre-receipt legacy leftover) or an all-done one (a completed run's leftover) sweeps exactly as
 before, so the pin is receipt-driven, never a blanket exemption.
 
-The **integration arm** reads `kaola-workflow/<project>/.cache/` first, then
-`kaola-workflow/archive/<project>/.cache/` once closure moved the folder, where `<project>` is the
-`.kw/integrate/<project>` directory name.
+The **integration arm** reads `kaola-workflow/<project>/.cache/` first, then the archive copies once
+closure moved the folder, where `<project>` is the `.kw/integrate/<project>` directory name.
+
+The archive half of the read is not a single literal path (#1103). `archiveProjectDir` renames a
+collision destination to `kaola-workflow/archive/<project>.archived-<ts>/` when
+`kaola-workflow/archive/<project>/` already exists, so a run whose closure already moved the folder
+can hold its receipt there and nowhere else. Both arms therefore read the exact
+`kaola-workflow/archive/<project>/.cache/` first and then every collision-renamed
+`kaola-workflow/archive/<project>.archived-<ts>/.cache/` sibling, newest suffix first — the same scan
+discipline as the sink's own `resolveSinkReceiptPath`. A project name that is not a safe name reads
+the exact path only.
 
 The **lane arm** cannot derive the owning folder from the branch: `buildBranchName` spells the
 branch after the run's first member (`workflow/issue-<N>`) even when the run folder is
@@ -1834,10 +1842,14 @@ without a readable state file is not a record. The outcome is one of three:
 
 | Records on the branch | Owner | Receipt read |
 |---|---|---|
-| none | — | derived: `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/` (unchanged from #1100) |
+| none | — | derived: `kaola-workflow/issue-<N>/.cache/`, then the archive copies above (pre-#1103 the exact `kaola-workflow/archive/issue-<N>/.cache/` only) |
 | exactly one live record, and no archived record with a strictly newer `claim_ts` | the live record; if it has a `claim_ts`, every folder carrying that same `claim_ts` is the same run | those folders' `.cache/`, live first, plus the unclaimed derived folders below |
 | no live record | the record with the strictly newest `claim_ts` (the sink's `readCurrentClaimTs` rule; ISO-8601 sorts lexicographically); a lone record needs no `claim_ts` | that folder's `.cache/`, plus the unclaimed derived folders below |
 | two or more live records, a live record beside a newer archived `claim_ts`, a `claim_ts` tie, or an unstamped record among several | ambiguous | only the unclaimed derived folders below |
+
+Widening the archive read never widens the pin's identity: the widened set is reached only when no
+record names the branch, and the ambiguous case still reads nothing from its set, so a receipt in a
+collision-renamed archive cannot turn an undeterminable owner into a guess.
 
 A folder that is read pins the worktree when its receipt's `steps` are not all `done`, exactly as
 before. The **unclaimed derived folders** are `kaola-workflow/issue-<N>/` and
