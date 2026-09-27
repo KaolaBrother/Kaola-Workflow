@@ -1,12 +1,13 @@
 # Devin CLI edition
 
-Under ADR 0025 (#1062) the Devin edition installs **no Kaola role profiles**: dispatch goes through
-Devin's own `run_subagent` / `read_subagent` vendor harness — the built-in `subagent_general` (which
-inherits the parent model) or a user-owned profile from the session-start catalog. Kaola pins no
-model because it has no lever on that axis: Devin's "Default subagent model" setting routes every
-unpinned subagent through an organization router — measured to land on SWE-1.6 today (vendor
-documentation fetched 2026-09-12; #1061) — so a Kaola `model:` field could not select a cheaper
-child anyway. The main orchestrator uses the model selected by the user, including Adaptive.
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101); the Devin edition has been
+native-only since #1062. Dispatch goes through whichever native route the live Devin schema
+exposes: `run_subagent` / `read_subagent` with the session-start profile catalog (the built-in
+`subagent_general` or a user-owned profile), or the Fusion `sidekick` route. Devin owns the child
+model: its "Default subagent model" setting routes every unpinned subagent through an organization
+router — measured to land on SWE-1.6 (vendor documentation fetched 2026-09-12; #1061). The main
+orchestrator uses the model selected by the user, including Adaptive.
 
 ## Install
 
@@ -24,10 +25,8 @@ The installer writes under the Devin user config directory `~/.config/devin`:
 - the managed global contract to `AGENTS.md`;
 - exactly one Kaola-owned `UserPromptSubmit` command hook in `config.json`.
 
-It installs nothing under `agents/` or `.devin/agents/`. On upgrade it removes the fourteen role
-profiles earlier releases deployed to `~/.config/devin/agents/` and `.devin/agents/` — but only
-files still carrying the `kaola-workflow-managed-agent: true` marker the generator embedded in
-every profile it rendered. A user-authored or marker-stripped same-name file survives untouched.
+It installs nothing under `agents/` or `.devin/agents/`. The installer no longer installs Kaola
+role profiles; see [Installation](installation.md) for upgrade and uninstall.
 
 Existing non-Kaola hooks are preserved. `--check` compares installed bytes with generated sources.
 
@@ -40,7 +39,7 @@ The global-contract step is the installer's last step and runs in per-target mod
 
 ## Dispatch and model ownership
 
-The live schema owns the route. Earlier measured sessions exposed `run_subagent(profile, is_background, resume)` with `read_subagent`, the built-in `subagent_general`, and session-start user profiles. A fresh Fusion session on 2026-09-12 instead exposed `sidekick`; its ACP event carried `cognition.ai/sidekick: true` on a completed read of the probe file. No child model telemetry was exposed. Do not transfer profile/model arguments between these different session modes. A missing named Kaola role is design, not a `capability_gap` — the orchestrator uses an adequate native route or works inline per item.
+The live schema owns the route. Earlier measured sessions exposed `run_subagent(profile, is_background, resume)` with `read_subagent`, the built-in `subagent_general`, and session-start user profiles. A fresh Fusion session on 2026-09-12 instead exposed `sidekick`; its ACP event carried `cognition.ai/sidekick: true` on a completed read of the probe file. No child model telemetry was exposed. Do not transfer profile/model arguments between these different session modes. Kaola installing no profile is never evidence that Devin lacks subagent capability: the orchestrator uses a native route the session exposes or works inline per item.
 
 A narrated child reply does not establish a dispatch: use the native tool event to establish
 that a child ran, and inspect its findings or artifacts separately to judge the outcome. A file

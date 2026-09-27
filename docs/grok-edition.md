@@ -4,15 +4,14 @@ The grok edition makes Kaola-Workflow runnable from
 [Grok CLI](https://grok.com) (Grok Build TUI), the same way the opencode edition
 makes it runnable from opencode. Grok CLI is a coding-agent **runtime** (like
 Codex, opencode, and Kimi), not a git forge, so this edition is delivered the
-Grok-native way — named **agents** under a generated `.grok/agents/` tree, flat
-slash **commands** under `.grok/commands/`, and one complete Rule under
-`.grok/rules/` — and is fully **additive**: it touches none of the existing
+Grok-native way — flat slash **commands** under `.grok/commands/` and one complete
+Rule under `.grok/rules/` — and is fully **additive**: it touches none of the existing
 `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi` edition machinery.
 
 Grok loads root-to-cwd project rules including `AGENTS.md` directly. Kaola therefore installs no
 project-instruction bridge for Grok; root `AGENTS.md` remains the Agent-maintained project authority.
-The machine-global Rule supplies universal Workflow behavior. Generated `.grok/agents/` profiles
-add only Grok-native carrier, model/effort, permission, and dispatch data.
+The machine-global Rule supplies universal Workflow behavior, including the dispatch contract and
+the Grok adapter. Kaola ships no Grok agents: subagents are Grok's own `spawn_subagent` types.
 See [runtime capabilities](runtime-capabilities.md#grok-build) for first-party evidence and limits.
 
 ## Forge axis
@@ -49,84 +48,37 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 7 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: grok-4.7` + `effort: medium` (the adapter's single `subagent_default`), an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
-| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
+| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the dispatch contract and adapter facts. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, mandatory dispatch contract, and Grok adapter. The edition emits no second Rule or compact hook. |
 
-Regenerating the tree never
-overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
-`$GROK_HOME/config.toml`.
+Regenerating the tree never seeds or rewrites `$GROK_HOME/config.toml`, including a user's
+`[subagents.models]` or `[subagents.roles.*]` sections there.
 
-## One pinned binding — `model: grok-4.7` / `effort: medium`
+## Subagents are Grok's own
 
-Since ADR 0025 (#1062) generated agents pin the adapter's single `subagent_default`: every
-frontmatter carries `model: grok-4.7` plus `effort: medium`. `AgentDefinition.model` accepts a
-concrete id, so the former `model: inherit` is retired. The three-effort-tier mapping it replaced
-(`medium`/`high`/`xhigh` by intent class) is retired with the intent axis. Native effort
-syntax never enters the shared behavior source.
-
-The id moved from `grok-4.6` to `grok-4.7` on 2026-09-22 (#1088) after Grok CLI `1.0.40`'s model
-catalog listed `grok-4.7` with `xhigh` / `high` / `medium` / `low` efforts. That swap is a catalog
-read; a pinned child's resolved model and effort were not re-probed.
-
-`spawn_subagent` has no effort parameter, so effort belongs on each generated
-`.grok/agents/<role>.md`. Command cards continue to omit `model=`; they name only
-`subagent_type`, and the profile pin selects the cheaper child. User
-`$GROK_HOME/config.toml` is not seeded or rewritten.
-
-**Declared runtime divergence.** The suite asserts that every generated agent
-pins `model: grok-4.7` plus `effort: medium`, that no profile retains
-`model: inherit`, and that
-command cards carry no per-call `model=` override.
-
-The #1018 live probe verified that a generated `effort: xhigh` planner (a pre-#1062 role) reached a
-child at `reasoning_effort: xhigh` on Grok CLI 1.0.5. `spawn_subagent` has no
-per-call effort override, so children remain on their static generated
-effort (`medium` under the single binding). The former Claude-only reviewer→heavy
-re-dispatch carve-out is retired for every runtime (ADR 0019 / #1059); there is
-no workflow-owned fable escalation to omit or mirror here.
-
-**Observed Grok CLI 1.0.5 limitation.** The live close probe passed with the
-actual `tdd-guide` at `medium` and `code-reviewer` at `high` from an `xhigh`
-parent. Three A/B legs using the literal `implementer` name still recorded
-`high`, even when its native profile or a minimal inline definition pinned
-`model: inherit` plus `effort: medium`. This is a runtime limitation/inference,
-not a generator failure. It remains an open, non-blocking re-measure item under
-the new pin (does a child pinned `model: grok-4.7` / `effort: medium` still land at `high` under an
-xhigh parent?). No
-config seeding, per-call override, or second pin path is added.
-
-An opt-in pin that routes a roster to a different *model* is
-recorded on #1008 and is not part of this edition's first close.
-
-All 7 role bodies come from `templates/agents/behavior-contracts.json` through
-`generate-agent-profiles.js`; `sync-grok-edition.js` requests the Grok render and only owns edition
-layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
-
-The frontmatter spelling and capability boundary come from xAI's first-party
-[`AgentDefinition`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-agent/src/config.rs),
-which serializes agent keys in camelCase and accepts native `model`, `effort`, `tools`, and
-`disallowedTools`. Unknown snake_case spellings are not adapter aliases.
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101), so the edition generates no agents:
+`sync-grok-edition.js --write` renders commands only and prunes the retired `agents/` files from a
+generated tree. Child model and effort follow Grok's own defaults and the user's configuration.
+Before #1101 the edition rendered seven `.grok/agents/` profiles pinning one model and effort; the
+#1018 and Grok CLI 1.0.5 probes recorded against those profiles measured the retired pins.
 
 ## Runtime-native orchestration guidance
 
-`workflow-next` and `kaola-workflow-finalize` expose project/user profile lookup and
-`spawn_subagent` with named `subagent_type`. They also preserve Grok's background, isolation,
-resume, cwd, and optional per-call model choices; per-call effort is omitted because the profile
-carries it. Full `general-purpose` and read/shell `explore` and `plan` are honest item-local
-alternatives. Children cannot spawn descendants, but Kaola adds no restriction to root-level native
-routes.
+The always-loaded Rule carries the Grok adapter: dispatch with `spawn_subagent`, whose
+`subagent_type` names a type from the live catalog — such as full `general-purpose`, read/shell
+`explore`, or read/shell `plan` — with native background, isolation, resume, and cwd options. Child
+model and effort follow Grok's own defaults. Grok children cannot spawn descendants, but Kaola adds
+no restriction to root-level native routes.
 
-One absent exact role does not make the rest of the run inline. The orchestrator tests the other
-native routes against that item's task, custody, evidence, and stop boundaries, uses them under
-their real identity when adequate, and inlines only that item otherwise. The next item starts with a
-fresh routing decision.
+Kaola installing no profile is never evidence that Grok lacks subagent capability. The orchestrator
+chooses a native route or inline work per item, and the next item starts with a fresh decision.
 
 ## Path selection
 
-On the grok edition, the router routes directly to the adaptive workflow. Generated commands adapt
-the dispatch call syntax and omit per-call model arguments; canonical `commands/*.md` is never
-touched. There is no canonical model-dispatch section to substitute.
+On the grok edition, the router routes directly to the adaptive workflow. Generated commands
+replace the runtime dispatch block with the pointer to the always-loaded Rule; canonical
+`commands/*.md` is never touched.
 
 ## Installer
 
@@ -141,9 +93,9 @@ does not run through `install.sh --forge`.
 > `install.sh`/`edition-sync.js`/`npm test`.
 
 ```bash
-./install-grok.sh                         # deploy into the current project (.grok/{agents,commands})
+./install-grok.sh                         # deploy into the current project (.grok/commands)
 ./install-grok.sh --target /path/to/repo  # deploy into a specific project
-./install-grok.sh --global                # agents+commands → ${GROK_HOME:-~/.grok}
+./install-grok.sh --global                # commands → ${GROK_HOME:-~/.grok}
 ./install-grok.sh --regenerate            # refresh in-repo .grok/ from canonical, then exit
 ./install-grok.sh --uninstall             # remove the kaola-deployed edition
 ```
@@ -153,10 +105,10 @@ scripts; the edition still installs no Rule. The installer resolves the generate
 tree via `node scripts/sync-grok-edition.js --print-tree-root` (a worktree
 install still finds the main-checkout trees).
 
-- **PROJECT** (`--target` / `$PWD`): agents and commands land under
-  `<project>/.grok/{agents,commands}`. No duplicate project Rule is emitted.
-- **GLOBAL** (`--global`): agents and commands land under
-  `${GROK_HOME:-$HOME/.grok}/{agents,commands}`. `install-all.sh` has already installed the single
+- **PROJECT** (`--target` / `$PWD`): commands land under `<project>/.grok/commands`. No
+  duplicate project Rule is emitted.
+- **GLOBAL** (`--global`): commands land under `${GROK_HOME:-$HOME/.grok}/commands`.
+  `install-all.sh` has already installed the single
   `${GROK_HOME:-$HOME/.grok}/rules/kaola-workflow-global.md` through the global transaction.
 - Support scripts and hook scripts always land under
   `${GROK_HOME:-$HOME/.grok}/kaola-workflow/{scripts,hooks}`.
@@ -166,7 +118,8 @@ interaction in scope, so compaction cannot remove it. It starts no subprocess an
 new copy on each tool call. There is no path selector, JS process, or prompt composition.
 
 `--uninstall` removes only kaola-deployed names. A subsequent bare install
-redeploys the edition.
+redeploys the edition. The installer no longer installs Kaola role profiles; see
+[Installation](installation.md) for upgrade and uninstall.
 
 ## Why no compact hook
 

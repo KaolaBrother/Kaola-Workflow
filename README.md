@@ -45,7 +45,7 @@ branch copy.
 |---|---|
 | Claims and worktrees | Single-issue or multi-issue runs, collision-safe claims, optional isolated worktrees |
 | Recoverable execution | One mission ledger records outcomes, in-flight work, and where evidence should land |
-| Native agent collaboration | Seven focused role behaviors on profile-supporting runtimes; native dispatch elsewhere |
+| Native agent collaboration | Dispatch through each runtime's own subagent tool and catalog; Kaola defines no roles |
 | Verifiable delivery | Candidate-bound validation receipts, closure records, archive, and merge/sync or PR/MR delivery |
 | Consistent instructions | A shared global contract, project-specific instructions, and runtime-specific recovery carriers |
 
@@ -125,18 +125,22 @@ A research or design request does not authorize implementation. See [Task Qualit
 
 ## Runtime and forge support
 
-| Runtime | Native workflow carrier | Kaola role profiles | Install entry |
+| Runtime | Native workflow carrier | Native subagent route | Install entry |
 |---|---|---|---|
-| Claude Code | Commands and root `AGENTS.md` (direct from v2.1.277) | Seven named agents | `./install.sh` |
-| Codex | Skills and `AGENTS.md` | Seven TOML agents per plugin | Matching plugin + profile installer |
-| Cursor CLI/App/Cloud | Commands and persistent recovery Rule | Seven named agents | `./install-cursor.sh` |
-| Grok CLI | Commands and persistent recovery Rule | Seven named agents | `./install-grok.sh` |
-| OpenCode | Commands | Native dispatch | `./install-opencode.sh` |
-| Kimi Code | Skills | Native dispatch | `./install-kimi.sh` |
-| ZCode | Skills | Native dispatch | `./install-zcode.sh` |
-| Devin CLI | Inline skills | Native `run_subagent` | `./install-devin.sh` |
-| Droid CLI | Inline skills | Native Task `worker`/`explorer` | `./install-droid.sh` |
-| DSH (DeepSeek Harness) | Inline skills | Native `subagent` / `subagent_fork` | `./install-dsh.sh` |
+| Claude Code | Commands and root `AGENTS.md` (direct from v2.1.277) | `Agent` tool | `./install.sh` |
+| Codex | Skills and `AGENTS.md` | `spawn_agent` | Matching plugin + `install-codex-agent-profiles.js` |
+| Cursor CLI/App/Cloud | Commands and persistent recovery Rule | `Task` | `./install-cursor.sh` |
+| Grok CLI | Commands and persistent recovery Rule | `spawn_subagent` | `./install-grok.sh` |
+| OpenCode | Commands | Task types `general` / `explore` / `scout` | `./install-opencode.sh` |
+| Kimi Code | Skills | `Agent` / `AgentSwarm` | `./install-kimi.sh` |
+| ZCode | Skills | `general-purpose` / `Explore` | `./install-zcode.sh` |
+| Devin CLI | Inline skills | `run_subagent` or `sidekick` (live schema) | `./install-devin.sh` |
+| Droid CLI | Inline skills | Task `worker` / `explorer` | `./install-droid.sh` |
+| DSH (DeepSeek Harness) | Inline skills | `subagent` / `subagent_fork` | `./install-dsh.sh` |
+
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings on any
+runtime: the host's own catalog, defaults, and limits, plus your explicit instructions, decide the
+child. Installing no Kaola profile never means the host lacks subagent capability.
 
 All forge-aware installers accept `--forge=github|gitlab|gitea`; Codex selects its forge through the
 installed plugin. Models, dispatch, hooks, and recovery retain each runtime's measured capabilities.
@@ -210,7 +214,7 @@ Approximate **static prompt footprint for v12.0.1**, using the generated GitHub 
 
 Each component is estimated as whitespace-separated words × 1.5, rounded to the nearest 10 tokens;
 the total sums one copy of each displayed component. **These are not tokenizer measurements or
-actual task costs.** Init, role prompts, separate recovery injections, vendor/project instructions,
+actual task costs.** Init, separate recovery injections, vendor/project instructions,
 history, tools, reasoning, and output are excluded. Repetition, caching, and compaction affect usage.
 See [raw counts and reproduction](docs/prompt-size.md).
 
@@ -223,9 +227,10 @@ git pull --ff-only
 ./install-all.sh --check
 ```
 
-When upgrading from before v12, reinstall on **every machine** to remove retired role profiles.
-Rebuild Cursor Cloud's saved environment separately. Workflow installers update Workflow carriers;
-target CLIs and desktop applications have their own update process.
+When upgrading, reinstall on **every machine**. The installer no longer installs Kaola role
+profiles; see [Installation](docs/installation.md) for upgrade and uninstall. Rebuild Cursor Cloud's
+saved environment separately. Workflow installers update Workflow carriers; target CLIs and desktop
+applications have their own update process.
 
 For removal, use the [scope-specific uninstall instructions](docs/installation.md#uninstall).
 
@@ -251,7 +256,7 @@ Maintained by the release transaction:
 | [Architecture](docs/architecture.md) | Component boundaries and data flow |
 | [API](docs/api.md) | Script commands, schemas, configuration, integration contracts |
 | [Conventions](docs/conventions.md) | Testing, generation, review, release, Git rules |
-| [Agent Sources](docs/agents-source.md) | Seven role behaviors and provenance |
+| [Agent Sources](docs/agents-source.md) | Runtime adapter facts and retired-role provenance |
 | [Documentation index](docs/README.md) | Runtime guides, state contracts, and design decisions |
 
 For repository development:
@@ -262,8 +267,8 @@ node scripts/simulate-workflow-walkthrough.js
 ```
 
 Edit sources under `templates/` or the shared kernel, then regenerate commands, skills, runtime
-profiles, and forge mirrors. See the API and Conventions for focused checks and release validation.
+carriers, and forge mirrors. See the API and Conventions for focused checks and release validation.
 
 ## License
 
-[MIT](LICENSE). Role behavior sources and history are documented in [Agent Sources](docs/agents-source.md).
+[MIT](LICENSE). Retired role sources and history are documented in [Agent Sources](docs/agents-source.md).

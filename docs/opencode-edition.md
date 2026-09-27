@@ -9,8 +9,9 @@ the existing `claude`/`codex`/`gitlab`/`gitea` edition machinery.
 
 opencode reads root `AGENTS.md` directly; no runtime bridge is involved. Official
 discovery, fallback, and nesting behavior is recorded in
-[runtime capabilities](runtime-capabilities.md#opencode). Runtime-specific profile frontmatter and
-permissions come from the opencode adapter and do not duplicate universal repository or role rules.
+[runtime capabilities](runtime-capabilities.md#opencode). Kaola-Workflow defines no subagent
+roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101); subagents are OpenCode's own.
 
 ## Forge axis
 
@@ -47,35 +48,29 @@ Everything under `.opencode/` is **generated from canonical** by
 
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
-| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked next/finalize capability block is replaced with OpenCode-native `native_only` guidance — no Kaola role profiles, vendor-harness `task`/`@name` routes, and limit guidance; any concrete Claude dispatch cards become OpenCode calls. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked runtime dispatch block carries the native-only dispatch contract plus the OpenCode adapter facts — native `task`/`@name` routes and limit guidance. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
-Since ADR 0025 (#1062) the opencode adapter is `role_dispatch: "native_only"`: no Kaola role
-profiles are rendered or installed. A subagent inherits the session's model and variant, so a
-Kaola profile has no cost lever — the vendor's own harness is the dispatch route, and the upgrade
-path removes the fourteen profiles an earlier release installed (see
-[Install](#install-into-a-project)).
+No Kaola role profiles are rendered or installed (OpenCode has been native-only since #1062). A
+subagent inherits the session's model and variant, and OpenCode's own harness is the dispatch
+route.
 
 `opencode.json` is **user-owned and never written by this installer** — including the
 `agent.<role>.model` scaffold entries older releases seeded.
 
-## Role behavior derivation
-
 `scripts/sync-opencode-edition.js` renders only commands, the hooks plugin, and the global
-contract for this adapter; it requests no role profiles from
-`generate-agent-profiles.js` (the adapter declares `native_only`). The seven-role behavior
-authority in `templates/agents/behavior-contracts.json` still governs the shared contract prose.
+contract for this adapter; there is no role authority or profile generator behind them.
 
 ## Model and effort — inherited from the session
 
-**A subagent runs the model and the reasoning effort of the session that dispatched it.** Nothing
-is configured per role, and there is nothing to pass: opencode's `task` tool takes a
+**A subagent runs the model and the reasoning effort of the session that dispatched it.** Kaola
+configures nothing per child, and there is nothing to pass: opencode's `task` tool takes a
 `subagent_type`, a `prompt` and a `description`, and has no model or effort parameter at all. To
 make a dispatched child think harder, raise the session's own effort — every child you dispatch
 follows it.
 
-This is opencode's own behaviour and the measured reason the adapter is `native_only`: `TaskTool`
-hands a subagent the parent's variant whenever it pins no model. It was measured
+This is opencode's own behaviour: `TaskTool` hands a subagent the parent's variant whenever it
+pins no model. It was measured
 rather than assumed — with no `agent` block and the plugin hook inert, changing only the parent
 session's effort moved both subagents with it (parent at `nothink` → 0 / 0 / 0 reasoning tokens;
 parent at `think` → 26 / 560 / 641).
@@ -99,17 +94,16 @@ omit or mirror here.
 
 ## Runtime-native orchestration guidance
 
-`workflow-next` and `kaola-workflow-finalize` receive an OpenCode adapter block rather than Claude
-spawn prose. It states that this runtime installs no Kaola role profiles by design and routes
-through the vendor harness: the broad `general`, read-only local `explore`, and read-only external-research `scout` routes via
-`task`/`subagent_type` or direct `@name`, plus
-`task_id` resume, experimental background work, effective permissions, and the default one-child
-depth. These are OpenCode capabilities, not Kaola mandates; user configuration may change or hide
-them.
+`workflow-next` and `kaola-workflow-finalize` carry the native-only dispatch contract plus an
+OpenCode adapter block. It routes through OpenCode's own harness: the broad `general`, read-only
+local `explore`, and read-only external-research `scout` routes via `task`/`subagent_type` or direct
+`@name`, plus `task_id` resume, experimental background work, effective permissions, and the default
+one-child depth. These are OpenCode capabilities, not Kaola mandates; user configuration may change
+or hide them.
 
-A missing named Kaola role is design, not a `capability_gap`: dispatch a native route per item when
-its actual task, custody, evidence, and stop boundaries fit, or work inline. The generated block
-never invents per-call model or effort fields.
+Kaola installing no profile is never evidence that OpenCode lacks subagent capability: dispatch a
+native route per item when its actual task, custody, evidence, and stop boundaries fit, or work
+inline. The generated block never invents per-call model or effort fields.
 
 > `opencode.json` is **user-owned**: `--write` regenerates commands/plugins but
 > **preserves** this file. Use `--write-config` to reset it from the template.
@@ -233,11 +227,8 @@ hooks plugin. It writes no configuration: `opencode.json` and the shared
 `~/.config/kaola-workflow/config.json` are user-owned
 and no installer creates or edits them.
 
-On upgrade the installer removes the fourteen role profiles earlier releases deployed, using the
-plural-directory ownership manifest (see below): only a profile the previous install's manifest
-recorded with a matching hash is removed — a user-authored, modified, or symlinked same-name file
-survives, and a manifest-listed file that fails its ownership check fails the install closed
-rather than deleting it.
+The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
+upgrade and uninstall.
 
 ### Deploy layout — project vs global (scope-dependent)
 
@@ -260,15 +251,9 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 
 Older Kaola releases wrote profiles and commands to the non-native singular `agent/` and `command/`
 directories. On install, those directories are migration inputs, not ownership shortcuts. A legacy
-profile is removed only when the previous singular-directory manifest records the same current
-hash; modified, unlisted, and unrelated files survive byte-for-byte. A legacy current command is
-removed only when its complete bytes equal the current generated source; retired-name and modified
-near-misses survive. Old ownership metadata and empty singular directories are removed after
-migration. The new native plural `agents/` directory uses its own filename-plus-SHA manifest. An
-unmanaged same-name collision, forged marker, modified managed profile, non-directory agent carrier,
-or non-regular profile/manifest carrier (including symlinks, directories, and FIFOs) makes the
-install fail closed before deploying any agent, plugin, or other runtime surface. Singular legacy
-cleanup considers only regular non-link profiles, so a hash-equal symlink remains owner topology.
+current command is removed only when its complete bytes equal the current generated source;
+retired-name and modified near-misses survive. For earlier Kaola profiles, see
+[Installation](installation.md) for upgrade and uninstall.
 
 ## Uninstall
 
@@ -278,11 +263,9 @@ cleanup considers only regular non-link profiles, so a hash-equal symlink remain
 ./install-opencode.sh --uninstall --global        # remove the global ~/.config/opencode install
 ```
 
-`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. Previously
-installed role profiles (including the fourteen a pre-12.0.0 release deployed) are
-removed through the plural-directory ownership manifest or exact current-source bytes; unrelated,
-modified, and symlinked plural profiles and all unowned or modified singular-directory files
-survive. Commands and hooks are removed by
+`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. The installer no
+longer installs Kaola role profiles; see [Installation](installation.md) for how earlier ones are
+handled on upgrade and uninstall. Commands and hooks are removed by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
 `RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
 the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you
@@ -313,8 +296,6 @@ nothing). Then in opencode:
 ## Develop / regenerate
 
 ```bash
-node scripts/generate-agent-profiles.js --write             # regenerate/check tracked + logical role renders
-node scripts/generate-agent-profiles.js --check
 node scripts/sync-opencode-edition.js --write              # regenerate .opencode/ + seed config
 node scripts/sync-opencode-edition.js --write-config       # re-render opencode.json from the template
 node scripts/sync-opencode-edition.js --refresh-present    # regenerate every tree that already exists; create none (ignores --forge)
@@ -365,17 +346,16 @@ The named flag always carries the `--forge=` the check ran under. Exit code is 1
 
 | Aspect | Codex edition | opencode edition |
 | --- | --- | --- |
-| Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `.opencode/commands` + hooks plugin (no Kaola role profiles) |
-| Agent format | TOML profiles | none — `native_only`; vendor harness routes |
+| Delivery | plugin (`.codex-plugin/` + `skills/`) | `.opencode/commands` + hooks plugin |
+| Subagents | native `spawn_agent` types; no Kaola profiles | native `task` types; no Kaola profiles |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
-| Models | baked per-agent (`gpt-6-luna` / `max` TOML pins) | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it, which is why Kaola installs no profiles |
+| Models | child model and effort follow Codex's own defaults and the user's configuration | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it |
 
 ## Verification
 
 The edition is covered by `scripts/test-opencode-edition.js`: command presence and the
 native-only invariant (no Kaola role profiles rendered or installed, no `subagent_type="kaola-*"`
-in rendered surfaces), the ownership-aware retired-profile sweep, behavior-source reachability,
-adapter isolation,
+in rendered surfaces), the ownership-aware retired-profile sweep, adapter isolation,
 `opencode.json` JSONC validity,
 **plugin load shape** (A29: the module exports exactly `["default"]`, and a harness walks it the
 way opencode's loader does — `Object.values(mod)`, calling every exported value as a plugin
@@ -395,6 +375,6 @@ it — closing the gap where a fresh-clone install silently deployed no hooks pl
 **plugin allowlist** (A11-allowlist: every `*.js` in `templates/opencode/plugins/` must be
 registered in `PLUGIN_SCRIPTS` — a file present on disk but absent from the allowlist fails
 `--check` loudly, keeping the installer glob and the sync allowlist provably equivalent). The
-existing `test-route-reachability.js` / `validate-vendored-agents.js` /
+existing `test-route-reachability.js` /
 `validate-script-sync.js` / `test-edition-sync.js` suites stay green — this
 edition adds a surface without altering the others.

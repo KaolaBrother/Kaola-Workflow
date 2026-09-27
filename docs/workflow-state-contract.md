@@ -300,8 +300,8 @@ when it materially reduces main-context residue, supplies independent judgment, 
 parallelism. Inline execution or one production owner is appropriate for cohesive feed-forward work
 when handoff and integration cost dominate. Both are first-class, and the mission ledger's
 `details` records the chosen dispatch locator (`self` for inline work) without a gate, count, cap, or
-fallback stigma. Tier classifications, role profiles, and runtime-native defaults remain metadata;
-task-sensitive model/effort overrides or omission are valid.
+fallback stigma. Kaola defines no subagent roles or model and effort bindings: the host's native
+defaults and the user's explicit instructions decide a child's model and effort.
 
 ## Bundle Project State Fields
 

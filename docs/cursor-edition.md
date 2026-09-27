@@ -4,8 +4,8 @@ The cursor edition makes Kaola-Workflow runnable from
 [Cursor](https://cursor.com), the same way the Grok edition makes it runnable
 from Grok CLI. Cursor is a coding-agent **runtime** (like Codex, opencode, Kimi,
 and Grok), not a git forge, so this edition is delivered the Cursor-native way —
-named **agents** under a generated `.cursor/agents/` tree, flat slash **commands** under
-`.cursor/commands/`, and an empty Kaola hook mapping in `.cursor/hooks.json`. The separate global
+flat slash **commands** under `.cursor/commands/` and an empty Kaola hook mapping in
+`.cursor/hooks.json`. The separate global
 transaction owns the one persistent Rule. The edition is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi`/`grok` edition
 machinery.
@@ -18,9 +18,9 @@ Cloud setup explicitly materializes identical bytes in the selected repository. 
 prompt-lifecycle hook is installed.
 Cursor CLI and Cursor App are separate product surfaces; App local IDE and App-started Cloud are
 different execution hosts and must not be inferred from each other or from a CLI binary.
-Authenticated standalone CLI, local App/IDE, and Cloud saved-environment named dispatch were each
-measured separately. Cloud required the selected repository to be materialized by its environment
-setup Build; a checked-in catalog and a saved user-global-only Build were both negative controls.
+Standalone CLI, local App/IDE, and App-started Cloud Task catalogs were each measured separately.
+Cloud sees project carriers only after its environment setup Build materializes the selected
+repository; checked-in files and a saved user-global-only Build were both negative controls.
 See
 [runtime capabilities](runtime-capabilities.md#cursor).
 
@@ -38,8 +38,8 @@ Cloud environment:
    `./install-cursor.sh --target "$PWD" --yes --forge=github`, runs
    `node scripts/kaola-workflow-global-contract.js install-cloud --target "$PWD" --json`, and runs a
    test Build. It verifies
-   the exact candidate, both receipts, the authority binding, collision safety, idempotence, and
-   the expected 14-agent project catalog, then reports the exact Build ID.
+   the exact candidate, both receipts, the authority binding, collision safety, and idempotence,
+   then reports the exact Build ID.
 3. The setup agent asks the user to click **Save** in Cursor. A green setup VM, snapshot, or draft
    Build is not a persisted production environment until that user action succeeds.
 4. Select the saved environment and open a new top-level Cloud Agent in the same repository. Verify
@@ -52,8 +52,8 @@ prove that the intended environment loaded. This follows Cursor's documented
 [Build lifecycle](https://cursor.com/docs/cloud-agent/builds).
 
 Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
-instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
-workspace catalog rules, and the empty hook mapping are Cursor adapter data, not a copy of the universal contract.
+instructions. Kaola installs no project-instruction bridge for Cursor. Generated commands and the
+empty hook mapping are Cursor adapter data, not a copy of the universal contract.
 See [runtime capabilities](runtime-capabilities.md#cursor) for first-party evidence and limits.
 
 ## Forge axis
@@ -92,146 +92,76 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 7 native profiles with `name`, `description`, the single `subagent_default` pin `model: grok-4.7[effort=medium]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
-| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
+| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the dispatch contract and adapter facts. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
 | global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, mandatory dispatch contract, and Cursor adapter. The global transaction owns it; the edition emits no duplicate Rule. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
-Generated agents carry one model-and-effort pin (ADR 0025, #1062): the intent axis is retired, so
-every profile receives the same raw, unquoted `grok-4.7[effort=medium]` frontmatter value.
-The id moved from `grok-4.6` to `grok-4.7` on 2026-09-22 (#1088): Cursor CLI `2026.09.15-d2fe57e`
-`cursor-agent models` lists `grok-4.7-{low,medium,high,xhigh}` and their `-fast` twins, without the
-`cursor-` prefix the 4.6 slugs carry. The resolver mapping of the bracket value was not re-probed;
-the dated 2026-08 probes below keep the 4.6 slugs they observed.
+## Subagents are Cursor's own
 
-## One frontmatter pin — host-split native dispatch
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101), so the edition generates no agents:
+`sync-cursor-edition.js --write` renders commands and prunes the retired `agents/` files from a
+generated tree. Before #1101 the edition rendered seven `.cursor/agents/` profiles pinning one model
+and effort.
 
-Every generated role receives the unquoted
-`model: grok-4.7[effort=medium]` line — the adapter's single `subagent_default`. Cursor's official
-semantic is that a custom subagent that omits `model` inherits the parent, so the pin is what
-selects the cheaper child; without it a child would ride the (usually stronger) parent model.
-Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
-role name and the materialization receipt is valid, construct the call only from the live schema's
-flat `subagent_type` field and omit per-call `model`. An exact-model policy remains a post-resolution
-assertion: it does not authorize filling the generic model field, and absence of medium/high from
-that enum is not evidence against a named profile pin. When the host exposes
-`providerOptions.cursor.modelName`, that value is provider evidence for the resolved child; the TUI
-child transcript alone is insufficient. Internal `subagentType.custom.name` encodes provider
-evidence and is never a controller call field. When the
-enum is built-in-only, use only those members as themselves while establishing whether this host's
-real carrier was installed and reloaded: writable `generalPurpose` for generic production/docs/tests the parent may
-delegate, `explore` when this host reports it for read-heavy search, `cursor-guide` for Cursor
-product questions. Never prompt a child to impersonate `implementer`, `tdd-guide`, or another
-Kaola role. A resolver-listed live-schema model slug is then an effort lever, not a
-violation of unpublished-field discipline; omit-model follows the parent and is not a profile pin.
-Missing standalone-CLI project agents want `install-cursor.sh --target` then a new CLI session.
-Missing Cloud names require a confirmed Cloud environment-setup Agent to install both the remote
-authority and selected repository, followed by manual Save and a new top-level Agent in the same
-repository whose visible Build link matches before a capability gap can be concluded.
+The Rule's Cursor adapter carries the native route: dispatch with `Task`, whose `subagent_type`
+names a type from the live catalog. Measured hosts exposed writable `generalPurpose` and
+host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a
+route this host reports, under its real identity and capability. The live Task catalog is
+authoritative; CLI, App local, and App Cloud are separate hosts, and a CLI catalog reload requires
+a new process. Explicit, automatic, parallel, and resume-by-agent-ID paths remain runtime-owned
+options.
 
-If the current session exposes a Task call and named catalog, that live schema is the authority;
-public documentation does not establish one portable JSON call schema, so Kaola does not invent
-fields such as parent-authored `subagentType.custom.name`.
+Cursor's official model contract says `model` is either `inherit` or an exact model ID, bracket
+parameters carry options such as effort, and a custom subagent that omits `model` inherits the
+parent; team policy, legacy-plan settings, or plan availability may force a compatible fallback.
+Kaola pins no child model: the host's defaults and the user's configuration decide. Public
+documentation does not establish one portable Task call schema, so a call is built only from the
+live schema's flat fields; Kaola invents none, such as a parent-authored `subagentType.custom.name`.
+When the host exposes `providerOptions.cursor.modelName`, that value is post-dispatch provider
+evidence for the resolved child; the TUI child transcript alone is insufficient.
 
-The same guidance exposes Cursor's host-dependent native alternatives rather than assuming one role
-miss ends all dispatch. IDE documentation describes scoped `Explore`, `Bash`, and `Browser`. The
-supported Cursor CLI probe below instead exposed writable `generalPurpose` plus specialist and
-project custom types, and did not expose those scoped types. Cloud negative controls exposed
-`explore` without Kaola names; the saved environment whose Build materialized the selected
-repository exposed all 14 (the pre-#1062 roster). The
-live catalog wins. A generic or
-specialist child remains itself and is never prompted to impersonate `implementer`, `tdd-guide`, or
-another Kaola role. Explicit, automatic, parallel, and resume-by-agent-ID paths remain
-runtime-owned options.
+Kaola installing no profile is never evidence that Cursor lacks subagent capability. Dispatch or
+inline work is decided per mission item, and a cohesive production owner does not absorb
+independent research, test authorship, documentation, or review.
 
-For each mission item, use the exact custom route when present, otherwise use a catalog route only
-when its actual task, custody, evidence, and stop boundaries fit. Inline that item when no
-adequate route exists, record the specific capability gap, and re-evaluate the next item. A cohesive
-production owner does not absorb independent research, test authorship, documentation, or review.
+### Historical catalog probes
 
-### Supported CLI live probe
+On 2026-08-27/28, before #1101, standalone CLI, local App/IDE, and App-started Cloud catalogs were
+measured separately while Kaola still installed Cursor profiles. The native boundaries they
+established still hold; details are in [runtime capabilities](runtime-capabilities.md#cursor).
 
-On 2026-08-27, authenticated standalone Cursor CLI `2026.08.25-3e8eec8` was re-run against an
-isolated user carrier and a disposable project explicitly materialized by the current candidate:
+- **Standalone CLI** `2026.08.25-3e8eec8`: writable `generalPurpose` appeared as
+  `subagentType.unspecified`; parallel Tasks and one descendant dispatch generation worked. A
+  project custom profile was reachable while a user file alone was not visible in an empty project,
+  and reopening the CLI process with the same chat discovered an added project profile;
+  same-process hot load remains unknown.
+- **App local IDE** `3.17.21`: the live catalog exposed built-ins plus project custom types; the
+  child model, effort, and profile source were not exposed, so App global discovery,
+  project-materialization necessity, and reload remain unknown.
+- **App-started Cloud**: without an installed environment Build the Task enum stayed built-in-only
+  (`generalPurpose`, `explore`, `computerUse`, `videoReview`, `cursor-guide`, `bugbot`,
+  `security-review`, `best-of-n-runner`), even with project files git-tracked on the selected
+  branch or user-global files in a clean saved Build
+  (`bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3`). `generalPurpose` accepted omit-model,
+  `inherit`, and resolver-listed `cursor-grok-4.6-high-fast`; `cursor-grok-4.6-high` was
+  resolver-rejected. After the environment-setup Build
+  `bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2` materialized the selected repository and the
+  user saved it, a new same-repository parent (`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d`) visibly
+  used that Build and exposed its project custom types. The Cloud child model remains unobservable.
 
-- Candidate `--global --no-scripts` wrote a receipt-bound global authority; candidate
-  `--target <consumer> --no-scripts` wrote a receipt-bound project materialization.
-- The Task catalog contained exact project custom `implementer`.
-- The parent omitted a model override. Raw stream JSON recorded
-  `subagentType.custom.name = implementer` and resolved `cursor-grok-4.6-medium`.
-- The child returned the requested read-only token; both Task and parent reported success and the
-  consumer remained unchanged.
+Kaola's project install requires `--target DIR` and writes that project's `.cursor/commands`.
+`--global` writes only `${CURSOR_HOME:-$HOME/.cursor}/commands` (un-nested) and its
+`kaola-workflow/` support tree, and does **not** write an ambient Git repository; existing project
+`.cursor` files are left untouched, and `--global` from a non-git cwd does not invent project
+`.cursor`. A normal install renders the generated source into an isolated temporary staging root
+and removes it after the transaction; only explicit `--regenerate` writes the in-repository
+generated tree. Project carriers are never selected from the ambient cwd of a `--global` command.
+Cloud user-global discovery alone is unsupported; the measured Cloud carrier is a receipt-owned
+project materialization installed by its confirmed environment-setup Agent before the Build is
+saved.
 
-Earlier same-day CLI probes established the wider native boundary: writable `generalPurpose`
-appeared as `subagentType.unspecified`; specialist built-ins and all 14 project roles (pre-#1062
-roster) were
-present; medium/high/xhigh tier resolution, parallel Tasks, and one descendant dispatch generation
-worked. A user profile alone was not visible in an empty project, while project materialization was
-the reachable carrier. Reopening the CLI process with the same chat discovered an added project
-profile; same-process hot load remains unknown.
-
-### Cursor App local-IDE live probe
-
-Cursor App `3.17.21` (`8f2a112cb2845a97b75fd932ea5c470579ca4060`) separately started a
-`This Mac` Agent with project profiles already present. The live catalog exposed the built-ins and
-all 14 Kaola types (pre-#1062 roster). Exact `implementer` dispatch succeeded without a per-call model override and
-without tracked repository mutation. The App result did not expose the child model, effort, or
-profile source, so App global discovery, project-materialization necessity, reload, and
-profile-to-model binding remain unknown.
-
-### Cloud saved-environment live probe
-
-On 2026-08-27 two earlier Cursor Cloud parents (`cursor-grok-4.6-xhigh`) were measured. Neither
-catalog included Kaola role names. The consumer already had 14 git-tracked project profiles
-(pre-#1062 inventory); the
-producer new chat had none. Both used live built-ins as themselves: `generalPurpose`
-(omit-model, `inherit`, and resolver-listed `cursor-grok-4.6-high-fast`) and `explore`.
-`cursor-grok-4.6-high` was resolver-rejected.
-
-The fresh App-started Cloud negative control selected
-`probe/cursor-cloud-1041-20260827a` at
-`ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6` before send. That commit already tracked all 14
-profiles (pre-#1062). The new Cloud Task enum still contained only `generalPurpose`, `explore`,
-`computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
-`best-of-n-runner`. Exact `implementer` was absent, so the probe dispatched no substitute and
-made no repository change. This proves that a catalog present in the branch but not installed by
-the environment Build is insufficient; it does not prove a runtime capability gap.
-
-A historical saved Build exposed all 14 pre-#1062 Kaola names, but its released-10.0.1 installer also wrote
-an ambient project catalog and therefore did not isolate user-global discovery. Clean candidate
-Build `bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3` then installed 14 then-current user-global
-profiles without a project catalog; its exact-Build parent stayed built-in-only. User-global Cloud
-discovery alone is therefore unsupported on this measured host.
-
-The final environment-setup run installed candidate
-`101250f293a5439ed73e8ee2127c7501fba9e883` for the remote machine and explicitly materialized the
-selected repository. The user manually saved Build
-`bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2`. New top-level same-repository parent
-`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build, exposed all 14 then-current Kaola
-names in
-its 23-type live Task catalog, and exact `implementer` child
-`bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned exactly
-`PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
-The Cloud child model/profile source remains unobservable.
-
-All 7 role bodies come from `templates/agents/behavior-contracts.json` through
-`generate-agent-profiles.js`; `sync-cursor-edition.js` requests Cursor renders and owns only edition
-layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
-
-Cursor documents custom profiles at project `.cursor/agents/` and user `~/.cursor/agents/`, with
-project definitions winning a conflict. Kaola's project install requires `--target DIR` and writes
-that project location. `--global` writes only
-`${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}` (un-nested) and does **not** write an ambient Git
-repository; existing project `.cursor` files are left untouched, and `--global` from a non-git cwd
-does not invent project `.cursor`. A normal install renders the generated source into an isolated
-temporary staging root and removes it after the transaction; only explicit `--regenerate` writes
-the in-repository generated tree. Project catalogs are never selected from the ambient cwd of a
-`--global` command. Authenticated CLI evidence reached project profiles and did not reach a user
-file alone; that CLI fact is not App or Cloud proof. Cloud user-global discovery alone is
-unsupported; the measured Cloud carrier is a receipt-owned project catalog installed by its
-confirmed environment-setup Agent before the Build is saved.
-
-For the measured standalone CLI/local host only, Workflow `startup` and `resume` run Repo role prep
+For the measured standalone CLI/local host only, Workflow `startup` and `resume` run Repo prep
 through the installed helper
 `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`
 `--ensure-target <target>` with that edition's install-authority `--forge=` (`github` on
@@ -259,10 +189,9 @@ pre-export those names. There is no `cursorCliHostGateOpen`. Resume is one unsta
 Those claim.js no longer `unknown_flag`. `--forge` is not a claim.js flag. Claim.js `<target>` is
 `--cursor-workspace` when set (including the stamped opened dir), else recorded `main_root` on
 resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested
-cwd and not the write-worktree unless they are that demonstrated opened dir. Independently entered
-Finalize still appends `## Cursor standalone CLI pre-dispatch materialization` and invokes
-`--ensure-target "$PWD"` immediately before named dispatch; that trailer defers the shared host
-boundary and fail-closed fault list to the Next section above instead of restating them. The helper
+cwd and not the write-worktree unless they are that demonstrated opened dir. Repo prep
+materializes the project's commands, Rule, and hooks, never agents; there is no pre-dispatch
+materialization before a child, and Finalize runs no `--ensure-target`. The helper
 derives project bytes only
 from the receipt-verified global authority, returns `current` without writing when already fresh,
 returns `materialized` when it safely writes (the claim/resume `cursor_prep` report carries
@@ -275,22 +204,12 @@ lifecycle above. Recovery is owned separately: the global transaction writes the
 and explicitly materializes the Cloud selected-repository Rule. There is no `sessionStart`
 materializer and no `--global` dual-write.
 
-The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
-and bracket parameters carry options such as effort; a custom subagent that omits `model` inherits
-the parent. Team policy, legacy-plan settings, or plan
-availability may force a compatible fallback. On Path A, where the live enum contains the named
-profile, generated dispatch guidance omits a per-call model and that profile is the model/effort
-carrier — which is why Kaola pins `grok-4.7[effort=medium]` in the profile rather than relying on
-inheritance. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
-resolver-listed live-schema model slug is the effort lever.
-
-Compact recovery is Rule behavior. CLI catalog bytes are prepared at Workflow startup/resume from
+Compact recovery is Rule behavior. CLI project bytes are prepared at Workflow startup/resume from
 all four claim trees when identity is `cursor`/`cli`/`local` after explicit argv or
 `applyDemonstratedCursorCliHost` (CLI-shaped executable **and** `--workspace`; `--cursor-workspace`
 when set, else recorded `main_root` on resume; first-claim fallback in claim.js is still invoking
 `getRoot()`). The documented generated CLI-positive fence stays unstamped `--runtime cursor`.
-Independently entered Finalize still prepares immediately before named dispatch with explicit
-`$PWD`. The Rule supplies model-visible operation and dispatch instructions;
+The Rule supplies model-visible operation and dispatch instructions;
 the main checkout's mission ledger (`kaola-workflow/.ledger/issue-<N>.jsonl`) remains durable run
 authority after a local, CLI, or Cloud restart. On-disk
 materialization is not live Task-catalog proof.
@@ -298,10 +217,8 @@ materialization is not live Task-catalog proof.
 ## Path selection
 
 On the cursor edition, the router routes directly to the adaptive workflow. Generated commands
-adapt the dispatch call syntax; Path A named-profile dispatch omits per-call model arguments so the
-profile pin carries the binding, while Path B may use only a resolver-listed live-schema model slug.
-Canonical `commands/*.md` is never touched. There is no canonical model-dispatch section to
-substitute.
+replace the runtime dispatch block with the pointer to the always-loaded Rule; canonical
+`commands/*.md` is never touched.
 
 ## Installer
 
@@ -313,11 +230,11 @@ does not run through `install.sh --forge`.
 > which invokes this installer unchanged (`--global` by default) as the sixth
 > leg of its nine-runtime sequence, with a per-runtime PASS/FAIL summary.
 > `--global` inherits this installer's user-home-only Cursor layout: it is not
-> permission to update every consumer repository. Project `.cursor` catalogs
-> need an explicit `--target` or `install-all.sh --project`. Upgrading to 12.0.0 removes the seven
-> retired profiles and installs the seven-role catalog locally, but Cursor Cloud must rebuild its
-> saved environment before the new catalog takes effect there — an old Build keeps serving the
-> retired 14-role catalog. It never installs or
+> permission to update every consumer repository. Project `.cursor` carriers
+> need an explicit `--target` or `install-all.sh --project`. The installer no longer installs
+> Kaola role profiles; see [Installation](installation.md) for upgrade and uninstall. Cursor Cloud
+> must rebuild its saved environment before an upgrade takes effect there — an old Build keeps
+> serving what it installed. It never installs or
 > updates Cursor Cloud; that path begins only inside a confirmed Cursor Cloud
 > environment-setup Agent and uses the installer directly. It stays a thin
 > orchestrator — it does **not** fold Cursor into
@@ -350,8 +267,8 @@ published hashes prove ownership, and writes the first authority receipt. Any mo
 symlink, non-regular carrier, or unknown path remains an unmanaged collision. Isolated live upgrade
 probes passed for all three forges.
 
-- **PROJECT** (`--target DIR`): agents and commands land under
-  `<project>/.cursor/{agents,commands}` from the installed global authority. The empty Kaola
+- **PROJECT** (`--target DIR`): commands land under `<project>/.cursor/commands` from the
+  installed global authority. The empty Kaola
   mapping is **merged** into `<project>/.cursor/hooks.json`; this retires old Kaola prompt hooks while
   other events, e.g. `beforeShellExecution`, stay.
   A project install does **not** merge into `~/.cursor/hooks.json` — Cursor has
@@ -359,26 +276,23 @@ probes passed for all three forges.
   selected from ambient cwd of a `--global` command. The receipt
   `.cursor/kaola-workflow-materialization.json` binds target, forge/version, authority hash, and
   every managed file hash.
-- **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}`
+- **GLOBAL** (`--global`): commands land under `${CURSOR_HOME:-$HOME/.cursor}/commands`
   with **no** nested `.cursor/` directory. The empty Kaola mapping is merged into
   `${CURSOR_HOME:-$HOME/.cursor}/hooks.json`, preserving foreign entries.
   Running `--global` inside a Git work tree does **not** create or refresh that
-  repository's `.cursor/` tree. Project catalogs that already exist are left untouched.
+  repository's `.cursor/` tree. Project `.cursor/` files that already exist are left untouched.
   `--global` from a directory with no git toplevel does not invent a project `.cursor/`
   tree. The authority receipt
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/cursor-authority.json` binds the exact managed
-  files, modes, hashes, forge, and Kaola-Workflow version. Live CLI evidence found those user files
-  alone were not catalog-visible.
+  files, modes, hashes, forge, and Kaola-Workflow version.
   The same receipt owns
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/templates/agents/runtime-capabilities.json`, copied
   byte-for-byte from the single adapter registry. The installed helper reads that file, so its
   doctor does not depend on a repository checkout.
   `--doctor` reports product (`cli`/`app`/`unknown`) and host (`local`/`cloud`/`unknown`)
   facts without installing and never infers one surface from a sibling binary. Its unqualified
-  current `runtime_build` and `named_catalog` stay `unknown` without live observation; measured
-  historical facts remain under `evidence_stamp` and `selected_host`. Its `dispatch_contract`
-  object reports the flat call shape, required model omission, exact-tier post-resolution boundary,
-  generic-enum scope, and provider evidence field.
+  current `runtime_build` stays `unknown` without live observation; measured historical facts
+  remain under `evidence_stamp` and `selected_host`.
 - By default, support scripts land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`.
   `kaola-workflow-cursor-surface.js` is both the filesystem/evidence doctor and the explicit
@@ -392,8 +306,7 @@ probes passed for all three forges.
   documented generated CLI-positive fence is unstamped `--runtime cursor`; operators do not
   pre-export `CURSOR_PRODUCT`/`CURSOR_HOST`/`KAOLA_CURSOR_*`/`CURSOR_WORKSPACE`. Helper spawn is
   that edition's install-authority `--forge=` (`github` / `gitlab` / `gitea` on the matching
-  claim tree); `--forge` is not a claim.js operator flag. Independently entered Finalize
-  still uses `--ensure-target "$PWD"` immediately before named dispatch.
+  claim tree); `--forge` is not a claim.js operator flag.
 
 `--uninstall` removes only receipt-proven files whose current hash still matches and strips only
 receipt-recorded Kaola entries from `hooks.json`. Modified, unmanaged, symlink, non-regular, and
@@ -415,5 +328,5 @@ old `kaola-workflow-compact-recovery.mdc` instead of maintaining a second Rule.
 The generated `.cursor/hooks.json` is therefore `{ "version": 1, "hooks": {} }`. Install merges
 that absence by removing only recognized legacy Kaola prompt-hook entries; it preserves every
 foreign event. There is no compact wrapper, PreToolUse, PostToolUse, or Stop script. Ordinary tool
-use adds 0 Kaola recovery bytes and starts 0 Kaola recovery subprocesses. Catalog materialization
-is still the separate fail-closed CLI point-of-use transaction described above.
+use adds 0 Kaola recovery bytes and starts 0 Kaola recovery subprocesses. Project materialization
+(Repo prep) is still the separate fail-closed CLI transaction described above.

@@ -14,10 +14,10 @@ first-party discovery source and the warning-only 32 KiB recommendation are link
 
 ## Native carriers
 
-Since ADR 0025 (#1062) the Kimi adapter is `role_dispatch: "native_only"`: this edition installs no
-Kaola role profiles. Kimi's custom-agent `model` field is ignored by the runtime, so a Kaola
-profile has no cost lever — children inherit the session model and thinking either way, and the
-vendor's own harness is the dispatch route.
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101); the Kimi edition has installed no
+Kaola role profiles since #1062. Kimi's own harness is the dispatch route, and children inherit the
+session model and thinking.
 
 The edition uses one Kimi carrier:
 
@@ -29,25 +29,23 @@ The edition uses one Kimi carrier:
 
 The command Skills keep their canonical basenames, so `/workflow-init`, `/workflow-next`, and
 `/kaola-workflow-finalize` remain the three entrypoints. Dispatch goes through Kimi's built-in
-agents (`coder`, `explore`, `plan`, `AgentSwarm`) under their real identities — no Kaola
-`kaola-role-*` profile is installed or impersonated.
+agents (`coder`, `explore`, `plan`) with `Agent` or `AgentSwarm`, under their real identities;
+Kaola installs or impersonates no profile.
 
 Kimi's documented custom-agent surface remains available to the user:
 [Custom agents](https://moonshotai.github.io/kimi-code/en/customization/agents.html). The documented
 project locations are `.kimi-code/agents/` and `.agents/agents/`; the user locations are
 `$KIMI_CODE_HOME/agents/` and `~/.agents/agents/`. Kaola writes none of them.
 
-## One role behavior source
+## Generated surface
 
 `scripts/sync-kimi-edition.js` renders only the command Skills and the global contract for this
-adapter; it requests no role profiles from `generate-agent-profiles.js`. The seven-role behavior
-authority in `templates/agents/behavior-contracts.json` still governs the shared contract prose.
+adapter. There is no role authority or profile generator behind either.
 
 ## Model and thinking
 
-Kimi's current custom-agent `model` field is ignored — the measured reason the adapter is
-`native_only`. Kaola emits no `model` field and no
-per-call model override. The session model and thinking configuration own routing, and every
+Kimi's current custom-agent `model` field is ignored by the runtime. Kaola emits no `model` field
+and no per-call model override. The session model and thinking configuration own routing, and every
 child inherits them.
 
 Kimi ships an optional, user-owned `[secondary_model]` config section for subagents (measured GA on
@@ -64,11 +62,10 @@ options, and the writable `coder`, read-only `explore`, and non-shell `plan` bui
 custom profiles may allowlist deeper agents. Kaola neither disables those routes nor silently
 enables the secondary-model section.
 
-A missing named Kaola role is design, not a `capability_gap`: the orchestrator evaluates these
-routes for the current item. A
-built-in remains honestly identified and must satisfy the actual task, custody, evidence, and stop
-boundaries; it is not renamed into a role. Inline applies only when no adequate route
-exists, and the next mission item is reconsidered independently.
+Kaola installing no profile is never evidence that Kimi lacks subagent capability. The orchestrator
+chooses dispatch or inline work for the current item; a dispatched built-in keeps its real identity
+and must satisfy the actual task, custody, evidence, and stop boundaries. The next mission item is
+reconsidered independently.
 
 ## Forge axis
 
@@ -119,31 +116,24 @@ Project installs write command Skills below `<project>/.kimi-code/`. Global inst
 write them directly below `$KIMI_CODE_HOME`. Support scripts remain user-scoped in both
 cases.
 
-On upgrade the installer removes the fourteen `kaola-role-*` artifacts earlier releases deployed —
-the custom-agent profiles and the older role-shaped Skill directories — but only under exact
-ownership proof: a manifest-recorded, managed-marker, hash-matching agent file, or a `kaola-role-*`
-Skill directory whose complete one-file bytes match the exact profile shipped by v9.17.2.
-A user-authored, modified, or unknown same-name file survives; a candidate that fails its
-ownership check fails the install closed rather than being deleted. Reinstall is idempotent.
-Uninstall removes only ownership-proven artifacts, the
-three reserved Kaola command Skills, managed support files, and the retired managed config block. It
-preserves the user's other agents, Skills, config content, and the shared
+The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
+upgrade and uninstall. Reinstall is idempotent. Uninstall removes only ownership-proven artifacts,
+the three reserved Kaola command Skills, managed support files, and the retired managed config
+block. It preserves the user's other agents, Skills, config content, and the shared
 `~/.config/kaola-workflow/config.json`.
 
 ## Develop and verify
 
 ```bash
-node scripts/generate-agent-profiles.js --write
-node scripts/generate-agent-profiles.js --check
 node scripts/sync-kimi-edition.js --write
 node scripts/sync-kimi-edition.js --check
 node scripts/test-kimi-edition.js
 ```
 
-The suite proves the separate carrier inventories, the native-only invariant (no role profiles
-rendered or installed, no `kaola-role-*` dispatch in rendered surfaces), role behavior reachability
-in shared prose, model inheritance, generated-tree determinism, zero Claude-path
-leakage, forge variants, project/global installation, unmanaged-collision refusal, idempotent
-reinstall, ownership-gated legacy role-Skill and role-agent retirement, and ownership-safe uninstall. It proves tracked and
+The suite proves the separate carrier inventories, the native-only invariant (no Kaola role
+profiles rendered or installed, no retired role dispatch in rendered surfaces), model inheritance,
+generated-tree determinism, zero Claude-path leakage, forge variants, project/global installation,
+unmanaged-collision refusal, idempotent reinstall, ownership-gated retirement of earlier Kaola
+artifacts, and ownership-safe uninstall. It proves tracked and
 sandboxed filesystem behavior, not private prompt-loader attestation or identical stochastic model
 output.

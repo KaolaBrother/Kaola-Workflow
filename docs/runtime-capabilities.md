@@ -1,9 +1,11 @@
 # Runtime Capabilities and Instruction Bridges
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
-machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used through 2026-09-19. The current
-Codex mapping update is the dated #1049 source change, not a new runtime capability measurement.
+machine-readable authority is `templates/agents/runtime-capabilities.json` (`schema_version: 2`),
+loaded and validated by `scripts/runtime-adapter-facts.js`; this page explains its operational
+consequences and records the first-party evidence used through 2026-09-19. The authority records
+facts only: instruction loading, hook scope, native subagent routes and their availability, the
+compact-recovery carrier, and install scope.
 
 ## One repository authority
 
@@ -11,8 +13,7 @@ Root `AGENTS.md` is the repository's project-instruction authority. An Agent mai
 project instructions supplement verified local facts and constraints; a project exception must
 state its scope and must not weaken higher-priority instructions or host safety boundaries.
 Universal Workflow behavior is supplied by the machine-global carrier. A runtime reads `AGENTS.md` directly within its documented scope; a runtime that cannot may keep the smallest native entrypoint bridge. Runtime-specific files may add native
-profile syntax, tools, permissions, model/effort settings, hooks, and install paths, but do not copy
-the machine-global contract.
+command or skill syntax, hooks, and install paths, but do not copy the machine-global contract.
 
 Claude Code reads `AGENTS.md` directly from v2.1.277, so no runtime needs a repository bridge on the
 normal path. Any repository `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` counts as a project
@@ -26,52 +27,57 @@ Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
 
 ## Capability map
 
-| Runtime | Profile lookup and native dispatch | Honest native alternatives | Native limits that affect routing |
-| --- | --- | --- | --- |
-| Claude Code | Project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed/session definitions; `Agent` with named `subagent_type` | Full `general-purpose`; read-only `Explore` and `Plan`; catch-all `claude`; background, isolation, and agent-team options | Effective precedence and the live Agent/Task catalog decide availability; recursive depth remains runtime/configuration owned |
-| Codex | Recursive role-TOML discovery under `~/.codex/agents/` (user) and `.codex/agents/` (project), `name` field as identity, plus managed `[agents.<role>]` blocks with `config_file` in the effective project or user `.codex/config.toml` pointing to `.codex/agents/kaola-workflow/<role>.toml`; the current host's `spawn_agent` schema supplies named `agent_type`. Bundled `agents.toml` is installer source, not an installed lookup path | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
-| OpenCode | `native_only` — no Kaola role profiles (ADR 0025); `task` with a named `subagent_type`, or direct `@name`, against the runtime's own catalog | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route; children inherit the session model |
-| Kimi Code | `native_only` — no Kaola role profiles (ADR 0025); `Agent`/`AgentSwarm` against the runtime's own catalog | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; children inherit the session model. Resume/background remain native options |
-| Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
-| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a new same-repository Cloud parent from a saved environment each exposed all 14 Kaola types (pre-#1062 roster) and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; checked-in-only and saved-user-global-only Cloud negative controls exposed native routes only | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud requires an Agent-confirmed environment setup to install its remote authority plus selected repository, followed by manual Save and a new same-repository parent. `install-all.sh` is local-only and never deploys Cloud |
-| ZCode | `native_only` — no Kaola role profiles (ADR 0025); automatic selection, native `@role`, or the live Agent schema against the runtime's own catalog | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn; children follow the main Agent's model |
-| Devin CLI | `native_only` — no Kaola role profiles (ADR 0025); live schema: profile-based `run_subagent` / `read_subagent`, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and unpinned custom profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; Kaola pins no model |
-| Droid CLI | `native_only` — no Kaola role profiles (ADR 0025); live `Task` schema with built-in `worker` / `explorer` routes or user-defined custom droids | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | The live schema owns model and session fields; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
-| DSH | `native_only` — no Kaola role profiles (ADR 0025); live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
+Kaola-Workflow installs no subagent profile on any runtime; every route below is the host's own.
 
-Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
-the verified routes, then tells the orchestrator to use the current session's exposed schema and
+| Runtime | Native dispatch | Native routes | Native limits that affect routing |
+| --- | --- | --- | --- |
+| Claude Code | `Agent`; `subagent_type` names a type from the current catalog, including any agent the user, project, or another plugin defines | Built-in `general-purpose`; read-only `Explore` and `Plan`; catch-all `claude`; background or isolated children and optional agent teams | Inspect the current Agent type catalog and its effective precedence; Claude Code owns child model and effort defaults and permits recursive subagents to its native, host-configurable depth limit |
+| Codex | The `spawn_agent` schema this host exposes; `agent_type` names a type the host reports | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other host-reported types; supported `fork_turns` and service-tier choices | Multi-agent exposure, V1/V2 call schema, type catalog, history forking, nesting, and concurrency are host-owned; child model and reasoning effort follow Codex's defaults and the user's configuration |
+| OpenCode | `task` with a `subagent_type` from the runtime's own catalog, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route; children inherit the session model and variant |
+| Kimi Code | `Agent` (resume/background) or `AgentSwarm` (up to 128 parallel items) | Writable `coder`, read-only `explore`, non-shell `plan`, used under their actual boundaries | Built-ins are leaves; children inherit the session model and effort; the user-owned `[secondary_model]` section stays opt-in |
+| Grok Build | `spawn_subagent`; `subagent_type` names a type from the live catalog | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, and cwd options | Children cannot spawn descendants; child model and effort follow Grok's defaults; the root runtime's other choices remain available |
+| Cursor | `Task`; `subagent_type` names a type from the live catalog. CLI and App are separate product surfaces; App local vs Cloud are different hosts | Host-dependent: measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser` | The live Task catalog is authoritative; a CLI catalog reload requires a new process. Cloud requires an Agent-confirmed environment setup, manual Save, and a new same-repository parent. `install-all.sh` is local-only and never deploys Cloud |
+| ZCode | Automatic selection or native `@`; optional call fields follow the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Children follow the main Agent's model and cannot spawn children; the root runtime's other native routes remain available |
+| Devin CLI | Live schema: `run_subagent` / `read_subagent` with the session-start profile catalog, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and user-owned profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; the host router owns the model |
+| Droid CLI | Live `Task` schema | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | A spawned route resolves its model from the invoking route and the parent's complexity routing and inherits the parent when unpinned; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
+| DSH | Live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background, depth, and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
+
+Cursor and ZCode do not publish one complete Task/Agent call schema. Their adapter facts name the
+verified routes, then tell the orchestrator to use the current session's exposed schema and
 catalog. Cursor's IDE documentation, supported CLI, and measured Cloud Agent catalogs demonstrably
-expose different built-ins, so no one list is treated as universal. Omit-model is the custom-profile
-carrier on a host whose live enum contains Kaola names; on a catalog-miss host a resolver-listed
-model slug from that live schema is an effort lever, not an unpublished field. Static request
-fields whose names or shapes remain unverified are not emitted.
+expose different built-ins, so no one list is treated as universal. Static request fields whose
+names or shapes remain unverified are not emitted.
+
+Cursor keeps its field spaces separate: the controller call uses only the flat fields exposed by
+the live `Task` schema, including `subagent_type`; `providerOptions.cursor.modelName` is
+post-dispatch provider evidence; and internal provider encodings such as `subagentType.custom.name`
+are not construction instructions.
 
 ## Runtime/surface install matrix
 
 Global-first is an observable install-scope contract, not a family slogan. `--global` writes the
 runtime's user/global root when that root is the installer's global target; it does not mutate an
-ambient Git repository and is not permission to refresh every consumer repo. Project catalogs are
+ambient Git repository and is not permission to refresh every consumer repo. Project carriers are
 an explicit `--target`. `workflow-init` does not install runtime
-catalogs. Unknown stays `unknown`; a documented path is not a live named-role PASS.
+carriers. Unknown stays `unknown`; a documented path is not a live PASS.
 
-| Runtime / surface | Global install root | Ambient git write from `--global` | Required project materialization | Named-catalog evidence |
+| Runtime / surface | Global install root | Ambient git write from `--global` | Required project materialization | Evidence |
 | --- | --- | --- | --- | --- |
-| Claude Code | user/plugin (`~/.claude/`) | no | no | documented global profiles |
-| Codex | user/project `.codex` plus plugin; global profiles are the install authority | no | no | documented; existing end-to-end global convergence |
-| OpenCode | `${OPENCODE_CONFIG_DIR:-~/.config/opencode}` | no | no | `native_only` — no Kaola profile catalog installed |
-| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | `native_only` — no Kaola profile catalog installed (pre-#1062: live `kaola-role-implementer` lookup from two unrelated empty repositories) |
-| Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
-| ZCode | `${ZCODE_HOME:-~/.zcode}` | no | no | `native_only` — no Kaola profile catalog installed |
-| Droid CLI | `${DROID_HOME:-~/.factory}` | no | no | `native_only` — no Kaola profile catalog installed; Droid 0.220.0 direct-load probe |
-| DSH | `${DSH_HOME:-~/.dsh}` | no | no | `native_only` — no Kaola profile catalog installed; DSH 0.1.5-rc.2 CLI/dump-config probe |
-| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
-| Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 pre-#1062 Kaola types; exact `implementer` succeeded |
-| Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 pre-#1062 Kaola names; exact `implementer` succeeded from a new same-repository parent |
+| Claude Code | user/plugin (`~/.claude/`) | no | no | documented |
+| Codex | user `~/.codex` plus plugin | no | no | documented |
+| OpenCode | `${OPENCODE_CONFIG_DIR:-~/.config/opencode}` | no | no | documented |
+| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | documented |
+| Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented |
+| ZCode | `${ZCODE_HOME:-~/.zcode}` | no | no | documented |
+| Droid CLI | `${DROID_HOME:-~/.factory}` | no | no | documented; Droid 0.220.0 direct-load probe |
+| DSH | `${DSH_HOME:-~/.dsh}` | no | no | documented; DSH 0.1.5-rc.2 CLI/dump-config probe |
+| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/commands` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim) | live CLI Task catalog, 2026-08-27 |
+| Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live App Task catalog, 2026-08-27 |
+| Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live saved-Build Task catalog from a new same-repository parent, 2026-08-28 |
 
-Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
-the measured standalone CLI only, Workflow `startup`/`resume` run the installed safe materializer
-`--ensure-target` from all four claim trees (canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab
+On the measured standalone Cursor CLI only, Workflow `startup`/`resume` run Repo prep — the
+installed safe materializer `--ensure-target` — from all four claim trees (canonical GitHub,
+COMMON_SCRIPTS Codex copy, GitLab
 hand-port, Gitea hand-port) after `applyDemonstratedCursorCliHost`. Explicit `--product`/`--host`
 still win. Generated startup/resume fences do not stamp `--product cli --host local`; claim.js
 stamps in-process before the single claim and on resume without re-claim. When `--runtime cursor`
@@ -91,8 +97,9 @@ CLI-positive fence is unstamped `node "$CLAIM_JS" startup --runtime cursor --tar
 `gitlab` / `gitea` on the matching claim tree); `--forge` is not a claim.js operator flag.
 Claim.js target is `--cursor-workspace` when set, else recorded `main_root` on resume, else
 invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the
-write-worktree unless they are that demonstrated opened dir. Independently entered Finalize still
-runs `--ensure-target "$PWD"` immediately before named dispatch. The helper derives
+write-worktree unless they are that demonstrated opened dir. Repo prep materializes the project's
+commands, Rule, and hooks, never agents, and there is no pre-dispatch materialization before a
+child. The helper derives
 bytes from the receipt-verified global authority, is a no-op when `status: current`, and returns
 `materialized` when it writes (the claim/resume `cursor_prep` report carries
 `restart_boundary: "new_process_same_chat"`); it fails before writing
@@ -105,8 +112,7 @@ the successful Build ID, and ask the user to click Save. A new top-level Agent i
 repository must visibly match the Build before its catalog is trusted.
 The global-contract transaction installs one local user `alwaysApply` Rule shared by CLI and App.
 Cloud setup explicitly materializes identical bytes in the selected repository because the remote
-host cannot inherit a local user carrier. This is separate from named-agent discovery and installs
-no Cursor hook.
+host cannot inherit a local user carrier. It installs no Cursor hook.
 
 ## Compact recovery carriers
 
@@ -130,72 +136,24 @@ subprocesses. Recovery-enabled runtimes receive an already-generated artifact, r
 then completely reload the installed Workflow Next or Finalization prompt. There is no compact-time
 JS, native session token, sidecar, chunk bitmap, or acknowledgement state.
 
-## Subagent default binding
+## Native subagents only
 
-The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062). Each adapter that
-installs profiles declares exactly one `subagent_default` (`model`, optional `effort`, and a
-one-sentence `summary`), and the generator renders the seven-role roster from
-`templates/agents/behavior-contracts.json` beside it. The runtime adapter exposes the following
-**subagent default binding** in
-both `workflow-next` and `kaola-workflow-finalize`:
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings on
+any runtime ([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Each adapter's
+`delegation_guidance` records only the host's native routes and their availability. The host's own
+defaults, limits, and permissions, and the user's explicit instructions, decide model, effort,
+tools, nesting, concurrency, isolation, and resume. Where a native schema requires a type, the
+orchestrator passes one the host reports, under its real meaning. Kaola installing no profile is
+never evidence that the host lacks subagent capability. Native automatic, background, parallel,
+resume, nesting, history, service-tier, and model choices stay available wherever the runtime
+actually supports them.
 
-| Class | Adapter | Binding |
-| --- | --- | --- |
-| binding | Claude | profile `model: sonnet`; effort not pinned |
-| binding | Codex (GitHub / GitLab / Gitea) | TOML `model = "gpt-6-luna"` + `model_reasoning_effort = "max"` |
-| binding | Grok | `model: grok-4.7` + `effort: medium` |
-| binding | Cursor | `model: grok-4.7[effort=medium]` |
-| native_only | OpenCode | no Kaola profiles; vendor harness (`general` / `explore` / `scout`), session-inherited model |
-| native_only | Kimi | no Kaola profiles; vendor harness (`coder` / `explore` / `plan`, `AgentSwarm`), session-inherited model |
-| native_only | ZCode | no Kaola profiles; vendor harness (`general-purpose` / `Explore`), follows the main Agent |
-| native_only | Devin | no Kaola profiles; live-schema native dispatch (profile routes or Fusion `sidekick`), host router owns the model; see [measured evidence](devin-edition.md#dispatch-and-model-ownership) |
-| native_only | Droid | no Kaola profiles; live-schema `Task` dispatch (`worker` / `explorer` / custom droids), host owns model routing |
-| native_only | DSH | no Kaola profiles; live-schema `subagent` / `subagent_fork`, host owns model routing |
+Dispatch-vs-inline is decided again for every mission item; one item's choice never establishes a
+run-wide default. A cohesive production owner owns only that production surface; independent
+research, test authorship, documentation, and review remain separately dispatchable.
 
-**Measured id swap (2026-09-22, #1088).** The Grok and Cursor pins moved from Grok 4.6 to Grok 4.7
-on a catalog read, not on a dispatch probe. Grok CLI `1.0.40` lists `grok-4.7` with `xhigh` /
-`high` / `medium` / `low` efforts; Cursor CLI `2026.09.15-d2fe57e` lists `grok-4.7-{low,medium,high,xhigh}`
-(each with a `-fast` twin, and without the `cursor-` prefix the 4.6 slugs carry). A pinned child's
-resolved model and effort were not re-probed. The dated 2026-08 measurements below keep the 4.6
-slugs they observed.
-
-This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Codex
-profile TOML values take precedence over spawn parameters and the parent session, so dispatch omits
-per-call `model`/`reasoning_effort`; a Cursor custom subagent that omits `model` inherits the
-parent, so the profile pin is what selects the cheaper child. Kimi's optional, user-owned
-`[secondary_model]` section is used only when the user explicitly opts into it; unset, children
-inherit the session model and effort.
-On a Cursor catalog-miss host there is no profile pin; omit-model follows the parent. Native
-automatic, background, parallel, resume,
-nesting, history, service-tier, and model choices stay available wherever the runtime actually
-supports them.
-
-Cursor keeps three field spaces separate. The controller call uses only the flat fields exposed by
-the live `Task` schema, including `subagent_type`; a valid named profile owns its model/effort pin,
-so dispatch omits per-call `model`; and
-`providerOptions.cursor.modelName` is post-dispatch provider evidence. The generic Task model enum
-does not describe named profile availability, and internal provider encodings such as
-`subagentType.custom.name` are not construction instructions. The installed Cursor doctor exposes
-this same boundary in `dispatch_contract` from a receipt-owned copy of the adapter registry.
-
-The finalize surface makes the binding operational rather than leaving it as a lookup table:
-its dispatch example names `implementer` with no `model=` field, because the installed profile
-already carries the adapter's pin. The example does
-not outlaw a task-sensitive override, a supported inherited pair, or another native choice exposed
-by the active runtime.
-
-## Per-item fallback principle
-
-Dispatch-vs-inline is decided again for every mission item. One absent exact role does not prove all
-native child routes are absent and never creates a run-wide inline policy. Inspect the active
-runtime's named, built-in, and generic routes. Use one only if its real task, custody, evidence, and
-stop boundaries fit the item.
-
-A brief can assign custody to a generic worker, but the worker remains that generic worker; it does
-not impersonate a missing `tdd-guide`, reviewer, or other named role. If no adequate native route
-exists, inline that item, record the specific `capability_gap`, and reconsider the next item. A
-cohesive production owner owns only that production surface; independent research, test authorship,
-documentation, and review remain separately dispatchable.
+Before #1101, Claude, the three Codex variants, Grok, and Cursor installed generated Kaola role
+profiles with one pinned subagent model; ADR 0029 records what was retired.
 
 ## Adapter inventory
 
@@ -205,26 +163,14 @@ The closed inventory contains ten runtime families and twelve adapter variants:
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
 - one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH.
 
-Six of those adapters install Kaola role profiles (`role_dispatch: "named_profile"`: Claude, the
-three Codex variants, Grok, Cursor); the other six are `native_only` — OpenCode, Kimi, ZCode,
-Devin, Droid, and DSH render commands, skills, hooks, and the global contract only, because a Kaola
-profile has no
-cost lever there (children inherit the session model, or a vendor router owns it).
-
-With 7 roles on six profile-installing adapters, that produces 42 deterministic renders.
-`behavior_sha256` identifies the
-runtime-neutral role contract; `resolved_profile_sha256` identifies one native render (both
-recorded in `agents/generated-agent-manifest.json`, not in the profile text). A shared
-behavior mutation must reach every variant for that role. An adapter mutation must affect only its
-runtime family. Equal behavior hashes do not promise equal natural-language outputs.
-
-The same capability adapter also owns a routing-only `delegation_guidance` block. The profile
-generator renders it into the `runtime-delegation` slot in both next/finalize skeletons: commands
-receive Claude guidance, forge-matched skills receive Codex guidance, and each additive edition
-replaces the marked block with its own runtime render — the `**Subagent default:**` binding plus a
-`**Roles:**` line on binding adapters, or the native-only sentence on the other four. `workflow-init` intentionally has no dispatch
-block. Routing-only guidance is excluded from the adapter hash, so explaining an already-supported
-route does not churn `resolved_profile_sha256` or the 42 role profiles.
+Every adapter renders commands or skills, any measured hooks, and the global contract only; none
+installs a Kaola role profile. `scripts/runtime-adapter-facts.js` rejects every retired role,
+profile, or model-binding capability (`named_roles`, `role_dispatch`, `subagent_default`,
+`model_carrier`, `profile_format`, `tool_binding`, `dispatch_conformance`, `capability_gap`, …) and
+renders each adapter's `delegation_guidance` into the `KW-RUNTIME-DELEGATION` section beside the
+dispatch contract in both next/finalize surfaces — inline, or through the always-loaded global
+carrier on runtimes whose generated commands defer to it. `workflow-init` intentionally has no
+dispatch block.
 
 ## First-party evidence
 
@@ -255,8 +201,8 @@ route does not churn `resolved_profile_sha256` or the 42 role profiles.
 
 - [Rules](https://opencode.ai/docs/rules/) documents direct AGENTS support, Claude fallback,
   first-match project discovery, global scope, and instruction globs.
-- [Agents](https://opencode.ai/docs/agents/) documents native role profiles, dispatch, permissions,
-  and model inheritance.
+- [Agents](https://opencode.ai/docs/agents/) documents native agent definitions, dispatch,
+  permissions, and model inheritance.
 - [Configuration](https://opencode.ai/docs/config/) and
   [plugins](https://opencode.ai/docs/plugins/) document locations and event support.
 
@@ -279,12 +225,10 @@ route does not churn `resolved_profile_sha256` or the 42 role profiles.
   `[thinking]` effort — with `modelSource: "inherited"`, because no `[secondary_model]` section is
   configured. `[secondary_model]` is a registered first-class section (no experimental gate) whose
   unset default is inherit-primary.
-- **Live global lookup (2026-08-27).** Kimi Code `0.38.0` selected
-  `kaola-role-implementer` from the user-global carrier in two unrelated empty Git repositories
-  with no project `.kimi-code` or `.agents` catalog. Both prompt-mode calls returned the exact
-  read-only probe token and left the repositories empty. This closes the prior
-  `documented_live_unverified` status for global named-profile lookup; project precedence and
-  deeper Agent/AgentSwarm behavior retain their separately documented boundaries.
+- **Live global lookup (2026-08-27, before #1062).** Kimi Code `0.38.0` selected a then-installed
+  user-global custom agent in two unrelated empty Git repositories with no project `.kimi-code` or
+  `.agents` catalog, confirming native user-global custom-agent lookup. Kaola no longer installs
+  one.
 
 ### Grok Build
 
@@ -321,69 +265,32 @@ Cloud setup writes identical bytes to the selected repository's
 retired duplicate. Its hook mapping is deliberately empty; neither a local-only `sessionStart` nor
 non-injecting `preCompact` is used as a false universal mechanism.
 
-**Supported CLI measurement (runtime evidence, 2026-08-27).** Authenticated standalone Cursor CLI
-`2026.08.25-3e8eec8` was re-run against an isolated user carrier and an explicit disposable
-project materialized by the current candidate. Its live catalog contained exact `implementer`.
-The parent omitted a model override; the raw Task carrier recorded
-`subagentType.custom.name = implementer`, resolved `cursor-grok-4.6-medium`, and returned the
-requested read-only token successfully without repository mutation. This proves the candidate's
-explicit project carrier and profile binding on that CLI host. It is not App
-local-IDE or Cloud evidence. (Measured against the pre-#1062 roster; the binding is now the single
-`subagent_default` in the table above.)
+**Historical Cursor catalog measurements (runtime evidence, 2026-08-27/28, before #1101).** These
+probes ran while Kaola still installed Cursor role profiles; they are kept for the native host
+boundaries they measured, not as a Kaola catalog contract.
 
-Earlier same-day CLI probes remain useful for the wider runtime boundary: writable
-`generalPurpose` appeared as `subagentType.unspecified`; specialist and all 14 project roles (the
-pre-#1062 roster) were
-present; medium/high/xhigh tiers, parallel Tasks, and one descendant dispatch generation worked.
-A user-only profile was invisible in an empty project, while the project catalog was reachable.
-Reopening the CLI process with the same chat discovered a newly added project profile; same-process
-hot load remains unknown.
-
-**Cursor App local-IDE measurement (runtime evidence, 2026-08-27).** Cursor App `3.17.21`
-(`8f2a112cb2845a97b75fd932ea5c470579ca4060`) started a local `This Mac` Agent with project
-profiles already present. The live catalog exposed the built-ins plus all 14 Kaola types (the
-pre-#1062 roster; seven today) and exact
-`implementer` returned the requested read-only token without a per-call model override or tracked
-repository mutation. The App result exposed neither child model/effort nor profile source, so App
-global discovery, required materialization, reload, and profile-model observability remain unknown.
-
-**Cloud Agent measurement (runtime evidence, 2026-08-27, #1036/#1039).** Two earlier Cloud parents, both
-`originalModelName: cursor-grok-4.6-xhigh`, exposed a built-in-only Task enum with **no** Kaola
-custom types and **no** parent-authored `subagentType.custom.name` field. This is App-started
-remote Cloud evidence, not local App/IDE proof:
-
-- Consumer `financial-agent` after 14 git-tracked project `.cursor/agents/` files (pre-#1062
-  inventory) existed
-  (`bc-58906f62-9bc3-4b87-b546-3ff8f77ae3b6`): `generalPurpose`, `explore`, `cursor-guide`,
-  `bugbot`, `security-review`, `best-of-n-runner`. `generalPurpose` succeeded with omit-model,
-  `inherit`, and resolver-listed `cursor-grok-4.6-high-fast`. `cursor-grok-4.6-high` was
-  resolver-rejected. CLI profile slugs `cursor-grok-4.6-medium` / `xhigh` were absent from that
-  resolver list. Mid-session catalog install in the same process did not refresh the enum.
-- Producer `Kaola-Workflow` new Cloud chat (`bc-01a0426b-3f61-7e04-b801-b9b913c09401`): the same
-  built-in-only shape, plus `explore`, `computerUse`, and `videoReview`. No project `.cursor/agents/`
-  is git-tracked in this producer.
-
-A final fresh App-started Cloud probe selected
-`probe/cursor-cloud-1041-20260827a` at
-`ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6` before send. That commit already tracked all 14
-project profiles. The new Cloud parent still exposed exactly `generalPurpose`, `explore`,
-`computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
-`best-of-n-runner`; exact `implementer` was absent, so no substitute was dispatched. Thus branch
-files not installed by the environment Build are measured as insufficient on this Cloud host; this
-is not a runtime capability verdict. A clean saved Build with 14 then-current user-global profiles
-and
-no project catalog also remained built-in-only, so user-global discovery alone is unsupported.
-
-The final environment-setup Build
-`bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2` installed exact candidate
-`101250f293a5439ed73e8ee2127c7501fba9e883` for the remote machine and explicitly materialized the
-selected repository before the user manually saved it. New same-repository parent
-`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build and exposed all 14 then-current
-Kaola names
-in its 23-type Task catalog. Exact `implementer` child
-`bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned
-`PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
-The selected child model and profile source remained unobservable.
+- **Standalone CLI** `2026.08.25-3e8eec8`: writable `generalPurpose` appeared as
+  `subagentType.unspecified`; parallel Tasks and one descendant dispatch generation worked; a
+  project custom profile was reachable while a user-only profile was invisible in an empty project;
+  reopening the CLI process with the same chat discovered a newly added project profile, and
+  same-process hot load remains unknown. With no per-call model override, a custom child resolved
+  `cursor-grok-4.6-medium` in the raw Task carrier.
+- **App local IDE** `3.17.21` (`8f2a112cb2845a97b75fd932ea5c470579ca4060`): the live catalog exposed
+  the built-ins plus project custom types. The App result exposed neither child model/effort nor
+  profile source, so App global discovery, required materialization, reload, and child-model
+  observability remain unknown.
+- **App-started Cloud** (#1036/#1039/#1041): parents without an installed environment Build exposed
+  a built-in-only Task enum — `generalPurpose`, `explore`, `cursor-guide`, `bugbot`,
+  `security-review`, `best-of-n-runner`, and on the producer also `computerUse` and `videoReview` —
+  even when project profiles were git-tracked on the selected branch, or when only user-global
+  profiles existed in a saved Build. `generalPurpose` succeeded with omit-model, `inherit`, and
+  resolver-listed `cursor-grok-4.6-high-fast`; `cursor-grok-4.6-high` was resolver-rejected, and a
+  mid-session catalog install did not refresh the enum. The environment-setup Build
+  `bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2` installed the remote machine authority and
+  materialized the selected repository before the user saved it; a new same-repository parent
+  (`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d`) visibly used that Build and exposed a 23-type Task
+  catalog including the then-installed custom types. The child model and profile source remained
+  unobservable.
 
 ### Droid CLI
 
@@ -456,9 +363,9 @@ compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP e
 
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
-- Cursor CLI same-process profile hot load; App local-IDE global discovery, materialization
-  necessity, reload, and child model/profile-source observability; Cloud child model/profile-source
-  observability and catalog behavior beyond the saved-environment lifecycle measured above;
+- Cursor CLI same-process catalog hot load; App local-IDE global discovery, materialization
+  necessity, reload, and child-model observability; Cloud child-model observability and catalog
+  behavior beyond the saved-environment lifecycle measured above;
 - live ZCode 3.10.1 named-subagent dispatch and model resolution. The installed App and hook schema
   are locally verified, but no standalone `zcode` executable is on PATH for an end-to-end Agent leg;
 - any precedence or conflict behavior not stated by the evidence above.

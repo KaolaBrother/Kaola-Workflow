@@ -31,9 +31,9 @@ project-prompt bytes into a new template by another name.
 The orchestrator dispatches subagents, judges what comes back, and runs the finalize transaction
 itself. There is no bookkeeping role and no mandatory planning agent — the run's coordination state
 is the mission ledger `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, written by the run's Main
-Orchestrator. The vendored role
-agents are dispatchable tools reached for by name at the moment they are needed, never pre-assigned
-to a schedule.
+Orchestrator. Subagents are the host's own native types — Kaola-Workflow defines no roles
+([ADR 0029](decisions/0029-native-subagents-only.md)) — reached for at the moment they are needed,
+never pre-assigned to a schedule.
 
 `validate-workflow-contracts.js` and the three edition twins lock the finalize seam in BOTH
 directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract
@@ -46,76 +46,45 @@ supplies independent judgment, or enables genuine parallelism; keep a cohesive p
 with one owner when handoff and integration cost dominate. That production scope does not absorb
 independent research, acceptance authorship, documentation, or review. Both modes are first-class.
 Nothing attaches to the choice — no justifier, evidence line, approval, checker, count, cap, or
-serial stigma. One missing exact role is a routing fact for the current item, never a run-wide
-fallback policy. A mission names a recoverable outcome; one selector is not a mission. Converge the
+serial stigma. One item's choice never becomes a run-wide default. A mission names a recoverable outcome; one selector is not a mission. Converge the
 affected failure frontier before freezing a candidate and reviewing that exact hash as a batch.
 
 ## Codex subagent dispatch
 
-Codex subagent dispatch uses a native role-dispatch packet, not Claude call syntax. When the main
-Codex session invokes a role, it names the installed role, supplies the task prompt and working
-directory, and follows the `spawn_agent` schema exposed by that host. The runtime block exposes the
-single subagent default binding — `model = "gpt-6-luna"` and
-`model_reasoning_effort = "max"`, pinned in every installed TOML profile — while a
-host-supported task-sensitive model, effort, service-tier, or history-fork choice remains valid.
-Because the profile pins both keys, dispatch omits per-call `model` and `reasoning_effort`; the
-default does not become scheduler state or a
-fixed reviewer pipeline.
-
-Resolve roles from Codex's two live paths: recursive discovery of standalone role TOML files under
-`~/.codex/agents/` (user) and `.codex/agents/` (project), with the `name` field as identity, plus
-the effective project or user `.codex/config.toml`, whose managed `[agents.<role>]` entries point to
-`.codex/agents/kaola-workflow/<role>.toml` and are what the installer prunes against. Bundled `agents.toml`
-is installer input, not an installed lookup path. Finalize's Codex dispatch example names
-`implementer` with no per-call model or effort; it remains an example, not a ban on task-sensitive or
-supported inherited choices.
+Codex subagent dispatch uses the `spawn_agent` schema this host exposes, not Claude call syntax.
+`agent_type` names a type the host reports — such as the general `default`, implementation-owning
+`worker`, or read-heavy `explorer` — each under its real contract, and supported `fork_turns` and
+service-tier choices are preserved. Kaola installs no Codex profile and pins no subagent model or
+reasoning effort: child model and effort follow Codex's own defaults and the user's configuration,
+and the session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and
+nesting/concurrency limits stay host-owned.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
-**Codex readiness boundary:** `install-codex-agent-profiles.js` owns installation and upgrade proof.
-It exits successfully only after source/profile validation, safe writes and pruning, manifest and
-hook installation, and post-install verification succeed. The `next` and `finalize` Codex skills do
-not invoke `kaola-workflow-codex-preflight.js`, parse or autofix its output, or make profile/config
-freshness a workflow entry, resume, or dispatch verdict. `local-fallback-tool-unavailable` retains
-only its literal meaning: the runtime dispatch tool is genuinely unavailable.
-
-`kaola-workflow-codex-preflight.js --doctor` is an explicit, user-invoked diagnostic, never an
-ordinary session gate. It merges the persisted transport/posture fields it owns from HOME through
-every trusted repository-root-to-cwd `.codex/config.toml`, with explicitly present higher fields
-winning and the winning unsafe path retained for diagnosis. Profile provenance is separate: a
-global profile set is eligible only when no project layer has a Kaola footprint; otherwise the
-project authority and exact managed role block must pass. A project Kaola footprint is loadable
-only when the most-specific matching absolute `[projects."..."]` entry in global config says
-`trust_level = "trusted"`;
-unknown/untrusted footprints stop as `project_trust_required` because Codex ignores those project
-layers. Any outside-marker `agents` declaration in any loaded project layer is unsafe. This
-diagnostic cannot see ephemeral Codex `--profile` or `-c` launch overrides, so its persisted
-filesystem result must not be described as proof of those per-process settings.
-
-See `docs/api.md` § Installation and edition sync for the explicit doctor boundary.
+The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
+upgrade and uninstall. The `next` and `finalize` Codex skills do not invoke
+`kaola-workflow-codex-preflight.js`, parse or autofix its output, or make it a workflow entry,
+resume, or dispatch verdict; `--doctor` is an explicit, user-invoked diagnostic, never an ordinary
+session gate. See `docs/api.md` § Installation and edition sync for the explicit doctor boundary.
 
 ## Natural-language handoff guidance
 
-When a mission is sent to another role, keep the request self-sufficient in ordinary prose: state
+When a mission is dispatched, keep the request self-sufficient in ordinary prose: state
 the requested result or question, relevant evidence and authority/custody, the exact landing
 locator, and the stop condition. The existing owner remains responsible for the converged candidate;
-review findings go back to that owner, and repaired findings or new claims may be re-reviewed. The
-role profile supplies universal behavior. There is no fixed label order, handoff schema, required
+review findings go back to that owner, and repaired findings or new claims may be re-reviewed.
+Kaola defines no role profile, so the brief carries what the child needs. There is no fixed label
+order, handoff schema, required
 block, parser, linter, grader, score, or approval gate. The mission ledger remains the recovery index:
 one JSON line per mission with `n`, `name`, `details`, and `status`.
 
-Next/finalize also carry a generated runtime-native capability block. Read it before deciding that a
-role is unavailable: inspect the live named, built-in, and generic routes for this item, including
-their true write, shell, web, background, resume, nesting, and session limits. A generic route may
-receive an exact custody brief but remains generic; do not present it as the missing named role.
-Inline only the current item when no adequate route can meet task, custody, evidence, and stop
-boundaries, record the specific `capability_gap`, then reconsider the next item. On Cursor, the
-live Task enum is the authority: omit-model is the named-profile carrier only when that enum
-contains the Kaola name; a catalog-miss host uses live built-ins as themselves while establishing
-whether the correct local-project or Agent-confirmed saved-Cloud project carrier was installed and
-reloaded.
-Only a miss after the correct host lifecycle is a capability gap. Do not add Kaola
-caps to runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
+Next/finalize also carry the runtime adapter facts beside the dispatch contract, inline or through
+the always-loaded global carrier. Read them for the host's native routes and their true write,
+shell, web, background, resume, nesting, and session limits, then decide dispatch or inline for
+the current item. A dispatched type keeps its real identity under a custody brief. Kaola installing
+no profile is never evidence that the host lacks subagent capability. On Cursor, the live Task enum
+is the authority, and CLI, App local, and App Cloud are separate hosts. Do not add Kaola caps to
+runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
 
 ## Prompt recovery across compact
 
@@ -267,57 +236,36 @@ path refusal.
 
 The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / the orchestrator's no-target survey) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, or bundle finalization — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception. The bundle lane's edition behavioral coverage lives in the gitlab/gitea walkthroughs, mirroring `simulate-workflow-walkthrough.js` §#328 — keep them in lockstep when bundle behavior changes (see § Testing — Cross-Edition Validation, Edition behavioral coverage).
 
-**Agent-set deltas are generator-schema changes.** Adding or removing a role begins in the exact role
-inventory in `templates/agents/behavior-contracts.json` and the generator's closed `ROLES` list. Do
-not create a root Markdown file or plugin TOML first. The generalized generator and manifest own the
-complete registration surface:
+**There is no agent set.** Kaola-Workflow defines no subagent roles
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). A role, role profile, profile
+generator or manifest, role roster, role call card, or pinned subagent model or effort is a retired
+shape that `scripts/test-issue-1101-native-only.js` rejects. A change to a host's native routes is
+an evidence-backed edit to `templates/agents/runtime-capabilities.json` (see § Runtime adapter
+facts).
 
-| Path | What pins the roster |
-|------|----------------------|
-| `templates/agents/behavior-contracts.json` | exactly one complete behavior record and intent class per role |
-| `templates/agents/provenance.json` | exactly one `source_kind` and, where one applies, a `history` origin record per role |
-| `scripts/generate-agent-profiles.js` | exact role set, schema, native rendering, three Codex registries, and output manifest |
-| `agents/generated-agent-manifest.json` | 6 renders per role and the receipt triple (`behavior_sha256`, `adapter_capabilities_sha256`, `resolved_profile_sha256`) |
-| installers and preflight | selected-source, managed-set, installed-byte, and pruning proof from the generated inventory |
-| additive edition suites | native carrier/discovery, mutation reachability, and install/uninstall behavior |
-| `README.md` and `docs/agents-source.md` | human role/intent catalog and source classification |
+## Forge-Neutral Plugin Prose (issue #341)
 
-An agent-set delta is a cross-runtime and cross-edition diff. Regenerate all profiles, run the
-architecture mutation suite, every additive edition suite, and the producer-selected forge chains.
-
-## Forge-Neutral Plugin Agent Profiles (issue #341)
-
-- Plugin agent/command/skill prose is **forge-neutral**: never name a forge-specific CLI
+- Plugin command/skill prose is **forge-neutral**: never name a forge-specific CLI
   binary (`gh`/`glab`), a forge brand, or forge-specific request nouns — write "the forge
   CLI" / "the forge". The gitlab/gitea contract validators enforce this (`assertNoForbidden`),
-  scanning every plugin command/skill/hook/agent/config file BEFORE any count assertion.
-- The plugin role-agent profiles (`plugins/*/agents/*.toml`) are byte-identical mirrors across
-  the three plugin editions. The canonical spec for a new agent toml: name no CLI; mirror the
-  existing agents' edition-neutral style.
+  scanning every plugin command/skill/hook/config file BEFORE any count assertion.
 - A forge-touching node verifies its changed files without the full chains (counts may be
   transiently stale mid-run):
   `node plugins/kaola-workflow-{gitlab,gitea}/scripts/validate-kaola-workflow-{gitlab,gitea}-contracts.js --forbidden-only <file>...`
 
-## Generated role profiles and proof boundaries
+## Runtime adapter facts
 
-All 7 roles follow one workflow:
-
-1. Edit `templates/agents/behavior-contracts.json` for runtime-neutral behavior,
-   `templates/agents/runtime-capabilities.json` for an evidence-backed native difference, or
-   `templates/agents/provenance.json` for origin metadata. Do not mix those axes.
-2. Edit `scripts/generate-agent-profiles.js` only when schema, hashing, or native rendering changes.
-3. Run `node scripts/generate-agent-profiles.js --write`, then `--check`. Never hand-edit a generated
-   Claude Markdown, Codex TOML, additive runtime profile, Codex registry, or manifest.
-4. Run `node scripts/test-runtime-agent-architecture.js` and
-   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all six
-   profile-installing adapters; an
-   adapter mutation must remain isolated to one runtime family.
-
-`behavior_sha256` establishes deterministic runtime-neutral contract equivalence.
-`resolved_profile_sha256` establishes deterministic complete-render byte identity. Both live in the
-generated manifest sidecar, never in profile bodies. Neither proves
-stochastic output identity or private prompt-load attestation. Installer/preflight checks may claim
-only exact selected-source, installed-file, manifest, and plugin-cache bytes.
+1. Edit `templates/agents/runtime-capabilities.json` only for an evidence-backed native fact —
+   instruction loading, hook scope, native subagent routes and their availability, compact carrier,
+   or install scope — backed by an `evidence` record; an unknown stays `unknown`.
+   `templates/agents/provenance.json` holds attribution for retired role contracts only. Do not mix
+   those axes.
+2. `scripts/runtime-adapter-facts.js` validates the file and rejects every retired role, profile,
+   or model-binding capability. Regenerate the routing surfaces
+   (`node scripts/generate-routing-surfaces.js --write`) and the additive editions; never hand-edit
+   a rendered surface.
+3. Run `npm run test:kaola-workflow:editions` and the producer-selected chains. An adapter mutation
+   must remain isolated to one runtime family.
 
 ## Local validation receipts
 
@@ -327,12 +275,7 @@ to a deterministic `pass`, `fail`, or `inconclusive` receipt. Timeout, signal, m
 candidate mutation, unresolved executable identity, or any other incomparability is `inconclusive`,
 never pass. It is self-contained and depends on no hosted pipeline.
 
-## Agent profile equivalence
-
-Cross-runtime equivalence is source identity plus semantic mutation, not prose parity. Every role
-has one behavior record; every native render records that behavior hash and its own complete-render
-hash. The generated manifest pins the closed 42-render inventory. The three Codex forge profiles
-for a role remain byte-identical because forge identity does not change role behavior.
+## Plugin config parity
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
 (`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)
@@ -400,22 +343,6 @@ size alongside every result. Measured against the five observations above it cat
 mechanism justified by *"a guard might be aimed wrong"* — the shape this project's derivation rule
 rejects. The per-guard non-vacuity assertions that already exist stay; nothing generalizes them.
 
-## Adding a role agent
-
-A new role starts as a complete record in `templates/agents/behavior-contracts.json`, a matching
-record in `templates/agents/provenance.json`, and a generator `ROLES` entry. Generated native files
-come last. Two authoring rules apply:
-
-- **Declare capabilities semantically.** `capability_requirements` states repository read, scoped
-  write, command execution, and external research needs. The selected adapter renders the native
-  tools or permissions; universal behavior never names them.
-- **Say where the deliverable goes.** `Write`/`Edit` present ⇒ the agent writes its own output to a
-  path the dispatch names. `Write`/`Edit` absent ⇒ the agent RETURNS its full deliverable as its
-  final message, for the orchestrator to persist. A read-only agent that writes files, or a writing
-  agent that returns its deliverable only in chat, loses work at the dispatch boundary.
-
-No role is an exception to generation. See § Generated role profiles and proof boundaries.
-
 ## Two validation tiers — the fast gate is SAMPLED (#801)
 
 `npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling. `npm run test:kaola-workflow:claude:full` runs everything and is **never mandated — in any case, including a release receipt.** The fast gate is sufficient evidence on its own; the full tier is an opt-in diagnostic. `npm run test:full` chains it with the other three editions for that same discretionary use.
@@ -451,8 +378,8 @@ starts reading `docs/newdoc.md` without adding it goes RED rather than silently 
 Over-inclusion costs an extra re-run; under-inclusion costs a missed regression, so err toward more
 files as code.
 
-Everything **outside** the band is a production surface — `agents/*.md`, `commands/*.md`,
-`plugins/*/agents/*.toml`, `templates/**`, `scripts/**` — and a change to one is a change to the
+Everything **outside** the band is a production surface — `commands/*.md`, `plugins/*/skills/**`,
+`templates/**`, `scripts/**` — and a change to one is a change to the
 product, whatever its file extension.
 
 ## Goal declaration — `KAOLA_GOAL` and `goal_declared` (#441, #874)
@@ -693,9 +620,6 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 
 The full set across all four forge editions plus opencode, Kimi, Grok, Cursor, ZCode, and Devin:
 
-- **Agent definitions** — every profile recorded in `agents/generated-agent-manifest.json`, including
-Claude Markdown, Codex TOML, and native additive runtime renders. The seven additive sync scripts
-  consume `generate-agent-profiles.js`; none authors behavior.
 - **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`), grok `.grok/commands/*.md`, cursor `.cursor/commands/*.md`
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
 
@@ -746,17 +670,17 @@ The provenance ban is **machine-enforced** by a `PROVENANCE_BAN` guard wired int
 /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/
 ```
 
-The guard scans agent-facing prompt surfaces — agent definitions, commands, skills, `.toml` profiles, and the regenerated opencode mirrors — and fails with a `file:line` + offending token diagnostic pointing back at `docs/conventions.md`.
+The guard scans agent-facing prompt surfaces — commands, skills, and the regenerated opencode mirrors — and fails with a `file:line` + offending token diagnostic pointing back at `docs/conventions.md`.
 
 **Per-edition surface placement:**
 
 | Validator | Surfaces scanned |
 |---|---|
-| `validate-kaola-workflow-contracts.js` (claude) | `agents/*.md`, `commands/*.md`; byte-mirrored to the codex copy |
-| `validate-kaola-workflow-contracts.js` (codex) | `plugins/kaola-workflow/agents/*.toml`, `plugins/kaola-workflow/skills/` |
-| `validate-kaola-workflow-gitlab-contracts.js` | `plugins/kaola-workflow-gitlab/` agents, commands, skills |
-| `validate-kaola-workflow-gitea-contracts.js` | `plugins/kaola-workflow-gitea/` agents, commands, skills |
-| `scripts/test-opencode-edition.js` (opencode, assertion A25) | Regenerated `.opencode/` agent and command mirrors |
+| `validate-kaola-workflow-contracts.js` (claude) | `commands/*.md`; byte-mirrored to the codex copy |
+| `validate-kaola-workflow-contracts.js` (codex) | `plugins/kaola-workflow/skills/` |
+| `validate-kaola-workflow-gitlab-contracts.js` | `plugins/kaola-workflow-gitlab/` commands, skills |
+| `validate-kaola-workflow-gitea-contracts.js` | `plugins/kaola-workflow-gitea/` commands, skills |
+| `scripts/test-opencode-edition.js` (opencode, assertion A25) | Regenerated `.opencode/` command mirrors |
 
 The guard runs in all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains and in the additive opencode suite. A violation is a hard chain failure; the error message names the offending `file:line` and token.
 

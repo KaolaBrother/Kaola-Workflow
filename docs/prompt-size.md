@@ -25,7 +25,7 @@ components. This heuristic has not been calibrated against every supported model
 | OpenCode | 1741 | 2022 | 324 | 4087 |
 | ZCode | 1751 | 2023 | 324 | 4098 |
 
-No Init, child-role profiles, separate compact recovery, project rules, vendor prompts, history,
+No Init, separate compact recovery, project rules, vendor prompts, history,
 tool traffic, reasoning, or model output is counted. The three components need not be freshly
 injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin/Droid/DSH is counted in
 its global carrier; it is not added again to their command columns. GitLab and Gitea copies are
@@ -37,7 +37,6 @@ Use a disposable independent clone at the baseline tag, because rendering writes
 Run these existing generators from that clone's root:
 
 ```bash
-node scripts/generate-agent-profiles.js --write
 node scripts/generate-routing-surfaces.js --write
 node scripts/sync-cursor-edition.js --write
 node scripts/sync-grok-edition.js --write

@@ -1,12 +1,13 @@
 # Droid CLI edition
 
-Under ADR 0025 (#1062) the Droid edition installs **no Kaola role profiles**: dispatch goes through
-Droid's own native `Task` routes — the built-in `worker` (general-purpose, all tools) and read-only
-`explorer`, or any user-defined custom droid from `~/.factory/droids/`. A spawned route resolves its
-model from the invoking route plus the parent's complexity routing and inherits the parent when
-unpinned, and it cannot spawn further descendants. A missing named Kaola role is design, not a
-`capability_gap` — the orchestrator uses an adequate native route or works inline per item. These
-surfaces are measured from the live schema, which wins over this document.
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Dispatch goes through Droid's own
+native `Task` routes — the built-in `worker` (general-purpose, all tools) and read-only `explorer`,
+or any user-defined custom droid from `~/.factory/droids/`. A spawned route resolves its model from
+the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and
+it cannot spawn further descendants. Kaola installing no profile is never evidence that Droid lacks
+subagent capability: the orchestrator uses a native route or works inline per item. These surfaces
+are measured from the live schema, which wins over this document.
 
 ## Install
 
@@ -53,7 +54,7 @@ The live `Task` schema owns the route. Droid ships built-in `worker` and `explor
 discovers custom droids from `~/.factory/droids/`; sibling `Task` calls run in parallel with their
 own context windows. Background execution and `resume` remain runtime-owned options. Do not invent
 profile or model arguments for a session mode that does not expose them. The universal dispatch
-contract (choose a native route or work inline per item, custody of meaning, honest fallback) lives
+contract (native routes only, dispatch or inline per item, handback as evidence) lives
 in the always-loaded machine-global carrier and is never restated in the generated skills — they
 carry only the always-loaded pointer once.
 

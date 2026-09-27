@@ -395,7 +395,7 @@ own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-editi
 `opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, `zcode-edition.md`,
 `devin-edition.md`, and `droid-edition.md`.
 `runtime-edition-forge.js` also holds the generator helpers the seven sync scripts render frontmatter
-and command trees with (`parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`,
+and command trees with (`parseFrontmatter`, `parseTools`, `yamlScalar`,
 `listCanonCommands`, `canonCommandPath`, `commandRel`), shared once instead of restated per script
 (#1055); a per-script wrapper still supplies the one runtime-specific value (`DEFAULT_FORGE` or
 `treeLabel`) a helper needs as an explicit argument, and `treeLabel`/`runCheck`/`runWrite` stay
@@ -403,35 +403,32 @@ fully per-script by design.
 
 ### Natural-language handoff routing
 
-Routing surfaces carry compact natural-language handoff guidance. A request sent to another role
-states the requested result or question, relevant evidence and authority/custody, the exact landing
+Routing surfaces carry compact natural-language handoff guidance. A request sent to a subagent or
+another owner states the requested result or question, relevant evidence and authority/custody, the exact landing
 locator, and the stop condition. The existing owner receives findings, repairs them, and remains
 responsible for the converged candidate and final verdict. There is no seven-label slot, required
 block, ordering schema, parser, or linter; the routing generator propagates the skeleton prose to
 the command and skill surfaces.
 
-That common brief is separate from a generated runtime capability block. Both `workflow-next` and
-`kaola-workflow-finalize` contain one marked `runtime-delegation` slot. The generator derives the
-seven-role roster from the common behavior-contract authority; the
-runtime adapter supplies the native carrier and its single `subagent_default` binding. The slot renders
-Claude's native block for commands and the forge-matched Codex block for skills; each additive
-edition replaces the same marked region with its own adapter render. The block exposes profile
-lookup, native dispatch carrier, the generated `**Roles:**` roster and `**Subagent default:**`
-binding, tool
-boundary, honest named/built-in routes, and relevant availability/session limits; a `native_only`
-adapter instead renders the sentence that this runtime installs no Kaola role profiles. `workflow-init`
-has no dispatch teaching.
+That common brief is separate from the runtime dispatch block. Both `workflow-next` and
+`kaola-workflow-finalize` contain one marked dispatch region: the common native-only dispatch
+contract (`templates/routing/dispatch-contract.md`, the `runtime-dispatch-common` slot) followed by
+the `runtime-delegation` slot, which `scripts/runtime-adapter-facts.js` renders from the adapter's
+`delegation_guidance` — the host's native routes and their availability, nothing else. The slot
+renders Claude's adapter for commands and the forge-matched Codex adapter for skills; each additive
+edition either replaces the marked region with its own adapter render or defers it to its
+always-loaded global carrier with a one-line pointer. `workflow-init` has no dispatch teaching.
 
 The flow is one directional authority chain:
 
 ```text
-templates/agents/behavior-contracts.json → role roster
-templates/agents/runtime-capabilities.json → native carrier/subagent default binding
-    → generate-agent-profiles.js routing guidance renderer
-    → templates/routing/slots.js: runtime-delegation
+templates/routing/dispatch-contract.md → common native-only dispatch contract
+templates/agents/runtime-capabilities.json → native routes and availability
+    → scripts/runtime-adapter-facts.js adapter renderer
+    → templates/routing/slots.js: runtime-dispatch-common + runtime-delegation
     → next/finalize skeletons
     → Claude commands + Codex skills
-    → additive edition marker replacement
+    → additive edition marker replacement or always-loaded pointer
 ```
 
 No additive transform searches for Claude prose headings or invents a second runtime policy.
@@ -486,13 +483,13 @@ license to mutate repository prompts. ADR 0023 records this boundary; ADR 0026 r
 `AGENTS.md` surface; ADR 0020's project-prompt migration clauses remain historical.
 
 Runtime installation is a separate owner from that portable repository result. `workflow-init`
-does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the
-same init outcome is produced regardless of which runtime invoked it. Runtime installers own native
-commands or skills, agent catalogs, hooks, support scripts, and adapter/capability facts.
+does not install, refresh, or choose runtime commands, skills, hooks, or adapters; the same init
+outcome is produced regardless of which runtime invoked it. Runtime installers own native commands
+or skills, hooks, support scripts, and adapter/capability facts.
 `install-cursor.sh --global` renders canonical bytes in transaction-scoped temporary staging,
-writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}`, and does not mutate an ambient Git
-repository; `install-all.sh --global` inherits that Cursor behavior, installs only the current
-machine, and never deploys a Cursor Cloud environment. Project `.cursor` catalogs require explicit
+writes only `${CURSOR_HOME:-~/.cursor}/commands` and its support tree, and does not mutate an
+ambient Git repository; `install-all.sh --global` inherits that Cursor behavior, installs only the current
+machine, and never deploys a Cursor Cloud environment. Project `.cursor` carriers require explicit
 `--target`. Global authority and project materialization are
 receipt-bound and preflight every managed path before writing. The first receipt-owning upgrade may
 adopt published 10.0.1 global bytes under exact per-forge
@@ -519,9 +516,9 @@ that edition's install-authority `--forge=` (`github` / `gitlab` / `gitea` on th
 claim tree); `--forge` is not a claim.js operator flag. Claim.js target is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
 (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree unless
-they are that demonstrated opened dir. Independently entered Finalize still invokes
-`--ensure-target "$PWD"` immediately before named dispatch. There is no `sessionStart`
-materializer and no `--global` dual-write. App local and Cloud keep
+they are that demonstrated opened dir. Repo prep materializes commands, the Rule, and hooks,
+never agents; Finalize runs no `--ensure-target`, and there is no pre-dispatch materialization
+before a child. There is no `sessionStart` materializer and no `--global` dual-write. App local and Cloud keep
 separate live catalogs. Only after an Agent establishes it
 is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
 test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that
@@ -533,88 +530,60 @@ The Cursor global transaction also receipt-owns the exact capability registry at
 `${CURSOR_HOME:-~/.cursor}/kaola-workflow/templates/agents/runtime-capabilities.json`. Installed
 doctor and project-materialization helpers read that managed authority instead of reaching back into
 a producer checkout. The registry remains a single source for render, install, and doctor; project
-catalogs do not copy it, and `--no-scripts` still installs this non-executable authority while
+materializations do not copy it, and `--no-scripts` still installs this non-executable authority while
 skipping executable helpers and hooks.
 
 ### Runtime capability divergence
 
 The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is
 [`runtime-capabilities.md`](runtime-capabilities.md). It distinguishes direct loading from a bridge,
-records profile/dispatch/model/tool/hook/install carriers, and keeps unproved facts as `unknown`.
+records hook scope, native subagent routes and their availability, the compact carrier, and install
+scope, and keeps unproved facts as `unknown`.
 Its routing-only guidance additionally exposes built-in/generic routes and native background,
 parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
 does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
-Runtimes and forges remain independent axes. The closed role inventory has ten runtime families
+Runtimes and forges remain independent axes. The closed adapter inventory has ten runtime families
 and twelve adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, ZCode, Devin, Droid, and DSH. Six of those adapters install Kaola role profiles; the OpenCode,
-Kimi, ZCode, Devin, Droid, and DSH adapters are `native_only` — Kaola has no cost lever there (children inherit
-the session model or a vendor router chooses it), so they install no profiles and dispatch through
-the vendor harness. Additive installers still take `--forge` to select routing/forge prose; that
-does not create another role-behavior adapter.
+Grok, Cursor, ZCode, Devin, Droid, and DSH. None installs a Kaola role profile; every adapter
+dispatches through the host's own subagent harness. Additive installers still take `--forge` to
+select routing/forge prose; that does not create another adapter.
 
-### Agent behavior and native profiles
+### No Kaola roles
 
-`templates/agents/behavior-contracts.json` is the only behavioral authority for all 7 roles.
-`scripts/generate-agent-profiles.js` composes each role with the selected profile-installing
-adapter, producing
-42 deterministic renders. Root `agents/*.md`, the 21 Codex TOMLs, and the Grok and Cursor profiles
-are
-outputs. No output is edited as a semantic source.
-
-The behavior source owns purpose, inputs, authority/custody, writes, deliverable, verification, stop
-conditions, and capability requirements. It contains no
-runtime, vendor, native model, tool syntax, home path, or hook vocabulary. Adapters own those native
-differences and may not carry arbitrary universal prompt prose.
-
-Every render is recorded in `agents/generated-agent-manifest.json` with a shared `behavior_sha256`
-and a render-specific `resolved_profile_sha256`; no digest is rendered into agent-visible profile
-text (#1073). Shared-behavior mutation must reach all six profile-installing adapters
-for that role;
-adapter mutation must stay inside one runtime family. Byte identity remains required for true
-forge-neutral twins, but cross-runtime sentence equality is not the oracle.
-
-`delegation_guidance` is routing-only adapter data and is deliberately excluded from the adapter
-hash used by native profiles. A wording or capability-exposure correction regenerates the marked
-next/finalize blocks without churning `resolved_profile_sha256` values for unchanged profile
-bytes. Runtime-guidance reachability has its own structural and mutation checks.
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). There is no role behavior authority,
+profile generator, generated-profile manifest, or role→model map, and no runtime installs a Kaola
+profile. `kaola-workflow-resolve-agent-model.js` keeps only the Codex session proof
+(`loadCodexSessionProof`: the model and effort the current Codex session actually runs), and the
+kernel (`kaola-workflow-adaptive-schema.js`) keeps only the retired Codex profile inventory
+(`MANIFEST_BASENAME`, `RETIRED_PROFILE_FILES`) as migration ownership candidates.
+`scripts/test-issue-1101-native-only.js` fails if a tracked role profile, the generator, the
+manifest, a role roster, a role call card, a pinned subagent model or effort, or a retired adapter
+capability returns.
 
 Provenance is a separate axis in `templates/agents/provenance.json` and
-[`agents-source.md`](agents-source.md). It is validated and durable but excluded from prompt bodies
-and behavior/render hashes.
+[`agents-source.md`](agents-source.md). It is validated and durable but excluded from prompt bodies;
+it keeps the attribution for the retired role contracts only.
 
-Codex profile readiness remains an install-time boundary. The profile installer verifies source,
-manifest, writes, pruning, hooks, and installed bytes; `kaola-workflow-codex-preflight.js --doctor`
-is an explicit diagnostic. Live next/finalize surfaces do not turn it into an entry gate.
-Codex 0.155.1 resolves custom roles through two live paths into one shared namespace: recursive
-directory discovery of standalone role TOML files under `~/.codex/agents/` (user) and
-`.codex/agents/` (project), where the `name` field is the role identity; and `[agents.<role>]`
-blocks with `config_file` in the effective project or user `.codex/config.toml`. Kaola installs the
-seven role files inside the discovery root and additionally declares managed `[agents.<role>]`
-blocks pointing at `.codex/agents/kaola-workflow/<role>.toml` — the declaration the installer prunes
-against. Bundled
-`agents.toml` remains installer source and is not an installed profile-discovery path.
+The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
+upgrade and uninstall. `kaola-workflow-codex-preflight.js --doctor` is an explicit diagnostic; live
+next/finalize surfaces do not turn it into an entry gate.
 
-### Subagent default binding
+### Native dispatch
 
-The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-ledger
-field records a model pair. Each adapter that installs profiles declares exactly one
-`subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-6-luna"` /
-`model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.7` / `effort: medium`;
-Cursor `model: grok-4.7[effort=medium]` — and next/finalize exposes that binding at
-the point of dispatch. It remains a default rather than scheduler state or a prohibition on native
-task-sensitive choices. Kaola does not add runtime
-limits on automatic, background, parallel, resume, nesting, history, or service-tier behavior.
-Finalize's dispatch example names `implementer` with no `model=` field; a task-sensitive override,
-supported inheritance,
-and other runtime-owned choices remain valid.
-Current bindings and limitations are documented in
-[`runtime-capabilities.md`](runtime-capabilities.md) and each additive edition guide.
+The mission ledger records no model pair or role. Next and Finalization carry the common dispatch
+contract: dispatch through the host's native tool, schema, and type catalog, under each type's real
+meaning; the host's defaults, limits, and permissions and the user's explicit instructions decide
+model, effort, tools, nesting, concurrency, isolation, and resume. Kaola adds no runtime limits on
+automatic, background, parallel, resume, nesting, history, or service-tier behavior, and installing
+no profile is never evidence that the host lacks subagent capability. Current native routes and
+limits are documented in [`runtime-capabilities.md`](runtime-capabilities.md) and each additive
+edition guide.
 
-Execution choice is equally local: one missing exact role causes a search of the active runtime's
-other adequate native routes for that mission item. A built-in or generic child keeps its real
-identity; a custody brief does not make it impersonate the missing role. Inline execution is the
-fallback for that item only when no adequate route exists, after which the next item is re-evaluated.
+Execution choice is local: dispatch or inline is decided again for each mission item, and one
+item's choice never becomes a run-wide default. A dispatched built-in or generic child keeps its
+real identity within the brief's task, custody, evidence, and stop boundaries.
 
 ## Testing
 

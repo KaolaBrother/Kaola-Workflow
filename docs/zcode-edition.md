@@ -1,8 +1,10 @@
 # Kaola-Workflow · ZCode Edition
 
-ZCode is a coding-agent runtime, not a git forge. Its generated skills come
-from the same routing and behavior authorities as the other runtime editions; under ADR 0025
-(#1062) ZCode is `native_only` and installs no Kaola role profiles. The focused suite is
+ZCode is a coding-agent runtime, not a git forge. Its generated skills come from the same routing
+authority as the other runtime editions. Kaola-Workflow defines no subagent roles, role profiles,
+or subagent model or effort bindings on any runtime
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101); ZCode has been native-only since
+#1062 and installs no Kaola role profiles. The focused suite is
 `node scripts/test-zcode-edition.js`.
 
 ZCode loads user-global `~/.zcode/AGENTS.md` and workspace-root `AGENTS.md` directly and needs no
@@ -33,12 +35,12 @@ native Skill re-invocation — never a manual `read` of the skill file.
 - `.zcode/config.json`: an empty deterministic hook declaration object.
 - `.zcode/kaola-workflow/scripts/`: support-script launchers used by the skill surface.
 
-ZCode is a native_only runtime under #1062: the render produces no `.zcode/agents/` role
-profiles. Older releases installed a Kaola agent roster there and synced it to user scope; the
-installer now sweeps only managed-marker retired files and never touches user-authored agents.
-Pre-#1079 flat commands under `.zcode/commands/` retired the same way: install and uninstall
-remove exactly the three deployed basenames (`workflow-next`, `workflow-init`,
-`kaola-workflow-finalize`) and preserve every other, user-owned file.
+The render produces nothing under `.zcode/agents/`. The installer no longer installs Kaola role
+profiles and removes a retired one only while it carries the managed marker; see
+[Installation](installation.md) for upgrade and uninstall. Pre-#1079 flat commands under
+`.zcode/commands/` are retired: install and uninstall remove exactly the three deployed basenames
+(`workflow-next`, `workflow-init`, `kaola-workflow-finalize`) and preserve every other, user-owned
+file.
 
 Issue #1044 generates no ZCode prompt components and no hook shell. `--check` re-renders and
 byte-compares; `--refresh-present` updates only edition trees already present.
@@ -60,26 +62,25 @@ dispatch contract or adapter facts.
 
 ## Model and dispatch adapter
 
-ZCode installs no Kaola role profiles, so there is no profile binding to pin: generated dispatch
-prose names no `subagent_type="<kaola role>"` target and invents no per-call model field. Earlier
-releases pinned `model: GLM-5.3` plus a `thoughtLevel` key on each rendered profile; that profile
-carrier retired with the role catalog under #1062.
+Kaola pins no ZCode subagent model or effort and invents no per-call model field: children follow
+the main Agent's model. (Before #1062, rendered profiles pinned `model: GLM-5.3` plus a
+`thoughtLevel` key.)
 
-ZCode documents automatic subagent selection and native `@` dispatch. If a live session
-exposes an Agent call with named types, its schema wins. The public documentation does not publish
-one complete JSON call schema, so the adapter names no unverified call fields. `general-purpose`
-and read-only `Explore` remain truthful alternatives when the live catalog exposes them; neither
-may impersonate a Kaola role. ZCode children cannot spawn descendants.
+ZCode's native routes are full `general-purpose` and read-only `Explore`, reached through automatic
+subagent selection or native `@` dispatch; foreground or background choice stays runtime-owned. If
+a live session exposes an Agent call with named types, its schema wins. The public documentation
+does not publish one complete JSON call schema, so the adapter names no unverified call fields.
+Subagents cannot spawn children, but the root runtime's other native routes remain available.
+Kaola installing no profile is never evidence that ZCode lacks subagent capability.
 
 ## Discovery and installation
 
 ZCode discovers skills at workspace scope (`.zcode/skills/`) and user scope
-(`${ZCODE_HOME:-~/.zcode}/skills/`); subagent profiles are discovered only at user scope. A
-project install stages skills under `<target>/.zcode/skills/`; it deploys no Kaola agent
-profiles at any scope. On upgrade the installer sweeps retired managed-marker files from both
-`<target>/.zcode/agents/` staging and `${ZCODE_HOME:-~/.zcode}/agents/`, and retires the three
-legacy command basenames from the resolved scope's `commands/` directory, preserving every
-user-authored file.
+(`${ZCODE_HOME:-~/.zcode}/skills/`); subagent profiles are discovered only at user scope. A project
+install stages skills under `<target>/.zcode/skills/`. The installer no longer installs Kaola role
+profiles at any scope; see [Installation](installation.md) for upgrade and uninstall. On upgrade it
+retires the three legacy command basenames from the resolved scope's `commands/` directory,
+preserving every user-authored file.
 
 `./install-zcode.sh [--target DIR] [--forge=github|gitlab|gitea] [--global] [--regenerate]
 [--uninstall] [--no-scripts] [--yes]`
