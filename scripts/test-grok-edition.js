@@ -54,6 +54,15 @@ function tmpBase() {
 // of where the tree belongs, and it is what keeps D1 able to fail.
 // ---------------------------------------------------------------------------
 const TREE_ROOT = (() => {
+  // An explicit isolated root bound to THIS checkout wins, as in the generators: both
+  // KAOLA_EDITION_TREE_ROOT and KAOLA_EDITION_TREE_FOR absolute, the latter naming REPO.
+  {
+    const root = process.env.KAOLA_EDITION_TREE_ROOT;
+    const forRepo = process.env.KAOLA_EDITION_TREE_FOR;
+    const real = p => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
+    if (root && forRepo && path.isAbsolute(root) && path.isAbsolute(forRepo)
+        && real(forRepo) === real(REPO)) return path.resolve(root);
+  }
   // spawn-class: environment
   const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: REPO, encoding: 'utf8' });
   if (r.status !== 0) return REPO;

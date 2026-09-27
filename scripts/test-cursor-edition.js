@@ -61,6 +61,15 @@ function tmpBase() {
 // of where the tree belongs, and it is what keeps D1 able to fail.
 // ---------------------------------------------------------------------------
 const TREE_ROOT = (() => {
+  // An explicit isolated root bound to THIS checkout wins, as in the generators: both
+  // KAOLA_EDITION_TREE_ROOT and KAOLA_EDITION_TREE_FOR absolute, the latter naming REPO.
+  {
+    const root = process.env.KAOLA_EDITION_TREE_ROOT;
+    const forRepo = process.env.KAOLA_EDITION_TREE_FOR;
+    const real = p => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
+    if (root && forRepo && path.isAbsolute(root) && path.isAbsolute(forRepo)
+        && real(forRepo) === real(REPO)) return path.resolve(root);
+  }
   // spawn-class: environment
   const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: REPO, encoding: 'utf8' });
   if (r.status !== 0) return REPO;
@@ -495,16 +504,17 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
 // A child mode lets the mutation fixture exercise this same native-only oracle
 // without recursively running the full edition suite. #1069: the dispatch
 // contract rides the always-loaded Rule (the global contract render), not the
-// command bytes, so the oracle renders the rule from the tree under test.
+// command bytes, so the oracle renders the rule from the sources under test (REPO — never the
+// generated-tree root, which under a worktree is the main checkout).
 if (process.argv.includes('--native-dispatch-oracle')) {
   let ruleText = null;
   try {
-    const gc = require(path.join(TREE_ROOT, 'scripts', 'kaola-workflow-global-contract.js'));
+    const gc = require(path.join(REPO, 'scripts', 'kaola-workflow-global-contract.js'));
     const registry = JSON.parse(fs.readFileSync(
-      path.join(TREE_ROOT, 'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
+      path.join(REPO, 'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
     const target = registry.targets.find(row => row.id === 'cursor-cli-local');
     const source = fs.readFileSync(
-      path.join(TREE_ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8');
+      path.join(REPO, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8');
     ruleText = gc.renderContract({ source, target }).toString('utf8');
   } catch (e) {
     console.error('NATIVE-DISPATCH-ORACLE RED: kaola-workflow-global rule: render failed — ' + e.message);

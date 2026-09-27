@@ -98,6 +98,24 @@ function scriptName(base, forge) {
 // { basename, absPath, topic }. Sourced from the routing registry, so these are
 // exactly the generated, byte-checked surfaces — a runtime edition never reads a
 // hand-maintained command list.
+// editionTreeRootOverride — the explicit generated-tree root for the checkout `repo`, or null.
+// The generated edition trees normally land in the MAIN checkout (see each sync script's
+// TREE_ROOT), which every worktree on the machine shares. KAOLA_EDITION_TREE_ROOT (absolute)
+// redirects them to an isolated directory, but only for the checkout named by
+// KAOLA_EDITION_TREE_FOR (absolute): a fixture's throwaway copy of the repository is a different
+// checkout and keeps its own tree, so the override never leaks into it. Both must be set;
+// a relative value is refused rather than resolved against an arbitrary cwd.
+function editionTreeRootOverride(repo, env = process.env) {
+  const root = env.KAOLA_EDITION_TREE_ROOT;
+  const forRepo = env.KAOLA_EDITION_TREE_FOR;
+  if (!root || !forRepo) return null;
+  if (!path.isAbsolute(root) || !path.isAbsolute(forRepo)) {
+    throw new Error('KAOLA_EDITION_TREE_ROOT and KAOLA_EDITION_TREE_FOR must be absolute paths');
+  }
+  const real = p => { try { return require('fs').realpathSync(p); } catch (_) { return path.resolve(p); } };
+  return real(forRepo) === real(repo) ? path.resolve(root) : null;
+}
+
 function commandSources(forge) {
   assertForge(forge);
   return routing.commandSurfacesForForge(forge).map(row => ({
@@ -199,6 +217,7 @@ function main(argv) {
 if (require.main === module) main(process.argv.slice(2));
 
 module.exports = {
+  editionTreeRootOverride,
   REPO,
   FORGES,
   UNKNOWN_FORGE,

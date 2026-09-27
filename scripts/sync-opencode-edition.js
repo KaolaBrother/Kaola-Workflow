@@ -67,6 +67,11 @@ const REPO = path.resolve(__dirname, '..');
 // tree inside git's own storage, which git may rewrite around and no reader would ever look in. So
 // only a coordination directory that IS a `.git` names a checkout that can own the tree.
 const TREE_ROOT = (() => {
+  // An explicit KAOLA_EDITION_TREE_ROOT bound to this checkout (KAOLA_EDITION_TREE_FOR) wins: it
+  // lets a worktree or CI run render and test against an isolated root instead of the main
+  // checkout's shared tree.
+  const override = forgeLayout.editionTreeRootOverride(REPO);
+  if (override) return override;
   const schema = require('./kaola-workflow-adaptive-schema.js');
   const coord = schema.getCoordRoot(REPO);
   return path.basename(coord) === '.git' ? schema.mainRootFromCoord(coord) : REPO;
