@@ -184,6 +184,12 @@
 
 ### Fixed
 
+- **Gitea `pr_auto_merge` schedules the merge for when checks succeed instead of merging at once
+  (#1106).** `mergePullRequest` never sent `merge_when_checks_succeed`, so with `autoMerge` the
+  squash merge ran immediately (before CI finished), or was refused while required checks were
+  pending and left the PR open with only a warning. With `autoMerge` the request now carries
+  `merge_when_checks_succeed: true` (the Gitea ≥ 1.17 feature the existing version gate guards); an
+  explicit `--merge` without `--auto-merge` stays an immediate merge.
 - **The stale-worktree sweep's resumability pin resolves the run that OWNS a lane worktree instead
   of deriving `issue-<N>` (#1102).** #1100's pin composed its receipt path from the issue number the
   BRANCH spells, so it could only ever find a run whose folder is named `issue-<N>`. A bundle or

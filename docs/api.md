@@ -2050,9 +2050,10 @@ retired `parallel_mode`) is ignored, never rewritten.
   the branch would close the queued PR; head-branch deletion follows the repository's
   "automatically delete head branches" setting). A `false` or unreadable probe keeps the original
   `--auto --squash --delete-branch` call verbatim. No new config key: queueing is a property of the
-  branch rule, not a separate opt-in. GitLab and Gitea are unchanged (`mr_auto_merge` routes through
-  GitLab's own auto-merge, which is the merge-train entry point on tiers that have it; Gitea has no
-  native merge queue).
+  branch rule, not a separate opt-in. GitLab and Gitea take no queue probe (`mr_auto_merge` routes
+  through GitLab's own auto-merge, which is the merge-train entry point on tiers that have it; Gitea
+  has no native merge queue). Gitea schedules the squash merge for when checks succeed
+  (`merge_when_checks_succeed`, Gitea ≥ 1.17) instead of merging at once.
 - `mr_auto_merge` — the GitLab equivalent (`glab mr merge --auto-merge`).
 
 ### Project-local config
