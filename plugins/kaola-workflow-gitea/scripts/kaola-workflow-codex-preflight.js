@@ -2887,11 +2887,18 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
   };
 }
 
+function realpathOrResolved(target) {
+  const resolved = path.resolve(target);
+  try { return fs.realpathSync(resolved); } catch (_) { return resolved; }
+}
+
 function readPluginIdentity(scriptDir, home) {
-  const pluginRoot = path.resolve(scriptDir, '..');
+  // #1104: the CLI's __dirname is already realpath-resolved, so resolve both
+  // sides of the cache-containment comparison the same way.
+  const pluginRoot = path.resolve(realpathOrResolved(scriptDir), '..');
   const manifestDir = path.join(pluginRoot, '.codex-plugin');
   const manifestPath = path.join(manifestDir, 'plugin.json');
-  const cacheRoot = path.resolve(home, '.codex', 'plugins', 'cache');
+  const cacheRoot = path.resolve(realpathOrResolved(home), '.codex', 'plugins', 'cache');
   const relativeRoot = path.relative(cacheRoot, pluginRoot);
   const insideCache = relativeRoot !== '' && relativeRoot !== '..'
     && !relativeRoot.startsWith('..' + path.sep) && !path.isAbsolute(relativeRoot);

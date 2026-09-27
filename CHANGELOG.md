@@ -39,6 +39,16 @@
   `failed: …`) instead of swallowing those failures — report-only, never blocking `status:sinked`.
   `docs/api.md` documents both fields.
 
+### Fixed
+
+- **Codex preflight keeps the plugin identity check when HOME is reached through a symlink
+  (#1104).** `readPluginIdentity` compared the realpath-resolved script directory against an
+  unresolved `<home>/.codex/plugins/cache`, so a `--home`/HOME given through a symlink (macOS
+  `/tmp` → `/private/tmp`) put the live cache copy "outside" the cache and silently skipped the
+  manifest name/version-vs-path check. Both sides are now realpath-resolved (falling back to the
+  lexical path when resolution fails), and `--doctor` refuses the drift with exit 2
+  `plugin_identity_invalid` for either `--home` form. All four preflight copies carry the fix.
+
 ## [12.2.6] - 2026-09-24
 
 ### Changed
