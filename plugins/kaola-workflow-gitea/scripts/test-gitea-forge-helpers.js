@@ -211,6 +211,26 @@ forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({}) });
   forge.mergePullRequest(project, 7, { execFileSync: squashExec, squash: true, sha: 'abc123' });
   const bodyArg = squashCalls[squashCalls.length - 1][1].slice(-1)[0];
   assert.strictEqual(bodyArg, '{"Do":"squash","delete_branch_after_merge":false,"head_commit_id":"abc123"}');
+  assert.ok(!('merge_when_checks_succeed' in JSON.parse(bodyArg)), 'a merge without autoMerge must stay immediate');
+}
+
+// mergePullRequest: autoMerge schedules the merge for when checks succeed (#1106) — the version and
+// repo gates run first, then the body carries merge_when_checks_succeed.
+{
+  const autoCalls = [];
+  const autoExec = runner(autoCalls, {
+    'api /api/v1/version': JSON.stringify({ version: '1.21.0' }),
+    'api /api/v1/repos/group/project': JSON.stringify({ allow_squash_merge: true }),
+    'api -X POST /api/v1/repos/group/project/pulls/9/merge -d {"Do":"squash","delete_branch_after_merge":true,"merge_when_checks_succeed":true}': '{}'
+  });
+  forge.mergePullRequest(project, 9, { execFileSync: autoExec, autoMerge: true, squash: true, removeSourceBranch: true });
+  assert.deepStrictEqual(autoCalls.map(call => call[1].slice(0, 3).join(' ')), [
+    'api /api/v1/version',
+    'api /api/v1/repos/group/project',
+    'api -X POST'
+  ]);
+  const bodyArg = autoCalls[autoCalls.length - 1][1].slice(-1)[0];
+  assert.strictEqual(bodyArg, '{"Do":"squash","delete_branch_after_merge":true,"merge_when_checks_succeed":true}');
 }
 
 console.log('Gitea forge helper tests passed');

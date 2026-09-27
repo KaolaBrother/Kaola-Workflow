@@ -831,6 +831,36 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
 }
 
 {
+  // #1106: pr_auto_merge reaches the real forge and the merge request asks Gitea to merge when checks
+  // succeed, instead of merging immediately. The `tea` calls go through KAOLA_TEA_MOCK_SCRIPT.
+  const root = tempRoot('kw-gt-1106-automerge-');
+  const callLog = path.join(root, 'tea-calls.jsonl');
+  const mock = path.join(root, 'tea-mock.js');
+  fs.writeFileSync(mock, [
+    "const fs = require('fs');",
+    "const args = process.argv.slice(2);",
+    "fs.appendFileSync(" + JSON.stringify(callLog) + ", JSON.stringify(args) + '\\n');",
+    "if (args[1] === '/api/v1/version') { process.stdout.write('{\"version\":\"1.21.0\"}\\n'); process.exit(0); }",
+    "if (args[1] === '/api/v1/repos/group/project') { process.stdout.write('{\"allow_squash_merge\":true}\\n'); process.exit(0); }",
+    "process.stdout.write('{}\\n'); process.exit(0);"
+  ].join('\n'));
+  const origMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
+  process.env.KAOLA_TEA_MOCK_SCRIPT = mock;
+  try {
+    sinkPr.maybeAutoMergeFromConfig({ pr_number: 7 }, { full_name: 'group/project' }, { pr_auto_merge: true });
+  } finally {
+    if (origMock === undefined) delete process.env.KAOLA_TEA_MOCK_SCRIPT;
+    else process.env.KAOLA_TEA_MOCK_SCRIPT = origMock;
+  }
+  const calls = fs.readFileSync(callLog, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepStrictEqual(calls[calls.length - 1], [
+    'api', '-X', 'POST', '/api/v1/repos/group/project/pulls/7/merge',
+    '-d', '{"Do":"squash","delete_branch_after_merge":true,"merge_when_checks_succeed":true}'
+  ], '#1106: pr_auto_merge must schedule the squash merge for when checks succeed');
+  console.log('#1106 pr_auto_merge merge_when_checks_succeed body test passed');
+}
+
+{
   // finalize --keep-worktree commits archive rename on feature branch (issue #132)
   const mainRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gt-kw-finalize-')));
   const kwRoot = mainRoot + '.kw';
