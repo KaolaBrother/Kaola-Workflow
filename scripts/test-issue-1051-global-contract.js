@@ -4,6 +4,9 @@
 // issue #1051 — compact the machine-global Workflow contract while keeping daily
 // governance, a complete run-record, recovery, and the named semantic boundaries.
 // Word/byte counts are a measurement helper only; they are not a pass/fail gate.
+// #1101: Kaola-Workflow defines no subagent roles, so the independent-acceptance duty lives only
+// in Next (as a task constraint on the implementation) and in the native-only dispatch contract;
+// there is no role behavior-contract source to consult.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -15,7 +18,6 @@ const NEXT = path.join(ROOT, 'templates', 'routing', 'next.skeleton.md');
 const FINALIZE = path.join(ROOT, 'templates', 'routing', 'finalize.skeleton.md');
 const DISPATCH = path.join(ROOT, 'templates', 'routing', 'dispatch-contract.md');
 const COMPACT = path.join(ROOT, 'templates', 'routing', 'compact-recovery.skeleton.md');
-const ROLES = path.join(ROOT, 'templates', 'agents', 'behavior-contracts.json');
 const CONFIG_FILE = path.join(ROOT, 'kaola-workflow', 'config.json');
 
 let passed = 0;
@@ -47,14 +49,12 @@ const nextRaw = read(NEXT);
 const finalizeRaw = read(FINALIZE);
 const dispatchRaw = read(DISPATCH);
 const compactRaw = read(COMPACT);
-const rolesRaw = read(ROLES);
 const global = norm(globalRaw);
 const next = norm(nextRaw);
 const finalize = norm(finalizeRaw);
 const dispatch = norm(dispatchRaw);
 const compact = norm(compactRaw);
-const roles = norm(rolesRaw);
-const execution = next + ' ' + dispatch + ' ' + roles;
+const execution = next + ' ' + dispatch;
 
 const lines = globalRaw.split(/\r?\n/).length;
 const words = englishWordCount(globalRaw);
@@ -123,9 +123,17 @@ function teachesMissionEnumeration(text) {
     && /independent causal class/i.test(text);
 }
 function teachesIndependentAcceptance(text) {
-  return /implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(text)
-    || /never weakens, deletes, skips, or changes the behavior they accept/i.test(text)
-    || /What you may never do is change what a test accepts/i.test(text);
+  return /implementation (?:may not|does not) delete, weaken, or reinterpret/i.test(text);
+}
+const NATIVE_ONLY_STATEMENTS = [
+  'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+  'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+];
+function teachesNativeOnlyDispatch(text) {
+  return NATIVE_ONLY_STATEMENTS.every(sentence => String(text).includes(sentence));
+}
+function namesRetiredCustodyRole(text) {
+  return /\b(?:tdd-guide|implementer)\b/.test(text);
 }
 function teachesGrantedScopeContinue(text) {
   return /already[- ]granted|granted (?:authorization|scope)/i.test(text)
@@ -205,9 +213,14 @@ ok(/Finalization/i.test(finalize) && /It is not a mission/i.test(finalize),
 ok(teachesMissionEnumeration(next),
   'A2: Next keeps the mission-is-not enumeration and causal-class append judgment');
 ok(teachesIndependentAcceptance(execution),
-  'A2: independent acceptance duty remains reachable from Next + role surfaces');
-ok(/tdd-guide/i.test(roles) && /implementer/i.test(roles),
-  'A2: tdd-guide and implementer role contracts remain present');
+  'A2: independent acceptance duty remains reachable from Next + dispatch');
+// #1101: replaces "tdd-guide and implementer role contracts remain present". Custody is carried by
+// the task, not by a role: Next states it without naming a role, and dispatch states the
+// native-only rule so a missing Kaola profile never reads as missing subagent capability.
+ok(teachesNativeOnlyDispatch(dispatch),
+  'A2: dispatch states that Kaola defines no roles and that no profiles is not missing capability');
+ok(!namesRetiredCustodyRole(next + ' ' + dispatch),
+  'A2: Next and dispatch carry acceptance custody without naming a retired role');
 
 const routing = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
 const compactPrompts = ['claude', 'codex', 'grok', 'cursor', 'zcode']
@@ -234,7 +247,7 @@ ok(teachesProjectExceptionScope(global),
 ok(teachesMeasureCurrentTruth(global), 'A4: read the target before writing');
 ok(teachesLocalVerdicts(global), 'A4: own local verdicts');
 ok(teachesIndependentAcceptance(execution),
-  'A4: do not weaken/reinterpret acceptance to pass (Next + roles)');
+  'A4: do not weaken/reinterpret acceptance to pass (Next + dispatch)');
 ok(teachesReverifyAfterMutation(global + ' ' + next),
   'A4: mutation invalidates affected PASS evidence');
 
@@ -282,12 +295,16 @@ ok(teachesFourFields(global) && !/`effort`/.test((global.split('Mission Ledger')
   }), 'A6 mutation RED: omitting the global source from compact recovery is detected');
 
   const guttedNext = next.replace(
-    /When a `tdd-guide` holds the acceptance tests[\s\S]*?you hold that meaning\./,
+    /When someone other than the implementing context holds the acceptance tests[\s\S]*?you hold that meaning\./,
     '');
   ok(teachesIndependentAcceptance(next),
     'A6 setup: live Next currently carries independent acceptance');
-  ok(!/implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(guttedNext),
+  ok(guttedNext !== next && !teachesIndependentAcceptance(guttedNext),
     'A6 mutation RED: deleting independent-acceptance language from Next is detected');
+  ok(!teachesNativeOnlyDispatch(dispatch.replace(NATIVE_ONLY_STATEMENTS[1], '')),
+    'A6 mutation RED: dropping the no-profiles-is-not-missing-capability sentence is detected');
+  ok(namesRetiredCustodyRole('When a `tdd-guide` holds the acceptance tests, the implementer does not delete them.'),
+    'A6 mutation RED: reintroducing a role-named custody sentence is detected');
 
   const blanketEscalate = 'Escalate every irreversible or value-laden choice, including already-granted work.';
   ok(!teachesGrantedScopeContinue(blanketEscalate),

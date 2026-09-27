@@ -93,7 +93,6 @@ ok(fs.existsSync(CLI), 'A1: one installation transaction exists');
 const source = fs.readFileSync(SOURCE, 'utf8');
 const nextSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'next.skeleton.md'), 'utf8');
 const dispatchSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'dispatch-contract.md'), 'utf8');
-const roleContracts = fs.readFileSync(path.join(ROOT, 'templates', 'agents', 'behavior-contracts.json'), 'utf8');
 for (const phrase of [
   'Machines decide facts; humans decide values', 'Own your own verdicts',
   '`n`', '`name`', '`details`', '`status`', 'three write moments',
@@ -102,22 +101,25 @@ for (const phrase of [
 {
   const nextN = nextSource.replace(/\s+/g, ' ');
   const dispatchN = dispatchSource.replace(/\s+/g, ' ');
-  const rolesN = roleContracts.replace(/\s+/g, ' ');
   ok(/Custody answers who may decide meaning|Custody decides who may judge meaning/i.test(nextN),
     'A1: Next carries custody-of-meaning (moved out of the global essay)');
   ok(/Failure frontier/i.test(nextN),
     'A1: Next carries the failure-frontier procedure (moved out of the global essay)');
-  ok(/carrier decides where work runs|custody, evidence, and stop boundaries|tool and custody boundaries/i.test(dispatchN + ' ' + nextN),
-    'A1: dispatch/Next carry carrier (moved out of the global essay)');
-  ok(/implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(nextN),
+  // #1101: the carrier boundary used to be stated in the retired named-role fallback paragraph
+  // ("use a native route only when it satisfies custody, evidence, and stop boundaries"). Native-
+  // only, the carrier is the running host's own subagent harness, and every dispatch brief carries
+  // the custody, evidence, and stop boundaries itself.
+  ok(/Subagent capability belongs to the running Agent Harness/.test(dispatchN)
+    && /brief naming the outcome, evidence, worktree or commit, custody, and stop condition/i.test(dispatchN),
+    'A1: dispatch carries carrier and its custody/evidence/stop boundaries (moved out of the global essay)');
+  ok(dispatchN.includes('Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.')
+    && dispatchN.includes('Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.'),
+    'A1: dispatch states the native-only rule instead of a role fallback');
+  // #1101: Kaola-Workflow defines no subagent roles, so independent test custody is a task
+  // constraint on the implementation in Next rather than a duty of a named implementer or
+  // test-author role (there is no role-contract source left to check).
+  ok(/implementation (?:may not|does not) delete, weaken, or reinterpret/i.test(nextN),
     'A1: Next keeps independent acceptance duty reachable');
-  // "A1: role contracts keep independent test custody" DELETED per owner ruling (19:03
-  // heartbeat, #1054): this assertion checked only whether one of a few known phrasings of
-  // tdd-guide's custody claim appeared anywhere in the role-contracts source — a positive wording
-  // pin (any equivalent rephrasing not on the list would red it for no real reason), with no
-  // other structural meaning once the phrasing list is removed. tdd-guide's custody is protected
-  // by generation integrity (generate-agent-profiles --check, validate-vendored-agents, hashes)
-  // and native behavior acceptance (mission 14), not by a wording gate in this file.
 }
 for (const forbidden of [
   'Claude', 'Codex', 'OpenCode', 'Kimi', 'Grok', 'Cursor', 'ZCode',

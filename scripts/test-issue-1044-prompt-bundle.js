@@ -96,11 +96,13 @@ for (const forge of FORGES) {
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);
     if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
-      // Measured per-runtime ceilings: grok's always-loaded carrier is ~7.9 KB; cursor's carries a
-      // ~1.5 KB larger adapter block plus the #1062 single-binding contract and measures ~9.5 KB.
-      const ceiling = { grok: 8500, cursor: 10500 }[runtime] || 8500;
-      assert(bytes(prompt) >= 6500 && bytes(prompt) <= ceiling,
-        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 6.5 KB–${(ceiling / 1000).toFixed(1)} KB budget (got ${bytes(prompt)} B)`);
+      // Measured per-runtime ceilings, re-measured at #1101 when the native-only dispatch contract
+      // dropped the role roster, profile lookup, and subagent-default lines from the adapter block:
+      // grok 7202 B -> 6293 B, cursor 7820 B -> 6348 B. The floor stays above the deferred-dispatch
+      // bound (5.5 KB) so a carrier that lost its dispatch/adapter content still fails here.
+      const ceiling = { grok: 7500, cursor: 7500 }[runtime] || 7500;
+      assert(bytes(prompt) >= 5800 && bytes(prompt) <= ceiling,
+        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 5.8 KB–${(ceiling / 1000).toFixed(1)} KB budget (got ${bytes(prompt)} B)`);
     } else {
       // claude/codex defer the dispatch/adapter content to the full Next/Finalize reload, so their
       // recovery render is smaller by roughly that content's size; bounded loosely (not pinned to
@@ -164,8 +166,8 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   // #1069 (group D2): on the always-loaded-carrier runtimes the generated
   // Next/Finalize command renders carry ONE pointer sentence; the dispatch
   // contract and adapter facts stay in the always-loaded rule/global carrier.
-  const agentGen = require('./generate-agent-profiles.js');
-  const POINTER = agentGen.ALWAYS_LOADED_DISPATCH_POINTER;
+  const adapterFacts = require('./runtime-adapter-facts.js');
+  const POINTER = adapterFacts.ALWAYS_LOADED_DISPATCH_POINTER;
   const DISPATCH_HEADING = 'Runtime dispatch contract (always loaded)';
   const EDITION_RENDERERS = {
     grok: require('./sync-grok-edition.js').renderCommand,

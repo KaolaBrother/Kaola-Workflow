@@ -1,6 +1,6 @@
 # ADR 0025 — Lean orchestrator; one subagent binding per runtime; seven roles
 
-Status: Accepted · Date: 2026-09-12 · Issue: #1062 · Release: 12.0.0
+Status: Superseded by ADR 0029 (#1101) · Date: 2026-09-12 · Issue: #1062 · Release: 12.0.0
 
 Supersedes ADR 0019's remaining three-tier axis, its 14-role roster, and Heavy as the planner-class
 default; supersedes ADR 0021's "exactly three intent classes"; supersedes the D-687-01 structural

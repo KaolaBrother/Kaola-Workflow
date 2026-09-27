@@ -190,18 +190,17 @@ for (const file of phaseCommands) {
   for (const token of retiredPathSelector) assertNotIncludes(file, token);
 }
 
-// Routed-fix Agent blocks identify the role they invoke; model and effort are runtime metadata
-// and may be inherited or selected task-sensitively.
+// #1101: a routed finalize repair goes through the host's native route with a self-sufficient
+// brief. The surface carries no dispatch card that names a Kaola role or pins a model.
 const routedFixFiles = [
   'commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
-  assertIncludes(file, 'subagent_type="implementer"');
-  const card = read(file).match(/Agent\(\n[\s\S]*?^\)/m);
-  assert(card && !/^ {2}model=/m.test(card[0]),
-    file + ': the routed-fix card must carry no model= line; the named profile carries its binding');
+  assertIncludes(file, "dispatch the repair through the host's native");
+  assert(!/^Agent\(/m.test(read(file)) && !read(file).includes('subagent_type='),
+    file + ': the finalize surface must carry no role dispatch card (#1101)');
 }
 
 assert(exists('commands/workflow-next.md'), 'workflow-next command is missing');
@@ -456,22 +455,25 @@ assertNotIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams |
     assert(globalContract.includes(norm(taught)),
       'the machine-global contract must teach mission behavior — missing "' + taught + '"');
   }
+  // #1101: the always-loaded dispatch source is native-only. It defines no roles, hands subagent
+  // choices to the host's own schema and catalog, and never reads "no Kaola profile" as "no
+  // subagent capability".
   const runtimeRoutingVocabulary = ['Runtime dispatch contract (always loaded)',
-    'named, built-in, and generic routes only under their real identities',
-    'custody, evidence, and stop boundaries',
-    'Never let a generic route claim a named role\'s identity',
-    'record the specific `capability_gap`'];
+    'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+    'pass one the host reports, under its real meaning',
+    'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+    'bounded, self-sufficient brief'];
   for (const taught of runtimeRoutingVocabulary) {
     assert(dispatchContract.includes(norm(taught)),
-      'the always-loaded dispatch source must teach honest item-local routing — missing "'
+      'the always-loaded dispatch source must teach native-only routing — missing "'
       + taught + '"');
   }
-  const noImpersonation = 'Never let a generic route claim a named role\'s identity';
-  const impersonatingMutation = dispatchContract.replace(norm(noImpersonation), '');
-  assert(!impersonatingMutation.includes(norm(noImpersonation)),
-    'the consumer routing guard mutation removes no-impersonation before testing the oracle');
-  assert(runtimeRoutingVocabulary.some(taught => !impersonatingMutation.includes(norm(taught))),
-    'the consumer routing guard must reject a generic child that can impersonate a missing named role');
+  const noFalseGap = 'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.';
+  const falseGapMutation = dispatchContract.replace(norm(noFalseGap), '');
+  assert(!falseGapMutation.includes(norm(noFalseGap)),
+    'the consumer routing guard mutation removes the capability sentence before testing the oracle');
+  assert(runtimeRoutingVocabulary.some(taught => !falseGapMutation.includes(norm(taught))),
+    'the consumer routing guard must reject a contract that lets missing Kaola profiles read as missing subagent capability');
   const runtimeBrandOf = content => String(content).match(
     /\b(?:Claude|Codex|OpenCode|Kimi|Grok|Cursor|ZCode)\b/i);
   const runtimeBrand = runtimeBrandOf(globalContract + ' ' + dispatchContract);
@@ -722,11 +724,14 @@ assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestContractorSpawn');
 assertNotIncludes('scripts/kaola-workflow-claim.js', 'claim_planner_attested');
 assertNotIncludes('scripts/kaola-workflow-claim.js', 'attestPlannerSpawn');
 assertNotIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
-// #816: the retired bookkeeping role must not come back as a file on any runtime.
-assert(!exists('agents/contractor.md'), 'agents/contractor.md must be retired');
+// #816 / #1101: no Kaola role profile comes back as a file on any runtime (the full guard is
+// test-issue-1101-native-only.js).
+assert(!exists('agents'), 'agents/ must be retired (#1101)');
 for (const forge of ['', '-gitlab', '-gitea']) {
-  assert(!exists('plugins/kaola-workflow' + forge + '/agents/contractor.toml'),
-    'plugins/kaola-workflow' + forge + '/agents/contractor.toml must be retired');
+  assert(!exists('plugins/kaola-workflow' + forge + '/agents'),
+    'plugins/kaola-workflow' + forge + '/agents must be retired (#1101)');
+  assert(!exists('plugins/kaola-workflow' + forge + '/config/agents.toml'),
+    'plugins/kaola-workflow' + forge + '/config/agents.toml must be retired (#1101)');
 }
 // #1089: the Step-8a artifact mirror no longer guards a run record — the mission ledger lives only
 // in the main checkout, so the compare module and its receipt are gone. Pin the retirement and the
@@ -795,10 +800,8 @@ assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink_blocked');
 // #1054 owner ruling (19:03 heartbeat): the fixed four-name verification-tier vocabulary
 // (tests-green/regression-green/build-green/smoke-integration) is retired procedure ritual, and no
 // pin on the implementer body's CURRENT wording replaces it — assertConcept is norm+includes, so an
-// equivalent rephrasing reds a validator that adds nothing to acceptance meaning. The role-body
-// text is authored, structurally checked (render == authority, hash-bound) by
-// generate-agent-profiles.js --check and validate-vendored-agents.js, and behaviorally accepted by
-// native-host runs (mission 14) — none of that needs a literal-phrase gate here.
+// equivalent rephrasing reds a validator that adds nothing to acceptance meaning. #1101 retired the
+// role bodies themselves.
 // The `--enable-adaptive` flag is warn-ignored: accepted for back-compat and sets nothing. Pin the
 // notice so a regression that silently honors the flag (writes a field / branches on it) reds the chain.
 assertIncludes('install.sh', '--enable-adaptive has no effect');
@@ -820,9 +823,8 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // `.cache/final-validation.md` consumer is what still needs that shape, pinned elsewhere, not the
 // reviewer role prompts themselves). No pin on the three reviewer bodies' CURRENT wording replaces
 // it: assertConcept is norm+includes, so it reds on an equivalent rephrasing of "delivers
-// verifiable findings" — a new wording gate, not a behavior check. The structural authority
-// (generate-agent-profiles.js --check, validate-vendored-agents.js: render == authority, hash-bound)
-// and native-host acceptance (mission 14) already carry this responsibility.
+// verifiable findings" — a new wording gate, not a behavior check. #1101 retired the reviewer role
+// bodies themselves.
 // #407 surface-undercount cross-check: every name the install manifest emits for a forge MUST be a
 // real file in that forge's source scripts dir — so the manifest can never list a phantom (which the
 // installer's fail-closed missing-source check would then abort on), and a renamed forge port that
@@ -860,20 +862,11 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // reds the chain.
 
 
-// #340 derived parity guard (enumeration-free): uninstall.sh REQUIRED_AGENTS must match install.sh
-// exactly, or uninstalling orphans an installed managed agent. Both lists are extracted from the
-// single-line array literal — no hardcoded names/counts, so a future agent addition needs no edit here.
-{
-  const requiredAgentsList = (sh, label) => {
-    const m = /REQUIRED_AGENTS=\(([^)]*)\)/.exec(read(sh));
-    assert(m, label + ' must declare a REQUIRED_AGENTS=(...) array (#340)');
-    return (m[1].match(/"([^"]+)"/g) || []).map(s => s.slice(1, -1));
-  };
-  const installAgents = requiredAgentsList('install.sh', 'install.sh');
-  const uninstallAgents = requiredAgentsList('uninstall.sh', 'uninstall.sh');
-  assert(JSON.stringify(installAgents) === JSON.stringify(uninstallAgents),
-    'uninstall.sh REQUIRED_AGENTS must match install.sh (#340) — a missing name orphans the installed agent on uninstall');
-}
+// #340 retired by #1101: install.sh installs no agent, so there is no REQUIRED_AGENTS install list
+// for uninstall.sh to mirror. Removing what earlier releases installed is manifest+digest migration,
+// proven by test-issue-1101-claude-agent-migration.js.
+assert(!/^\s*REQUIRED_AGENTS=\(/m.test(read('install.sh')),
+  'install.sh must not declare an agent install list (#1101)');
 
 // Registry-driven route-reachability for the Claude command surface. Every routed command target
 // MUST resolve to an installed command file in EACH Claude edition. The target set is DERIVED from
@@ -909,12 +902,12 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
   }
 }
 
-// #1033: runtime-native profiles are checked from the one behavioral authority and architecture
-// acceptance is wired into the producer-selected chain.
+// #1033 / #1101: runtime architecture acceptance and the native-only guard are wired into the
+// producer-selected chain.
 {
   const claudeChain = (packageJson.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('generate-agent-profiles.js --check'),
-    '#1033: scripts."test:kaola-workflow:claude" must check generated runtime-native profiles');
+  assert(claudeChain.includes('test-issue-1101-native-only.js'),
+    '#1101: scripts."test:kaola-workflow:claude" must run the native-only guard');
   assert(claudeChain.includes('test-runtime-agent-architecture.js'),
     '#1033: scripts."test:kaola-workflow:claude" must run runtime architecture acceptance');
 }
@@ -953,7 +946,7 @@ assertManifestScript('kaola-workflow-validation-runner.js');
 assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-validation-runner.js'),
   'Claude validation chain must execute the deterministic validation-runner suite');
 
-// PROVENANCE_BAN: agent-facing prompt surfaces (agents/*.md, commands/*.md) must not embed
+// PROVENANCE_BAN: agent-facing prompt surfaces (commands/*.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
 // docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
@@ -962,7 +955,6 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
 {
   const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
   const claudePromptSurfaces = [
-    { dir: 'agents', ext: '.md' },
     { dir: 'commands', ext: '.md' }
   ];
   for (const { dir, ext } of claudePromptSurfaces) {
@@ -1000,10 +992,8 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
 // under these roots: docs/decisions/, docs/investigations/, docs/audits/, and CHANGELOG.md record
 // what was decided and when, and rewriting them would falsify the record.
 //
-// Lowercase `opus`/`sonnet` are DELIBERATELY not matched: they are the portable plan `model`-column
-// tokens, a closed machine vocabulary, not prose about a vendor. Their live carriers are the
-// resolver's DEFAULT_AGENT_MODELS and the agent frontmatter it is pinned against
-// (kaola-workflow-resolve-agent-model.js).
+// Lowercase `opus`/`sonnet` are DELIBERATELY not matched here: this ban is about brand prose. A
+// pinned subagent model in any spelling is the #1101 guard's concern (test-issue-1101-native-only.js).
 {
   const VENDOR_MODEL_NOUN_BAN =
     /\b(Opus|Sonnet|Haiku|Gemini|Llama|Mistral|Grok|Qwen|DeepSeek|GPT-[0-9][\w.-]*|GLM-[0-9][\w.-]*)\b/;
@@ -1011,14 +1001,12 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
   const editions = ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'];
   const promptSurfaceRoots = [
     { dir: 'commands' },
-    { dir: 'agents' },
     ...editions.flatMap(edition => [
       // The github Codex plugin ships SKILL packs rather than command files; the two forge plugins
       // ship both. A root that is absent for that structural reason is declared optional here, so
       // a root that goes missing for ANY OTHER reason still fails closed.
       { dir: 'plugins/' + edition + '/commands', optional: edition === 'kaola-workflow' },
-      { dir: 'plugins/' + edition + '/skills' },
-      { dir: 'plugins/' + edition + '/agents' }
+      { dir: 'plugins/' + edition + '/skills' }
     ])
   ];
 
@@ -1048,7 +1036,7 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
   }
 
   // A guard that scans nothing passes everything. Assert the walk actually reached the surfaces.
-  assert(scanned.length >= 46,
+  assert(scanned.length >= 18,
     'VENDOR_MODEL_NOUN_BAN — expected to scan every prompt surface across all editions, but only ' +
     scanned.length + ' file(s) were reached; the root list or the directory walk is broken.');
 

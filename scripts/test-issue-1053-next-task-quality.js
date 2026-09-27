@@ -16,15 +16,11 @@
 //
 // Non-goal guards (negative pins) are scoped to the exact named artifact: the GENERATED_SURFACES
 // registry, the mission ledger four-key table, the init/finalize skeletons' absence of any "what
-// to remember" step, and claim.js's CLI-flag surface. This suite does NOT pin the
-// behavior-contracts.json role roster against a historical commit (a prior revision did, via
-// `git show <baseline-sha>:...`, and a supervisor review correctly flagged that as wrong for a
-// PERMANENT suite: a shallow clone, an unpacked source tree, or ordinary future history rewrites
-// would break it, and pinning a role COUNT would freeze legitimate future role additions as a
-// false #1053 non-goal forever after). `scripts/generate-agent-profiles.js --check` — already a
-// standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the correct, history-
-// independent guard against a role profile drifting from its own authority; #1053 does not need a
-// second one. See "Revision" in kaola-workflow/bundle-1053/.cache/acceptance-red.md.
+// to remember" step, and claim.js's CLI-flag surface. This suite does not guard against a new
+// role profile: since #1101 Kaola-Workflow defines no subagent roles or profiles at all, and
+// `scripts/test-issue-1101-native-only.js` (a standing step in both `test:kaola-workflow:claude`
+// and `:claude:full`) fails if any role, profile, or profile generator is reintroduced; #1053
+// does not need a second guard.
 
 const fs = require('fs');
 const path = require('path');
@@ -453,13 +449,9 @@ for (const [name, spec] of Object.entries(DOC_CONCEPTS)) {
 eq(gen.GENERATED_SURFACES.length, 18, 'GENERATED_SURFACES stays at 18 rows (no new topic/surface added for #1053)');
 eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays exactly {finalize,init,next}');
 
-// No new role profile: NOT pinned here against a historical commit (see the file-header comment
-// and kaola-workflow/bundle-1053/.cache/acceptance-red.md "Revision" for why a `git show
-// <baseline-sha>` runtime dependency was removed after supervisor review). #1053's own scope
-// (templates/routing/next.skeleton.md + docs/task-quality.md) never touches
-// templates/agents/behavior-contracts.json, and `node scripts/generate-agent-profiles.js --check`
-// — already a standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the
-// correct, history-independent guard should a role ever drift from its own authority.
+// No new role profile: not pinned here. Since #1101 Kaola-Workflow ships no role profiles at all,
+// and `node scripts/test-issue-1101-native-only.js` — a standing step in both
+// `test:kaola-workflow:claude` and `:claude:full` — fails if one is reintroduced.
 
 // No new mission ledger key (#1089): the four-key table and the write-moment sequence remain in the skeleton.
 {
