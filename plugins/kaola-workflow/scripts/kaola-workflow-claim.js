@@ -5713,18 +5713,11 @@ function cmdWorktreeStatus() {
 //
 // A record is a MAIN-checkout `kaola-workflow/<dir>/workflow-state.md` (live) or
 // `kaola-workflow/archive/<dir>/workflow-state.md` (suffixed archives included) whose `branch` is
-// this worktree's branch and whose `name` is a safe project name; a folder with no readable state
-// file is not a record. A branch is REUSED across runs of one issue, so several records can match:
-//   * exactly one live record is the current claim, and every folder carrying its claim_ts (or, if
-//     it has none, the live folder alone) is that run — live first, as the sink resumes.
-//   * no live record: the newest claim_ts is the current run (the sink's own `readCurrentClaimTs`
-//     rule; ISO-8601 sorts lexicographically), provided every record is stamped and one is newest.
-//   * anything else — two live records, a tie, an unstamped record among several — is AMBIGUOUS.
-// Returns the run's folders to read receipts from, null when no record names the branch, or
-// AMBIGUOUS_RUN. This is NOT the sink's `currentArchiveDir`: it skips unreadable folders instead of
-// failing closed, and it never compares receipt contents.
-const AMBIGUOUS_RUN = Symbol('ambiguous-run');
-function currentRunDir(root, branch) {
+// this worktree's branch and whose `name` is a safe project name. Returns the folders whose receipts
+// decide the lane pin — the current run's (see currentRun) plus unclaimedDerivedDirs — or null when
+// no record names the branch, which keeps the base's derived `issue-<N>` read. This is NOT the sink's
+// `currentArchiveDir`: it skips unreadable folders instead of failing closed.
+function laneReceiptDirs(root, branch, projectName) {
   const records = [];
   for (const base of [path.join(root, 'kaola-workflow'), path.join(root, 'kaola-workflow', 'archive')]) {
     let entries = [];
@@ -5741,25 +5734,51 @@ function currentRunDir(root, branch) {
     }
   }
   if (records.length === 0) return null;
-  const live = records.filter(r => r.live);
-  if (live.length > 1) return AMBIGUOUS_RUN;
-  if (live.length === 1) {
-    return (live[0].claimTs ? records.filter(r => r.claimTs === live[0].claimTs) : live).map(r => r.projectDir);
-  }
-  if (records.length > 1 && records.some(r => !r.claimTs)) return AMBIGUOUS_RUN;
-  const newest = records.reduce((ts, r) => (r.claimTs > ts ? r.claimTs : ts), records[0].claimTs);
-  const current = records.filter(r => r.claimTs === newest);
-  return current.length === 1 ? [current[0].projectDir] : AMBIGUOUS_RUN;
+  const run = currentRun(records);
+  return (run ? run.dirs : []).concat(unclaimedDerivedDirs(root, projectName, branch, run ? run.claimTs : ''));
 }
 
-// #1102: the derived `issue-<N>` folders (live and plain archive) whose workflow-state.md is missing,
-// unreadable or names no branch — the #1100 receipt-only folder, the sink's own #832 archive
-// skeleton, a corrupted state. currentRunDir cannot see them, yet a receipt surviving there is a
-// sink that has not finished (a terminal sink disposes it), so it keeps the base pin.
-function unclaimedDerivedDirs(root, projectName) {
+// #1102: a branch is REUSED across runs of one issue, so several records can match. Returns
+// { claimTs, dirs } for the current run, or null when it is AMBIGUOUS:
+//   * exactly one live record is the current claim unless an archived record carries a strictly
+//     newer claim_ts; every folder carrying its claim_ts (or, if it has none, the live folder
+//     alone) is that run — live first, as the sink resumes.
+//   * no live record: the newest claim_ts is the current run (the sink's own `readCurrentClaimTs`
+//     rule; ISO-8601 sorts lexicographically), provided every record is stamped and one is newest.
+//   * anything else — two live records, a newer archived claim, a tie, an unstamped record among
+//     several — is AMBIGUOUS.
+function currentRun(records) {
+  const live = records.filter(r => r.live);
+  if (live.length > 1) return null;
+  if (live.length === 1) {
+    const claimTs = live[0].claimTs;
+    if (claimTs && records.some(r => !r.live && r.claimTs > claimTs)) return null;
+    return { claimTs, dirs: (claimTs ? records.filter(r => r.claimTs === claimTs) : live).map(r => r.projectDir) };
+  }
+  if (records.length > 1 && records.some(r => !r.claimTs)) return null;
+  const newest = records.reduce((ts, r) => (r.claimTs > ts ? r.claimTs : ts), records[0].claimTs);
+  const current = records.filter(r => r.claimTs === newest);
+  return current.length === 1 ? { claimTs: newest, dirs: [current[0].projectDir] } : null;
+}
+
+// #1102: the derived `issue-<N>` folders (live and plain archive) that are NOT records: their
+// workflow-state.md is missing, unreadable, names no branch, or names THIS branch without a safe
+// name — the #1100 receipt-only folder, the sink's own #832 archive skeleton, a corrupted state. A
+// receipt surviving there is a sink that has not finished (a terminal sink disposes it), so it keeps
+// the base pin — unless, exactly as the sink's own #694 cross-run check, its `claim_ts || started_at`
+// predates the current run's claim_ts: that is an earlier run's receipt. A folder whose state names
+// another branch belongs to another run and is never read.
+function unclaimedDerivedDirs(root, projectName, branch, claimTs) {
   return [path.join(root, 'kaola-workflow', projectName), path.join(root, 'kaola-workflow', 'archive', projectName)]
     .filter((dir) => {
-      try { return !field(fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'), 'branch'); } catch (_) { return true; }
+      let content = '';
+      try { content = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'); } catch (_) {}
+      const stateBranch = field(content, 'branch');
+      if (stateBranch && (stateBranch !== branch || isSafeName(field(content, 'name')))) return false;
+      let receipt = null;
+      try { receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8')); } catch (_) { return false; }
+      const stamp = receipt && (receipt.claim_ts || receipt.started_at);
+      return !(claimTs && stamp && stamp < claimTs);
     });
 }
 
@@ -5770,8 +5789,8 @@ function unclaimedDerivedDirs(root, projectName) {
 // resumable: a pre-receipt legacy leftover and a completed run's garbage both sweep as before, so
 // this is a receipt-driven pin, never a blanket exemption. (Called from the integration arm since
 // 57fc4c67 and from the lane arm since #1100.)
-// #1102: `runDirs`, when the lane arm passes them, are the ONLY folders read — never every folder
-// sharing a name, so an old run's leftover receipt cannot pin a new run's worktree.
+// #1102: `runDirs`, when the lane arm passes them (laneReceiptDirs), are the ONLY folders read —
+// never every folder sharing a name, so an old run's leftover receipt cannot pin a new run's worktree.
 function sinkReceiptResumable(root, projectName, runDirs) {
   for (const dir of runDirs || [
     path.join(root, 'kaola-workflow', projectName),
@@ -5812,14 +5831,10 @@ function collectStale(root) {
     // arm does: steps not all done means a sink that still owns this lane worktree.
     // #1102: the receipt lives in the run's OWN folder, which need not be named `issue-<N>` — a
     // bundle or custom-named run is found only through the main checkout's run records. A branch
-    // no record names keeps the base's derived `issue-<N>` read (live, then archive/). Otherwise
-    // only the resolved run's folders are read (none when the owner is AMBIGUOUS), plus any derived
-    // folder no readable claim covers, so no other run's receipt can pin this worktree.
-    const runDirs = currentRunDir(root, String(wt.branch || '').replace(/^refs\/heads\//, ''));
-    const sinkResumable = runDirs === null
-      ? sinkReceiptResumable(root, projectName)
-      : sinkReceiptResumable(root, projectName,
-        (runDirs === AMBIGUOUS_RUN ? [] : runDirs).concat(unclaimedDerivedDirs(root, projectName)));
+    // no record names keeps the base's derived `issue-<N>` read (live, then archive/); otherwise only
+    // laneReceiptDirs' folders are read, so no other run's receipt can pin this worktree.
+    const sinkResumable = sinkReceiptResumable(root, projectName,
+      laneReceiptDirs(root, String(wt.branch || '').replace(/^refs\/heads\//, ''), projectName));
 
     if ((isClosed || isArchived) && !inActiveSet && !sinkResumable) {
       stale_worktrees.push({
