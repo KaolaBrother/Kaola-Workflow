@@ -17,9 +17,10 @@ design records, and `kaola-workflow/.roadmap/_rules.md` is the only optional loc
 - `scripts/simulate-workflow-walkthrough.js` is the integration walkthrough.
 - `templates/routing/` is the authoring source for generated command and skill surfaces. Edit the
   skeleton or slot, then regenerate; never hand-edit a rendered surface.
-- `templates/agents/behavior-contracts.json` and
-  `templates/agents/runtime-capabilities.json` are the behavior and runtime-adapter authorities for
-  generated role profiles.
+- `templates/agents/runtime-capabilities.json` is the measured runtime-adapter fact authority
+  (native subagent routes, instruction loading, compact carriers); `scripts/runtime-adapter-facts.js`
+  validates and renders it. Kaola-Workflow defines no subagent roles, role profiles, or subagent
+  model bindings (`docs/decisions/0029-native-subagents-only.md`).
 - `templates/global/kaola-workflow-global.md` and
   `templates/global/runtime-contract-adapters.json` own the machine-global workflow contract and
   its measured runtime carriers.

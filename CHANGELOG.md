@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Kaola-Workflow defines no subagent roles on any runtime (#1101, ADR 0029).** The seven Kaola
+  roles and every piece of the role layer are deleted: `templates/agents/behavior-contracts.json`,
+  `scripts/generate-agent-profiles.js`, `agents/generated-agent-manifest.json`, the seven Claude
+  `agents/*.md` profiles, the 21 Codex `plugins/*/agents/*.toml` profiles, the three
+  `plugins/*/config/agents.toml` registrations, the Grok and Cursor edition agent renders, and
+  `scripts/validate-vendored-agents.js`. So are the role→model map (`DEFAULT_AGENT_MODELS`,
+  `resolveAgentModel`, and the `kaola-workflow-resolve-agent-model.js <agent-name>` CLI), the
+  kernel's `CODEX_PINNED_ROLES` / `CODEX_PINNED_MODEL` / `CODEX_PINNED_EFFORT` and Codex profile
+  validator, and every pinned subagent model or effort (`sonnet`, `gpt-6-luna`/`max`,
+  `grok-4.7`/`medium`). The package no longer ships `agents/`. Subagent capability belongs to the
+  running harness: the dispatch contract now says Kaola defines no roles, dispatches through the
+  host's native tool, schema, and catalog under their real meaning, lets the host's defaults and
+  the user decide model, effort, tools, nesting, concurrency, isolation, and resume, and never
+  reads "no Kaola profile" as "no subagent capability". The finalize role call card and role
+  routes, the "cheaper child", "subagent default binding", named-role fallback, and
+  `capability_gap`-for-a-missing-role rules are gone; test and repair custody are stated as
+  task/result constraints. `scripts/test-issue-1101-native-only.js` (both Claude chains) fails if
+  any of it returns.
+
 ### Changed
 
 - **Request sinks retry a refused archive push, fail closed on a failed probe, and share one kernel
@@ -58,6 +79,14 @@
   or pushes the mainline, and manual closure of any remaining member stays the orchestrator's call
   after the merge is verified. GitLab's `normalizeMergeRequest` now carries `description` and
   `target_branch` for the reuse check.
+- **Runtime adapter facts are facts only (#1101).** `templates/agents/runtime-capabilities.json`
+  moves to `schema_version: 2`: each adapter keeps instruction loading, hook scope, native subagent
+  routes and availability, compact carrier, and install scope; role, profile, and model-binding
+  capabilities are rejected by the new `scripts/runtime-adapter-facts.js`, which also renders the
+  adapter section. `templates/agents/provenance.json` moves to `schema_version: 3` and keeps only
+  the attribution for the retired contracts. `kaola-workflow-resolve-agent-model.js` keeps only
+  the Codex session proof (`loadCodexSessionProof`); its tests move to
+  `scripts/test-codex-session-proof.js`.
 - **The merge sink merges in a private integration worktree, not the shared checkout (#1097).** The
   `--sink` transaction now builds and rebases its candidate in `W` — a fresh linked worktree at
   `.kw/integrate/<project>` — and runs the validation chains there, so the shared checkout is never

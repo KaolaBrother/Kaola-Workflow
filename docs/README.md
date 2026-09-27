@@ -12,22 +12,20 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 - [Prompt size](prompt-size.md) — per-runtime static token estimates, raw counts, and reproduction.
 
 - [Architecture](architecture.md) — system structure and data flow, including the AGENTS-first
-  authority graph and generated-role boundary.
+  authority graph and native-only subagent boundary.
 - [Installation](installation.md) — shortest correct all-runtime setup, per-runtime scopes, Cursor
   Cloud lifecycle, update, verification, and uninstall.
 - [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
-  loading or Claude's thin bridge, plus native profile discovery, dispatch and fallback routes,
-  the per-adapter subagent default binding, runtime limits, hooks, paths, precedence, and known
-  unknowns for all ten runtime families.
+  loading or Claude's thin bridge, plus native subagent routes, runtime limits, hooks, paths,
+  precedence, and known unknowns for all ten runtime families.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
   issue so the Next route can proceed without a fixed requirement template.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.
-- [Agent Behavior Sources and Provenance](agents-source.md) — the seven-role behavioral authority,
-  six profile-installing adapters, 42-render manifest, source classification with historical
-  origin record, and how to add or change a role.
+- [Agent Sources and Provenance](agents-source.md) — the runtime adapter facts that replaced the
+  retired role authority, what #1101 deleted, and the attribution kept for retired contracts.
 
 ## Runtime editions
 
@@ -35,11 +33,11 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
   role profiles), session inheritance, permissions, hooks, and installer behavior.
 - [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, vendor-native dispatch (no Kaola
   role profiles), session-owned model/thinking, hooks, and installer behavior.
-- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents pinned
-  to `grok-4.7` / `effort: medium`, and hooks.
-- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents
-  pinned to `grok-4.7[effort=medium]`, CLI vs App product surfaces (App local IDE vs saved Cloud
-  environments), live-enum routing, host-specific install/reload carriers, and hooks.
+- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, native `spawn_subagent`
+  dispatch (no Kaola role profiles), and hooks.
+- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, native `Task` dispatch (no
+  Kaola role profiles), CLI vs App product surfaces (App local IDE vs saved Cloud environments),
+  host-specific install/reload carriers, and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, vendor-native
   dispatch (no Kaola role profiles), known hook limits, and explicit version/relocation unknowns.
 - [Devin CLI Edition](devin-edition.md) — live-schema vendor-harness dispatch (no Kaola role
@@ -52,12 +50,14 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 
 ## Decisions
 
+- **[0029 — Native subagents only: Kaola-Workflow defines no roles](decisions/0029-native-subagents-only.md)**
+  (#1101) — every runtime dispatches through the harness's own subagent tool, schema, and catalog;
+  Kaola ships no role authority, role profile, profile generator or manifest, role→model map, or
+  pinned subagent model/effort; custody is a task/result constraint; migration removes only what
+  Kaola can prove it installed. Supersedes ADR 0025.
 - **[0025 — Lean orchestrator; one subagent binding per runtime; seven roles](decisions/0025-lean-orchestrator-single-subagent-binding.md)**
-  — the orchestrator holds judgment and acceptance; the per-role intent axis and
-  the 14-role roster are retired in favor of seven roles; every profile-installing adapter
-  declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-6-luna` / `max` pinned in
-  the TOML; Grok `grok-4.7` / `effort: medium`; Cursor `grok-4.7[effort=medium]`); OpenCode, Kimi,
-  ZCode, Devin, Droid, and DSH are `native_only` — no Kaola role profiles, vendor-harness dispatch.
+  — historical (superseded by ADR 0029): seven roles, one `subagent_default` per profile-installing
+  adapter, and `native_only` on OpenCode, Kimi, ZCode, Devin, Droid, and DSH.
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
@@ -67,10 +67,10 @@ deliverable, custody, and stop condition; ADR 0026 makes root `AGENTS.md` the on
 instruction surface. ADR 0017 remains the Mission List design of record; ADR 0027 replaces its
 carrier with the mission ledger.
 [ADR 0025](decisions/0025-lean-orchestrator-single-subagent-binding.md)
-([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) is the landed successor
-to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lean orchestrator,
-7 roles, one `subagent_default` per binding adapter, and `native_only` on OpenCode / Kimi / ZCode /
-Devin / Droid / DSH. Most
+([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) succeeded ADR 0019's
+remaining three-tier axis and ADR 0021's three intent classes, and
+[ADR 0029](decisions/0029-native-subagents-only.md) (#1101) in turn retired its roles and bindings:
+every runtime is native-only. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023 and ADR 0026.
 
@@ -112,8 +112,8 @@ retired by ADR 0023 and ADR 0026.
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**
   — common per-item judgment, honest fallback, adapter-rendered native capability exposure, and
   owner-approved default bindings without a Kaola scheduler or invented runtime limits.
-  The "exactly three intent classes" clause is superseded by ADR 0025: one `subagent_default`
-  per binding adapter; `native_only` adapters declare none.
+  The "exactly three intent classes" clause is superseded by ADR 0025, and ADR 0029 retires the
+  default bindings and named-role fallback: every adapter records native facts only.
 
 - **[0022 — Machine-global workflow contract](decisions/0022-machine-global-workflow-contract.md)**
   — one universal source, ten measured host adapters, batch-safe installation, subtractive project
@@ -159,9 +159,9 @@ retired by ADR 0023 and ADR 0026.
 
 Everything numbered 0001–0015 and the `D-NNN-NN` records contemporaneous with the DAG executor
 predate 0017. They remain accurate as history and as rationale for machinery that still ships
-around the run (claim, sink, release, role-profile generation, the runtime editions) — but where
-one describes plan grammar, role nodes, write sets, gates, epochs, or typed refusals, 0017
-supersedes it. [D-1050-01](decisions/D-1050-01.md) is a later wording-level note on the
+around the run (claim, sink, release, the runtime editions) — but where one describes plan grammar,
+role nodes, write sets, gates, epochs, or typed refusals, 0017 supersedes it, and where one
+describes roles or role profiles, 0029 does. [D-1050-01](decisions/D-1050-01.md) is a later wording-level note on the
 `metric-optimizer` pass-rate branch; it does not restore that machinery.
 
 ## Other
