@@ -1728,7 +1728,9 @@ function uninstallGlobalCarrier() { return runGlobalCarrier('uninstall'); }
 //            this is what proves the files of a pre-record install, #332).
 // A profile the scope's remaining config.toml still points at (config_file) is kept, so no user
 // registration is left dangling. The registration block is stripped only when its body is exactly
-// a body some release wrote (RELEASED_BLOCK_BODY_SHA256); an edited or ambiguous block is kept.
+// a body some release wrote (RELEASED_BLOCK_BODY_SHA256) once any `[hooks.state.*]` tables Codex
+// itself wrote inside it are set aside (they stay, verbatim); an edited or ambiguous block is kept,
+// and so is the ownership record while it proves a kept profile.
 // Everything kept is reported with its reason; nothing is refused (#1101 H9), nothing is followed
 // through a symlink, and pre-rename codex-workflow leftovers are only reported (#1101 H6).
 // Frozen from history (scripts/fixtures/issue-1101/PROVENANCE.md); never extended.
@@ -2187,9 +2189,38 @@ function planConfigRetirement(configPath = targetConfig) {
   const range = managedMarkerRange(text);
   if (range.state === 'absent') return { state: 'absent', text };
   if (range.state === 'invalid') return { state: 'ambiguous_markers', text };
-  const body = text.slice(range.start + beginMarker.length, range.endMarkerStart).trim();
-  if (!RELEASED_BLOCK_BODY_SHA256.includes(hex(body))) return { state: 'mixed_managed_block', text };
-  return { state: 'retire', text, next: text.slice(0, range.start) + text.slice(range.end) };
+  const body = text.slice(range.start + beginMarker.length, range.endMarkerStart);
+  if (RELEASED_BLOCK_BODY_SHA256.includes(hex(body.trim()))) {
+    return { state: 'retire', text, next: text.slice(0, range.start) + text.slice(range.end) };
+  }
+  const split = splitHostHookStateTables(body);
+  if (!split || !split.host || !RELEASED_BLOCK_BODY_SHA256.includes(hex(split.kaola.trim()))) {
+    return { state: 'mixed_managed_block', text };
+  }
+  return { state: 'retire', text, next: text.slice(0, range.start) + split.host + text.slice(range.end) };
+}
+
+// Codex records hook trust as `[hooks.state."<hooks.json>:<event>:<i>:<j>"]` tables of one-line
+// assignments (`trusted_hash = "sha256:…"`) and writes them inside the block, before the END
+// marker. They are the host's: split them out verbatim so the rest can still be proven a released
+// body. null when a hooks.state table holds anything else.
+function splitHostHookStateTables(body) {
+  const kaola = [];
+  const host = [];
+  let current = kaola;
+  for (const line of body.split(/(?<=\n)/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[')) {
+      const name = parseTomlTableName(trimmed);
+      current = name && !name.isArrayTable && name.segments.length === 3
+        && name.segments[0].value === 'hooks' && name.segments[1].value === 'state' ? host : kaola;
+    } else if (current === host && trimmed !== ''
+      && !/^[A-Za-z0-9_-]+[ \t]*=[ \t]*(?:"(?:[^"\\]|\\.)*"|true|false)$/.test(trimmed)) {
+      return null;
+    }
+    current.push(line);
+  }
+  return { kaola: kaola.join(''), host: host.join('') };
 }
 
 // Absolute paths a config text registers through `config_file` (relative to the .codex dir).
@@ -2240,6 +2271,7 @@ function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, 
     res.warnings.push(`warning: ignoring agent record entry that is not a plain file name: ${JSON.stringify(name)}`);
   }
   if (record.present && !record.readable) res.preserved.push({ reason: record.reason, file: record.file });
+  let recordStillProves = false;
   for (const name of fs.readdirSync(agentsDir).sort()) {
     if (!name.endsWith('.toml')) continue;
     const file = path.join(agentsDir, name);
@@ -2248,7 +2280,11 @@ function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, 
     if (entry.isSymbolicLink() || !entry.isFile()) { res.preserved.push({ reason: 'non_regular', file }); continue; }
     const digest = hex(fs.readFileSync(file));
     const recorded = record.rows[name];
-    if (referenced.has(file)) { res.preserved.push({ reason: 'referenced_by_user_config', file }); continue; }
+    if (referenced.has(file)) {
+      if (recorded === digest) recordStillProves = true;
+      res.preserved.push({ reason: 'referenced_by_user_config', file });
+      continue;
+    }
     if (recorded === digest || (RELEASED_PROFILE_SHA256[name] || []).includes(digest)) {
       fs.unlinkSync(file);
       res.removed.push(file);
@@ -2256,7 +2292,9 @@ function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, 
       res.preserved.push({ reason: recorded ? 'modified_since_install' : 'no_ownership_record', file });
     }
   }
-  if (record.present && record.readable) {
+  // The record is the only proof for a recorded profile a release no longer ships: it stays while
+  // any profile it still proves is kept, so a later run can retire that profile.
+  if (record.present && record.readable && !recordStillProves) {
     fs.unlinkSync(record.file);
     res.recordRemoved = record.file;
   }
