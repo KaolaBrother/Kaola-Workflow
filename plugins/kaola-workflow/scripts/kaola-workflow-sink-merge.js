@@ -356,19 +356,6 @@ function persistSinkFindingsToSummary(destDir, postRebaseTests, archiveCollision
   } catch (_) { return null; }
 }
 
-// The repo-relative paths currently STAGED under one pathspec. Read from the INDEX rather than from
-// the working tree or from the caller's own list of what it believed it planted: that is what makes
-// the #893 report unable to under-claim a file that rode in unnoticed, or over-claim one this sink
-// never touched. Same excludes the add/commit use, so a journal kept out of the commit is kept out
-// of the report too.
-//
-// `-z`, and split on NUL and NOTHING ELSE — the fourth site of the same normalization, kept identical
-// to the three below. This list is not diagnostic: persistArchivedPathsToSummary writes it DURABLY
-// into the archive, so a name it mangles is a false statement in the run's own permanent record. The
-// plain `--name-only` stream C-quotes an embedded newline and emits a trailing space RAW (measured
-// with `od -c`), so the `.trim()` here reported a file really named `notes.md ` as `.cache/notes.md` —
-// a path that exists nowhere — and left the quoted form of the others in the archive verbatim.
-
 // #893's durable half. The sink commits its whole own-archive pathspec, and it cannot tell a file
 // finalize mirrored from one nobody wrote — the archive is a copy of a folder that lives untracked
 // in main and is committed nowhere, so git holds no record of what belongs, and no list of names
@@ -1033,7 +1020,8 @@ function recordInvalidatedEvidence(receipt, evidence, boundTo, fromBase, toBase)
 // Returns:
 //   { ok:true, candidate, main_checkout } on publication;
 //   { ok:false, reason:'publish_busy', holder } — another live holder owns the lock;
-//   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, or a lock/probe fault;
+//   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, a lock/probe fault, or a
+//     push fault (the push threw without the remote tip moving — resumable at the same step);
 //   { ok:false, reason:'non_fast_forward' } / { ok:false, reason:'chains_red' } — bounded retries.
 function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archivePathspec) {
   // #1097 (review F1): `let` — the lock is RELEASED for the long work (the re-rebase + the
@@ -3272,8 +3260,9 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           process.exitCode = 2;
           return;
         }
-        // not_published: the OFFLINE fast-forward was refused (a resumable non-publication), or the
-        // lock could not be used at all.
+        // not_published: the OFFLINE fast-forward was refused (a resumable non-publication), the
+        // lock could not be used at all, or the push FAULTED without the remote tip moving (auth,
+        // network, hook, protected branch — resumable at the same step, never a lost race).
         receipt.push_main = 'failed';
         receipt.updated_at = new Date().toISOString();
         writeSinkReceipt(receiptPath, receipt);

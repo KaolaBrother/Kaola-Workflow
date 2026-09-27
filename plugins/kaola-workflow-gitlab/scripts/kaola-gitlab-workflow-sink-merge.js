@@ -964,7 +964,8 @@ function recordInvalidatedEvidence(receipt, evidence, boundTo, fromBase, toBase)
 // Returns:
 //   { ok:true, candidate, main_checkout } on publication;
 //   { ok:false, reason:'publish_busy', holder } — another live holder owns the lock;
-//   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, or a lock/probe fault;
+//   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, a lock/probe fault, or a
+//     push fault (the push threw without the remote tip moving — resumable at the same step);
 //   { ok:false, reason:'non_fast_forward' } / { ok:false, reason:'chains_red' } — bounded retries.
 function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archivePathspec) {
   // #1097 (review F1): `let` — the lock is RELEASED for the long work (the re-rebase + the
@@ -3089,8 +3090,9 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           process.exitCode = 2;
           return;
         }
-        // not_published: the OFFLINE fast-forward was refused (a resumable non-publication), or the
-        // lock could not be used at all.
+        // not_published: the OFFLINE fast-forward was refused (a resumable non-publication), the
+        // lock could not be used at all, or the push FAULTED without the remote tip moving (auth,
+        // network, hook, protected branch — resumable at the same step, never a lost race).
         receipt.push_main = 'failed';
         receipt.updated_at = new Date().toISOString();
         writeSinkReceipt(receiptPath, receipt);
