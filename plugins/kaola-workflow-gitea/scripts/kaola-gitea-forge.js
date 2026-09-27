@@ -276,6 +276,8 @@ function mergePullRequest(project, prNumber, opts) {
   const mergeBody = {};
   mergeBody.Do = options.squash ? 'squash' : 'merge';
   mergeBody.delete_branch_after_merge = !!options.removeSourceBranch;
+  // Auto-merge schedules the merge for when checks succeed (Gitea >= 1.17); without it the merge is immediate.
+  if (options.autoMerge) mergeBody.merge_when_checks_succeed = true;
   if (options.sha) mergeBody.head_commit_id = options.sha;
   const raw = teaExec([
     'api', '-X', 'POST',
