@@ -1825,13 +1825,19 @@ without a readable state file is not a record. The outcome is one of three:
 | Records on the branch | Owner | Receipt read |
 |---|---|---|
 | none | — | derived: `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/` (unchanged from #1100) |
-| exactly one live record | the live record; if it has a `claim_ts`, every folder carrying that same `claim_ts` belongs to the run, and among several the one whose receipt's `project` is its own `name` wins | that one folder's `.cache/` only |
-| no live record | the record with the strictly newest `claim_ts` (the sink's `readCurrentClaimTs` rule; ISO-8601 sorts lexicographically); a lone record needs no `claim_ts` | that one folder's `.cache/` only |
-| two or more live records, a `claim_ts` tie, an unstamped record among several, or an unresolved tie-break | ambiguous | none — the worktree is not pinned |
+| exactly one live record | the live record, whatever the archives hold; if it has a `claim_ts`, every folder carrying that same `claim_ts` is the same run | those folders' `.cache/`, live first, plus the unclaimed derived folders below |
+| no live record | the record with the strictly newest `claim_ts` (the sink's `readCurrentClaimTs` rule; ISO-8601 sorts lexicographically); a lone record needs no `claim_ts` | that folder's `.cache/`, plus the unclaimed derived folders below |
+| two or more live records, a `claim_ts` tie, or an unstamped record among several | ambiguous | only the unclaimed derived folders below |
 
-Reading only the owning folder means an old run's leftover receipt never pins a newer run of the
-same issue. This is not the sink's `currentArchiveDir`: it skips unreadable folders instead of
-failing closed, and its tie-break compares `receipt.project` only.
+A folder that is read pins the worktree when its receipt's `steps` are not all `done`, exactly as
+before. The **unclaimed derived folders** are `kaola-workflow/issue-<N>/` and
+`kaola-workflow/archive/issue-<N>/` when their `workflow-state.md` is missing, unreadable or names no
+`branch` — the #1100 receipt-only folder, the sink's own #832 archive skeleton, a corrupted state. No
+record can see them, yet a receipt surviving there is a sink that has not finished (a terminal sink
+disposes it), so it keeps the pin it had before #1102. Reading only the owning run's folders means
+an old run's leftover receipt never pins a newer run of the same issue. This is not the sink's
+`currentArchiveDir`: it skips unreadable folders instead of failing closed, and it never compares
+receipt contents.
 
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).

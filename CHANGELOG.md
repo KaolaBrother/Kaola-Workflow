@@ -32,16 +32,20 @@
   another name, so both reads missed and the pin was silently inert for exactly the runs the sweep
   could then treat as stale. The lane arm now looks for the MAIN checkout's live and archive
   `workflow-state.md` records (suffixed `.archived-<ts>` archives included) whose `branch` is the
-  worktree's branch, and has three outcomes. **One owning folder:** a single live record is the
-  current run, and only folders carrying its `claim_ts` belong to it (if several do, the one whose
-  receipt names its own project); with no live record, the record with the strictly newest
-  `claim_ts` is the current run, the sink's own `readCurrentClaimTs` rule. The receipt is read from
-  that one folder only, so an old run's leftover receipt cannot pin a newer run. **Ambiguous** (two
-  live records on the branch, a `claim_ts` tie, or an unstamped record among several): the worktree
-  is left unpinned. **No record names the branch:** the base's derived read is unchanged — live
-  `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/`. This is not
-  the sink's `currentArchiveDir`: a folder without a readable `workflow-state.md` is skipped rather
-  than failing closed, and the tie-break checks only `receipt.project`. The integration arm is
+  worktree's branch, and has three outcomes. **The run's folders:** a single live record is the
+  current run whatever the archives hold, and every folder carrying its `claim_ts` (or, if it has
+  none, the live folder alone) belongs to it, live first; with no live record, the record with the
+  strictly newest `claim_ts` is the current run, the sink's own `readCurrentClaimTs` rule. Only those
+  folders' receipts are read, and any one whose steps are not all done pins, so an old run's leftover
+  receipt cannot pin a newer run. **Ambiguous** (two live records on the branch, a `claim_ts` tie, or
+  an unstamped record among several): no record's receipt is read. **No record names the branch:**
+  the base's derived read is unchanged — live `kaola-workflow/issue-<N>/.cache/`, then
+  `kaola-workflow/archive/issue-<N>/.cache/`. In the first two outcomes the derived `issue-<N>`
+  folders (live and plain archive) whose `workflow-state.md` is missing, unreadable or names no
+  branch — the #1100 receipt-only folder, the sink's own #832 archive skeleton, a corrupted state —
+  are read as well, because a receipt surviving there is a sink that has not finished. This is not
+  the sink's `currentArchiveDir`: a folder without a readable `workflow-state.md` is not a record
+  rather than failing closed, and receipt contents are never compared. The integration arm is
   unchanged (its directory name is already the project). All-done and missing-receipt behavior is
   unchanged, and all four claim copies (root, Codex, GitLab, Gitea) carry the same change.
 
