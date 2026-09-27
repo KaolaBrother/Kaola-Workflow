@@ -2283,6 +2283,65 @@ function testStaleWorktreeCleanup() {
       state2g(arch, 'bundle-400-402', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T03:00:00.000Z']);
       receipt2g(arch, { project: 'bundle-400-402', steps: PENDING2G });
     }, true, 'an archived bundle run\'s mid-flight receipt must pin its lane worktree');
+
+    // --- X/K-cases (repair round 4): the #694 stamp rule for derived receipts, M10, X2, X3.
+    // X1 — an OLD abandoned #832 skeleton (stateless archive/issue-<N>, receipt stamped with the old
+    // claim) and a NEW live run of the issue with no receipt. The sink itself refuses to resume a
+    // receipt that predates the current claim (#694), so it must not pin the new run.
+    mCase('X1', (fx) => {
+      state2g(path.join(fx.tmp, 'kaola-workflow', 'issue-400'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt2g(path.join(fx.tmp, ...AR2G, 'issue-400'), { project: 'issue-400', branch: 'workflow/gitlab-issue-400',
+        claim_ts: '2026-09-01T00:00:00.000Z', steps: PENDING2G });
+    }, false, 'an old run\'s derived receipt stamped before the current claim must NOT pin the new run');
+
+    // M10 — a live leftover OLDER than an archived newer run on the same branch: the live claim is
+    // not the current run, so the owner is undetermined and the old receipt must not pin.
+    mCase('M10', (fx) => {
+      const old = path.join(fx.tmp, 'kaola-workflow', 'bundle-400-402');
+      state2g(old, 'bundle-400-402', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+      receipt2g(old, { project: 'bundle-400-402', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+    }, false, 'a live record older than an archived claim on the same branch must not pin with its receipt');
+
+    // X2 — AMBIGUOUS owner (two live records) plus a stateless derived receipt: the derived receipt
+    // keeps the base pin, since no resolved claim can date it.
+    mCase('X2', (fx) => {
+      state2g(path.join(fx.tmp, 'kaola-workflow', 'bundle-400-402'), 'bundle-400-402',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      state2g(path.join(fx.tmp, 'kaola-workflow', 'zz-custom'), 'zz-custom',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      receipt2g(path.join(fx.tmp, ...AR2G, 'issue-400'), { project: 'issue-400', steps: PENDING2G });
+    }, true, 'with an ambiguous owner a stateless derived receipt keeps its base pin');
+
+    // X3 — a derived folder whose state names this branch but carries no safe name is not a record,
+    // so it counts as unclaimed and its mid-flight receipt keeps the base pin.
+    mCase('X3', (fx) => {
+      const d = path.join(fx.tmp, ...AR2G, 'issue-400');
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'workflow-state.md'), '## Sink\nbranch: workflow/gitlab-issue-400\n');
+      receipt2g(d, { project: 'issue-400', steps: PENDING2G });
+      olderBundle(fx);
+    }, true, 'a derived folder naming this branch without a safe name must keep its receipt\'s pin');
+
+    // K1 (guard) — a STAMPED live mid-sink run next to an UNSTAMPED legacy archive record: an unstamped
+    // archive is never newer, so the live run keeps its pin.
+    mCase('K1', (fx) => {
+      const cur = path.join(fx.tmp, 'kaola-workflow', 'bundle-400-402');
+      state2g(cur, 'bundle-400-402', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt2g(cur, { project: 'bundle-400-402', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400'), 'issue-400', ['branch: workflow/gitlab-issue-400']);
+    }, true, 'a stamped live mid-sink run next to an unstamped legacy archive must stay pinned');
+
+    // K2 (guard) — a stamped live mid-sink run next to an OLDER stamped archive (an ordinary re-run).
+    mCase('K2', (fx) => {
+      const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+      state2g(cur, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt2g(cur, { project: 'issue-400', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400.archived-2026-09-02T00-00-00-000Z'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+    }, true, 'a stamped live mid-sink run next to an older stamped archive must stay pinned');
   }
 
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
