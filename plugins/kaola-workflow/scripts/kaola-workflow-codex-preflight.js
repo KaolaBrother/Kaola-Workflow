@@ -6,15 +6,15 @@
 //
 // Kaola-Workflow defines no subagent roles and installs no Codex role profiles (#1101); subagents
 // are the host's native capability. This gate checks only the host facts Kaola-Workflow depends on,
-// plus Kaola-owned leftovers of earlier releases:
-//   (a) the Codex version floor (CODEX_MIN_VERSION; --codex-version > KAOLA_CODEX_VERSION > probe);
-//   (b) config-layer safety: HOME and every trusted project .codex layer must be regular,
+// plus Kaola-owned leftovers of earlier releases. It sets no Codex version floor: the retired
+// 0.145.0 floor (#775) existed only to make multi_agent_v2 the dispatch path for Kaola roles.
+//   (a) config-layer safety: HOME and every trusted project .codex layer must be regular,
 //       non-symlink paths that stay inside their scope, and project_root_markers must parse;
-//   (c) the effective persisted runtime (HOME overlaid by every trusted repository-root-to-cwd
+//   (b) the effective persisted runtime (HOME overlaid by every trusted repository-root-to-cwd
 //       project layer): whether Codex exposes its multi_agent_v2 spawn tools, the dispatch posture,
 //       and the V2 bounds. These are host facts, reported only — never a refusal, since subagent
 //       dispatch belongs to the host and Kaola-Workflow requires no dispatch mode;
-//   (d) retired-role residue: a RETIRED_PROFILE_FILES or ownership-manifest file still inside the
+//   (c) retired-role residue: a RETIRED_PROFILE_FILES or ownership-manifest file still inside the
 //       Kaola-owned .codex/agents/kaola-workflow/ directory, or the "# BEGIN/END kaola-workflow
 //       agents" marker block still in config.toml, in HOME or any project .codex layer. Only those
 //       exact names count: other files and user [agents.*] tables are never residue.
@@ -23,8 +23,7 @@
 // (install-codex-agent-profiles.js): without --no-autofix the gate runs it for each residue scope
 // and then re-runs itself read-only; --no-autofix only reports.
 //
-// --doctor mode is READ-ONLY (never runs the installer): it reports the version floor, the
-// installed plugin identity (for a plugin-cache copy, its marketplace/name/version path), the
+// --doctor mode is READ-ONLY (never runs the installer): it reports the installed plugin identity (for a plugin-cache copy, its marketplace/name/version path), the
 // effective runtime, and per-scope residue with the exact installer command for each scope.
 //
 // TRUE 4-tree byte-identical: requires ONLY Node built-ins and the forge-neutral kernel
@@ -33,14 +32,15 @@
 //
 // CLI:
 //   node kaola-workflow-codex-preflight.js --project-root <dir>
-//     [--no-autofix] [--json] [--home <dir>] [--codex-version <x.y.z>]
+//     [--no-autofix] [--json] [--home <dir>]
 //   node kaola-workflow-codex-preflight.js --doctor [--project-root <dir>]
-//     [--home <dir>] [--codex-version <x.y.z>] [--json]
+//     [--home <dir>] [--json]
+// Unknown arguments (including the retired --codex-version) are ignored.
 //
 // Exit 0 = fresh (or autofixed-then-fresh); non-zero = typed refusal:
 //   1 retired_role_residue (--doctor: stale), 2 plugin_identity_invalid (--doctor),
 //   4 config_layer_unsafe / scope_authority_unsafe / project_root_markers_invalid / autofix_unsafe,
-//   5 installer_failed, 7 codex_version_unsupported.
+//   5 installer_failed.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -56,9 +56,6 @@ const {
 const BEGIN_MARKER = '# BEGIN kaola-workflow agents';
 const END_MARKER = '# END kaola-workflow agents';
 
-// #775: the Codex 0.145 multi_agent_v2 re-baseline version floor. MIRROR of
-// install-codex-agent-profiles.js.
-const CODEX_MIN_VERSION = '0.145.0';
 
 const RETIRED_ROLE_RESIDUE_STATUS = 'retired_role_residue';
 const INSTALLER_BASENAME = 'install-codex-agent-profiles.js';
@@ -1439,7 +1436,6 @@ function parseArgs(argv) {
   let json = false;
   let doctor = false;
   let home = null;
-  let codexVersion = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--project-root' && args[i + 1]) {
@@ -1452,14 +1448,10 @@ function parseArgs(argv) {
       doctor = true;
     } else if (args[i] === '--home' && args[i + 1]) {
       home = args[++i];
-    } else if (args[i] === '--codex-version' && args[i + 1]) {
-      // #775: non-optional version-floor override — precedence flag > KAOLA_CODEX_VERSION env >
-      // live `codex --version` probe. See resolveCodexVersion.
-      codexVersion = args[++i];
     }
   }
 
-  return { projectRoot, noAutofix, json, doctor, home, codexVersion };
+  return { projectRoot, noAutofix, json, doctor, home };
 }
 
 // ---------------------------------------------------------------------------
@@ -1550,83 +1542,6 @@ function runInstaller(installerPath, projectRoot, globalInstall = false, home = 
   } catch (e) {
     return { success: false, stderr: e.message };
   }
-}
-
-// ---------------------------------------------------------------------------
-// #775: Codex 0.145 version floor. Net-new — no version comparison existed anywhere in this
-// repository before this gate; 0.142.5/0.144.1 previously appeared only as prose inside note
-// strings. Pure numeric-triplet compare; tolerant of the `codex-cli 0.145.1 (rust-v0.145.1)`
-// --version output shape (extracts the FIRST X.Y.Z triplet from whatever string it is given).
-// ---------------------------------------------------------------------------
-function compareCodexVersion(a, b) {
-  const pa = String(a || '').trim().split('.').map(n => parseInt(n, 10) || 0);
-  const pb = String(b || '').trim().split('.').map(n => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    const da = pa[i] || 0;
-    const db = pb[i] || 0;
-    if (da !== db) return da > db ? 1 : -1;
-  }
-  return 0;
-}
-
-function parseCodexVersionOutput(raw) {
-  const m = String(raw || '').match(/(\d+\.\d+\.\d+)/);
-  return m ? m[1] : null;
-}
-
-function codexVersionSupported(version) {
-  return typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version.trim())
-    && compareCodexVersion(version, CODEX_MIN_VERSION) >= 0;
-}
-
-// Same inline require('child_process') idiom as runInstaller above (no top-level require of
-// child_process anywhere in this script).
-function probeCodexVersionFromBinary() {
-  try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
-    if (!result || result.error || result.status !== 0) return null;
-    return parseCodexVersionOutput(result.stdout);
-  } catch (_) {
-    return null;
-  }
-}
-
-// Precedence: --codex-version flag > KAOLA_CODEX_VERSION env > live `codex --version` probe. The
-// override is NON-OPTIONAL (not a debug escape hatch): no sandbox in test-install-model-rendering.js,
-// the four walkthroughs, or the two forge test suites has a codex binary on PATH — without an
-// override, EVERY preflight invocation in all four chains would return codex_version_unsupported
-// simultaneously the moment this gate lands.
-function resolveCodexVersion({ override, env } = {}) {
-  const flagVersion = parseCodexVersionOutput(override);
-  if (flagVersion) return { version: flagVersion, source: 'flag' };
-  const envVersion = parseCodexVersionOutput((env || process.env || {}).KAOLA_CODEX_VERSION);
-  if (envVersion) return { version: envVersion, source: 'env' };
-  const probed = probeCodexVersionFromBinary();
-  return probed ? { version: probed, source: 'probe' } : { version: null, source: 'unavailable' };
-}
-
-function codexVersionUnsupportedRemediation(detected) {
-  return `Codex ${detected || '(version undetermined — no --codex-version/KAOLA_CODEX_VERSION override and no codex binary on PATH)'} `
-    + `is below the supported floor ${CODEX_MIN_VERSION}. Upgrade the Codex CLI to >=${CODEX_MIN_VERSION} `
-    + 'then re-run this preflight. On a sandbox/CI host with no codex binary on PATH, pass '
-    + '--codex-version <installed-version> or set KAOLA_CODEX_VERSION=<installed-version> to attest the '
-    + 'version explicitly.';
-}
-
-function codexVersionUnsupportedResult(versionInfo) {
-  return {
-    exitCode: 7,
-    result: {
-      status: 'codex_version_unsupported',
-      stale: true,
-      safe_autofix: false,
-      detected_version: versionInfo.version,
-      detected_version_source: versionInfo.source,
-      required_version: CODEX_MIN_VERSION,
-      repair: codexVersionUnsupportedRemediation(versionInfo.version),
-    },
-  };
 }
 
 function realpathOrResolved(target) {
@@ -1763,17 +1678,9 @@ function runPreflight(opts) {
     noAutofix,
     scriptDir,
     home,
-    codexVersion,
   } = opts;
   const homeDir = home || os.homedir();
   const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, homeDir);
-
-  // --- #775: Codex version floor, checked before anything else — nothing downstream matters if
-  // the installed Codex predates the multi_agent_v2 re-baseline. ---
-  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
-  if (!codexVersionSupported(versionInfo.version)) {
-    return codexVersionUnsupportedResult(versionInfo);
-  }
 
   // --- Config-layer safety: HOME always, project layers only once Codex loads them. ---
   const layers = discoverCodexLayers(projectRoot, homeDir);
@@ -1926,18 +1833,9 @@ function doctorScopeReport(name, residue, runtime, repair, extra = {}) {
 }
 
 function runDoctor(opts) {
-  const { projectRoot, scriptDir, codexVersion } = opts;
+  const { projectRoot, scriptDir } = opts;
   const home = opts.home || os.homedir();
   const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, home);
-  // #775: doctor is read-only, so it REPORTS the version floor rather than hard-refusing at exit 7
-  // (that typed refusal is runPreflight's job); an unsupported version still folds into `gating`.
-  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
-  const codexVersionReport = {
-    detected_version: versionInfo.version,
-    detected_version_source: versionInfo.source,
-    required_version: CODEX_MIN_VERSION,
-    supported: codexVersionSupported(versionInfo.version),
-  };
   const pluginIdentityRead = readPluginIdentity(sourceScriptDir, home);
   if (pluginIdentityRead.error) {
     return {
@@ -1960,7 +1858,6 @@ function runDoctor(opts) {
     result: {
       status: 'stale',
       project_trust: layers.projectTrust,
-      codex_version: codexVersionReport,
       plugin: pluginIdentityRead.identity,
       ...extra,
       scopes,
@@ -2064,13 +1961,12 @@ function runDoctor(opts) {
   });
 
   const residuePaths = scopes.flatMap(scope => scope.residue_paths || []);
-  const gating = residuePaths.length > 0 || !codexVersionReport.supported;
+  const gating = residuePaths.length > 0;
   return {
     exitCode: gating ? 1 : 0,
     result: {
       status: gating ? 'stale' : 'ok',
       project_trust: layers.projectTrust,
-      codex_version: codexVersionReport,
       plugin: pluginIdentityRead.identity,
       retired_role_residue: residuePaths.length > 0,
       residue_paths: residuePaths,
@@ -2093,7 +1989,7 @@ function boundsNote(result) {
 // CLI entry point
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  const { projectRoot: rawRoot, noAutofix, json, doctor, home: rawHome, codexVersion } = parseArgs(process.argv);
+  const { projectRoot: rawRoot, noAutofix, json, doctor, home: rawHome } = parseArgs(process.argv);
   const resolvedRoot = rawRoot ? path.resolve(rawRoot) : process.cwd();
   const resolvedHome = rawHome ? path.resolve(rawHome) : os.homedir();
   const scriptDir = __dirname;
@@ -2103,7 +1999,6 @@ if (require.main === module) {
       projectRoot: resolvedRoot,
       home: resolvedHome,
       scriptDir,
-      codexVersion,
     });
 
     if (json || exitCode !== 0) {
@@ -2127,7 +2022,6 @@ if (require.main === module) {
     noAutofix,
     scriptDir,
     home: resolvedHome,
-    codexVersion,
   });
 
   if (json || exitCode !== 0) {
@@ -2172,11 +2066,4 @@ module.exports = {
   deriveEffectiveRuntime,
   OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
   MULTI_AGENT_V2_BOUNDS_NOTE,
-  // #775: Codex 0.145 version floor and its typed refusal (pure; exported for unit tests).
-  CODEX_MIN_VERSION,
-  compareCodexVersion,
-  parseCodexVersionOutput,
-  codexVersionSupported,
-  resolveCodexVersion,
-  codexVersionUnsupportedRemediation,
 };

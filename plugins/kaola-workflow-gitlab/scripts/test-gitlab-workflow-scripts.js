@@ -34,11 +34,7 @@ const kwHostileGlabShim = path.join(kwSandboxHome, 'unexpected-glab.js');
 fs.writeFileSync(kwHostileGlabShim, 'process.exit(97);\n');
 process.env.KAOLA_GLAB_MOCK_SCRIPT = kwHostileGlabShim;
 
-// #775: no sandbox running this suite has a `codex` binary on PATH, so every
-// kaola-workflow-codex-preflight.js invocation needs a version-floor attestation or it would
-// refuse codex_version_unsupported before any other check runs. Pinned globally (like HOME above)
-// so every spawnSync call in this file that merges ...process.env inherits it automatically.
-process.env.KAOLA_CODEX_VERSION = '0.145.0';
+// #1101: the Codex preflight sets no version floor, so no suite attests a Codex version.
 
 // #775: seed [agents] enabled=true into the shared sandbox HOME too — owner decision D2 means
 // preflight would otherwise refuse codex_multi_agent_v2_required (exit 7) before reaching any of

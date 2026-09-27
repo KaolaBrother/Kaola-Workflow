@@ -355,8 +355,8 @@ for (const rel of KERNELS) {
 }
 for (const rel of ['scripts/kaola-workflow-codex-preflight.js', 'scripts/kaola-workflow-cursor-surface.js']) {
   const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-  const m = text.match(/gpt-6-luna|gpt-5\.6-sol|CODEX_PINNED_\w+|agents\/implementer\.md|listCanonAgents/);
-  if (m) failures.push(`${rel}: still enforces the retired role catalog (${m[0]})`);
+  const m = text.match(/gpt-6-luna|gpt-5\.6-sol|CODEX_PINNED_\w+|agents\/implementer\.md|listCanonAgents|CODEX_MIN_VERSION|codex_version_unsupported|codex_multi_agent_v2_required/);
+  if (m) failures.push(`${rel}: still enforces the retired role catalog or its dispatch-mode gates (${m[0]})`);
 }
 
 if (failures.length) {
