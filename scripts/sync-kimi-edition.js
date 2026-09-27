@@ -139,8 +139,8 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
 }
 
-// The canonical section this transform strips at — the TRIGGER, never a heading it emits (kimi
-// drops the heading with the section and leaves the one-line guidance in its place).
+// Render one canonical command body for Kimi: the adapter section becomes Kimi's own facts, the
+// claim runtime flag and the script resolver become Kimi-native.
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');

@@ -18,6 +18,10 @@
 // This is the opencode-edition twin of test-route-reachability.js + edition-sync
 // --check, scoped to the additive opencode surface (.opencode/ + opencode.json)
 // so it does NOT touch the claude/codex/gitlab/gitea edition machinery.
+//
+// Kaola-Workflow defines no subagent roles on any runtime (#1101): the edition ships no role
+// profiles, its commands carry the native-only dispatch contract plus the OpenCode adapter facts,
+// and every agent-path assertion below is an absence or legacy-cleanup assertion.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -26,7 +30,7 @@ const sync = require('./sync-opencode-edition.js');
 // The adaptive-schema require went with S1-contract and A26: its only consumers here were
 // `effortForProvider` / `contractForProvider` / `CONTRACT_EFFORT_TABLE`, all removed with per-role
 // effort tiering. An import kept "in case" is the same dead-configuration class as the mechanism.
-const reviewerGenerator = require('./generate-agent-profiles.js');
+const facts = require('./runtime-adapter-facts.js');
 
 const REPO = sync.REPO;
 
@@ -58,8 +62,8 @@ const TREE_ROOT = (() => {
   // git owns. A33 below asserts that outcome on disk; this is the same statement, for the probe.
   return path.basename(abs) === '.git' ? path.dirname(abs) : REPO;
 })();
-// OpenCode's documented file-defined-agent discovery directory. OpenCode is a native_only
-// runtime (#1062): the generator emits no `.opencode/agents/` tree at all, and every agent-dir
+// OpenCode's documented file-defined-agent discovery directory. OpenCode is native-only
+// (#1062, #1101): the generator emits no `.opencode/agents/` tree at all, and every agent-dir
 // assertion below is an ABSENCE assertion — the directory is the surface the runtime must not
 // ship.
 const OPENCODE_NATIVE_AGENT_DIR = path.join(TREE_ROOT, '.opencode', 'agents');
@@ -269,36 +273,50 @@ function parseFrontmatterKeys(content) {
 }
 
 // ---------------------------------------------------------------------------
-// A1/A2/A3 — NATIVE-ONLY AGENT ABSENCE (#1062). OpenCode installs no Kaola role profiles by
-// design: the canonical agents/ inventory still exists (it feeds the binding runtimes), and the
-// live property is that NONE of it is rendered onto this runtime — no `.opencode/agents/` tree,
-// no profile for any canonical or retired name, no subagent-mode frontmatter anywhere in the
-// generated tree.
+// A1/A2/A3 — NATIVE-ONLY AGENT ABSENCE (#1062, #1101). Kaola-Workflow defines no subagent roles:
+// the canonical tree has no agents/ inventory, and the live property is that no role surface is
+// rendered onto this runtime — no `.opencode/agents/` tree, no profile for any retired name, no
+// subagent-mode frontmatter anywhere in the generated tree.
 // ---------------------------------------------------------------------------
-const canonAgents = sync.listCanonAgents();
+// The seven role names Kaola retired (#1101), sorted. Older releases shipped OpenCode profiles
+// under these names, so they are the names a generated or installed tree must never carry again.
+const RETIRED_ROLES = Object.freeze([
+  'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
+  'knowledge-lookup', 'tdd-guide',
+]);
+const RETIRED_ROLE_RE = new RegExp('\\b(?:' + RETIRED_ROLES.join('|') + ')\\b');
+const RETIRED_BINDING_RE = /\*\*Roles:\*\*|\*\*Subagent default:\*\*|<role>|^\s*(?:model|effort)\s*[:=]|model_reasoning_effort/m;
+// The two sentences the native-only dispatch contract states on every runtime (#1101).
+const NATIVE_ONLY_STATEMENTS = Object.freeze([
+  'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+  'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+]);
+const OPENCODE_ADAPTER = facts.loadRuntimeAdapters(REPO).runtimes.opencode;
 const genAgentFiles = fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
   ? fs.readdirSync(OPENCODE_NATIVE_AGENT_DIR).filter(f => f.endsWith('.md')) : [];
 assert(genAgentFiles.length === 0,
   'A1 (#1062): sync --write renders NO .opencode/agents/*.md — OpenCode installs no Kaola role '
   + 'profiles — found ' + JSON.stringify(genAgentFiles));
-// A1-roster: the count above compares a just-regenerated tree against the roster that generated
-// it, so it holds however wrong that roster is. The LIVE property is that the generator's roster
-// predicate sees the whole TRACKED canonical inventory — read here independently of the generator.
-{
-  const trackedAgents = fs.readdirSync(path.join(REPO, 'agents'))
-    .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-  assert(trackedAgents.length > 0,
-    'A1-roster: the canonical agents/ inventory is non-empty — an empty enforcement domain would '
-    + 'make every per-agent assertion in this file vacuously true');
-  assert(JSON.stringify([...canonAgents].sort()) === JSON.stringify(trackedAgents),
-    'A1-roster: listCanonAgents() is EXACTLY the tracked agents/*.md inventory — a role the '
-    + 'predicate drops is a role that silently never ships; canonical=' + JSON.stringify(trackedAgents)
-    + ' generator=' + JSON.stringify([...canonAgents].sort()));
+// A1-roster (#1101): there is no role inventory for the generator to render from at all, and the
+// generator no longer offers a roster reader.
+assert(!fs.existsSync(path.join(REPO, 'agents')),
+  'A1-roster (#1101): the canonical tree ships no agents/ role inventory');
+assert(typeof sync.listCanonAgents === 'undefined',
+  'A1-roster (#1101): sync-opencode-edition exposes no role roster reader');
+// A1-adapter (#1101): the OpenCode adapter facts carry only what the host provides — no retired
+// role, profile, or model-binding capability, and delegation guidance of exactly native_routes +
+// availability.
+for (const key of facts.RETIRED_CAPABILITIES) {
+  assert(!Object.prototype.hasOwnProperty.call(OPENCODE_ADAPTER.capabilities, key),
+    'A1-adapter (#1101): the OpenCode adapter carries no retired role capability ' + key);
 }
+assert(JSON.stringify(Object.keys(OPENCODE_ADAPTER.capabilities.delegation_guidance).sort())
+    === JSON.stringify(['availability', 'native_routes']),
+  'A1-adapter: OpenCode delegation guidance is exactly native_routes + availability (no default binding)');
 
-for (const name of canonAgents) {
+for (const name of RETIRED_ROLES) {
   assert(!fs.existsSync(path.join(OPENCODE_NATIVE_AGENT_DIR, name + '.md')),
-    'A2[#1062 ' + name + ']: no opencode profile is rendered for this canonical role');
+    'A2[#1062 ' + name + ']: no opencode profile is rendered for this retired role');
 }
 // The singular carrier retired with the same mechanism; it must not reappear either.
 assert(!fs.existsSync(path.join(TREE_ROOT, '.opencode', 'agent')),
@@ -356,16 +374,42 @@ for (const file of canonCommands) {
   const content = read(rel);
   assert(!/model="\{/.test(content),
     'A5[' + file + ']: no install-time model="{...}" placeholders remain');
-  // A5-native-only (#1062): the delegation block is the native_only form — no Kaola role roster,
-  // no single-binding line, no dispatch card naming a Kaola role.
+  // A5-native-only (#1062, #1101): the delegation block is the native-only form — no Kaola role
+  // roster, no default binding line, no retired role name, no pinned model.
   assert(!content.includes('**Roles:**'),
     'A5[' + file + '] (#1062): no **Roles:** roster — this runtime ships no Kaola profiles');
   assert(!content.includes('**Subagent default:**'),
-    'A5[' + file + '] (#1062): no **Subagent default:** binding line — binding adapters only');
-  for (const role of canonAgents) {
+    'A5[' + file + '] (#1062): no **Subagent default:** binding line');
+  for (const role of RETIRED_ROLES) {
     assert(!content.includes('subagent_type="' + role + '"'),
       'A5[' + file + '] (#1062): no subagent_type="' + role + '" dispatch card');
   }
+  assert(!RETIRED_ROLE_RE.test(content) && !RETIRED_BINDING_RE.test(content),
+    'A5[' + file + '] (#1101): names no retired role and pins no subagent model');
+  // Every dispatch-carrying command states the native-only rule and renders the OpenCode adapter
+  // facts verbatim (children inherit the session model and variant).
+  if (content.includes('<!-- KW-RUNTIME-DISPATCH-START -->')) {
+    const block = content.slice(content.indexOf('<!-- KW-RUNTIME-DISPATCH-START -->'),
+      content.indexOf('<!-- KW-RUNTIME-DISPATCH-END -->'));
+    for (const statement of NATIVE_ONLY_STATEMENTS) {
+      assert(block.includes(statement),
+        'A5[' + file + '] (#1101): the dispatch contract states the native-only rule: ' + statement);
+    }
+    const guidance = OPENCODE_ADAPTER.capabilities.delegation_guidance;
+    assert(block.split(facts.DELEGATION_GUIDANCE_START).length - 1 === 1
+        && block.includes('## Runtime adapter facts')
+        && block.includes('Host: Opencode. If the running host is not Opencode')
+        && block.includes(guidance.native_routes) && block.includes(guidance.availability),
+      'A5[' + file + ']: the dispatch contract carries one OpenCode adapter section with its '
+      + 'native_routes and availability facts verbatim');
+  }
+}
+{
+  const dispatchCarriers = canonCommands.filter(file =>
+    read('.opencode/commands/' + file).includes('<!-- KW-RUNTIME-DISPATCH-START -->'));
+  assert(dispatchCarriers.length > 0,
+    'A5 (#1101): at least one generated command carries the dispatch contract — an empty set would '
+    + 'make the native-only dispatch checks above vacuous');
 }
 
 // ---------------------------------------------------------------------------
@@ -527,9 +571,9 @@ assert(read('opencode.json') === sync.renderOpencodeJson(),
   assert(sync.renderOpencodeJson() === sync.renderNeutralConfig(),
     'A8 (#1062): renderOpencodeJson() is the neutral config — one render, no option surface');
   const cfgText = sync.renderOpencodeJson();
-  for (const role of canonAgents) {
+  for (const role of RETIRED_ROLES) {
     assert(!cfgText.includes('"' + role + '"'),
-      'A8 (#1062): no canonical role name appears in the emitted config — got "' + role + '"');
+      'A8 (#1062): no retired role name appears in the emitted config — got "' + role + '"');
   }
 }
 
@@ -1037,9 +1081,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       ? readdirSync(destAgentDir).filter(f => f.endsWith('.md')) : [];
     assert(destAgents.length === 0,
       'P1 (#1062): project install deploys NO .opencode/agents/*.md — got ' + JSON.stringify(destAgents));
-    for (const a of sync.listCanonAgents()) {
+    for (const a of RETIRED_ROLES) {
       assert(!existsSync(path.join(destAgentDir, a + '.md')),
-        'P1 (#1062): project install deploys no profile for canonical role ' + a);
+        'P1 (#1062): project install deploys no profile for retired role ' + a);
     }
     assert(!existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
       'P1 (#F9): project install deploys no compact plugin');
@@ -1299,8 +1343,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     const crypto = require('crypto');
     const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
     const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
-    // #1062: the canonical catalog is exactly seven roles, and this runtime ships none of them —
-    // every agent assertion below is about legacy cleanup and ownership, not deployment.
+    // The seven retired role names (#1101); this runtime ships none of them — every agent
+    // assertion below is about legacy cleanup and ownership, not deployment.
     const expectedRoles = [
       'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
       'knowledge-lookup', 'tdd-guide',
@@ -1369,11 +1413,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     const generatedSingular = path.join(TREE_ROOT, '.opencode', 'agent');
     const generatedCommandsPlural = path.join(TREE_ROOT, '.opencode', 'commands');
     const generatedCommandsSingular = path.join(TREE_ROOT, '.opencode', 'command');
-    const canonicalRoles = fs.readdirSync(path.join(REPO, 'agents'))
-      .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-    assert(canonicalRoles.length === 7 && sameNames(canonicalRoles, expectedRoles),
-      'N0 (#1033/#1062): the acceptance roster is exactly the 7 canonical roles — got '
-      + JSON.stringify(canonicalRoles));
+    assert(!existsSync(path.join(REPO, 'agents')) && sameNames(expectedRoles, RETIRED_ROLES),
+      'N0 (#1101): the canonical tree ships no agents/ inventory, and the legacy-cleanup fixtures '
+      + 'below plant exactly the seven retired role names');
     assert(mdNames(generatedPlural).length === 0,
       'N1/N2 (#1033/#1062): sync --write generates NO native profiles under .opencode/agents/ — '
       + 'OpenCode installs no Kaola role profiles; got ' + JSON.stringify(mdNames(generatedPlural)));
@@ -2128,9 +2170,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       ? readdirSync(path.join(r.cfg, 'agents')).filter(f => f.endsWith('.md')) : [];
     assert(globalAgents.length === 0,
       'G1 (#1062): --global deploys NO agents at <config>/agents/ — got ' + JSON.stringify(globalAgents));
-    for (const a of sync.listCanonAgents()) {
+    for (const a of RETIRED_ROLES) {
       assert(!existsSync(path.join(r.cfg, 'agents', a + '.md')),
-        'G1 (#1062): --global deploys no profile for canonical role ' + a);
+        'G1 (#1062): --global deploys no profile for retired role ' + a);
     }
     assert(!existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
       'G1: --global deploys no compact plugin');
@@ -2376,9 +2418,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     for (const name of ADAPTIVE_CORE) {
       assert(!hasCmd(r1.dest, name), 'U1[' + name + ']: command removed by --uninstall');
     }
-    for (const a of sync.listCanonAgents()) {
+    for (const a of RETIRED_ROLES) {
       assert(!existsSync(path.join(r1.dest, '.opencode', 'agents', a + '.md')),
-        'U1 (#1062): no profile for canonical role ' + a + ' exists to survive --uninstall');
+        'U1 (#1062): no profile for retired role ' + a + ' exists to survive --uninstall');
     }
     assert(!existsSync(path.join(r1.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
       'U1: hooks plugin removed by --uninstall');
@@ -2553,7 +2595,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // canonical names it deployed, a name retired before the upgrade, and the classes whose
     // custody changed after install.
     fs.mkdirSync(agentDir, { recursive: true });
-    const canonNames = sync.listCanonAgents().map(n => n + '.md').sort();
+    const canonNames = RETIRED_ROLES.map(n => n + '.md').sort();
     const deployedBody = n => '---\nname: ' + n.slice(0, -3) + '\n---\n\nPreviously deployed.\n';
     const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';          // ours, retired
     const editedRecorded = '---\nname: legacy-role\n---\n\nOriginal.\n';           // ours, then user-edited
@@ -3223,7 +3265,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
   // The generator's whole input surface: it renders from agents/ and commands/, byte-copies from
   // hooks/ and templates/opencode/plugins/, and requires its siblings out of scripts/. The
   // green-baseline assertion below is what keeps this list honest — an omission reds there.
-  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates'];
+  const SOURCE_TREES = ['scripts', 'commands', 'hooks', 'templates'];
   const childEnv = Object.assign({}, process.env);
   delete childEnv.KAOLA_OPENCODE_STANDARD_MODEL;
   delete childEnv.KAOLA_OPENCODE_REASONING_MODEL;
@@ -3518,7 +3560,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 
   // The generator's whole input surface. `plugins` carries the gitlab/gitea command sources, so a
   // non-default forge is unrenderable without it; the green-baseline assertions keep the list honest.
-  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates', 'plugins'];
+  const SOURCE_TREES = ['scripts', 'commands', 'hooks', 'templates', 'plugins'];
   const childEnv = Object.assign({}, process.env);
   delete childEnv.KAOLA_OPENCODE_STANDARD_MODEL;
   delete childEnv.KAOLA_OPENCODE_REASONING_MODEL;

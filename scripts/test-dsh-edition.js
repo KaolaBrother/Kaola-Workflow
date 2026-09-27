@@ -8,11 +8,10 @@ const { spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const sync = require('./sync-dsh-edition.js');
-const agents = require('./generate-agent-profiles.js');
+const facts = require('./runtime-adapter-facts.js');
 const manifest = require('./kaola-workflow-install-manifest.js');
 
-const contracts = agents.loadBehaviorContracts(REPO).roles;
-const adapters = agents.loadRuntimeAdapters(REPO);
+const adapters = facts.loadRuntimeAdapters(REPO);
 const dshAdapter = adapters.runtimes.dsh;
 
 assert(dshAdapter, 'runtime-capabilities declares a DSH adapter');
@@ -33,21 +32,30 @@ for (const id of ['dsh_cli', 'dsh_home', 'dsh_instructions', 'dsh_skills', 'dsh_
   assert(ev && ev.kind === 'official_docs' && ev.locator.includes('deepseek-ai/deepseek-harness'),
     'evidence ' + id + ' is an official_docs entry anchored to deepseek-harness');
 }
-assert.strictEqual(dshAdapter.capabilities.role_dispatch, 'native_only',
-  'DSH is native_only — it installs no Kaola role profiles');
-assert.strictEqual(dshAdapter.capabilities.named_roles, false, 'DSH exposes no named Kaola roles');
-assert.strictEqual(dshAdapter.capabilities.deterministic_profiles, false,
-  'DSH renders no deterministic profiles');
-assert.strictEqual(dshAdapter.capabilities.instruction_loading, 'direct',
-  'DSH discovers instructions from user-global AGENTS.md plus the project chain');
-assert.strictEqual(dshAdapter.capabilities.hook_scope, 'none',
-  'DSH edition installs no hook surface');
-assert(dshAdapter.capabilities.delegation_guidance
-  && dshAdapter.capabilities.delegation_guidance.native_routes
-  && dshAdapter.capabilities.delegation_guidance.availability,
-  'DSH adapter declares native_routes + availability delegation guidance');
-assert(!('subagent_default' in (dshAdapter.capabilities.delegation_guidance || {})),
-  'native_only DSH declares NO subagent_default binding');
+// #1101: Kaola-Workflow defines no subagent roles on any runtime. The DSH adapter records only
+// what the host itself provides; no retired role, profile, or model-binding capability survives.
+for (const key of facts.RETIRED_CAPABILITIES) {
+  assert(!Object.prototype.hasOwnProperty.call(dshAdapter.capabilities, key),
+    'DSH adapter carries no retired role capability ' + key);
+}
+assert.deepStrictEqual(Object.keys(dshAdapter.capabilities.delegation_guidance || {}).sort(),
+  ['availability', 'native_routes'],
+  'DSH delegation guidance is exactly native_routes + availability (no default binding)');
+// The rendered adapter section carries the host guard, the native routes, and their availability
+// facts verbatim, and names no retired role, role roster, default binding, or pinned model.
+const RETIRED_ROLE_RE = /\b(?:code-explorer|code-reviewer|doc-updater|implementer|investigator|knowledge-lookup|tdd-guide)\b/;
+const RETIRED_BINDING_RE = /\*\*Roles:\*\*|\*\*Subagent default:\*\*|<role>|^\s*(?:model|effort)\s*[:=]|model_reasoning_effort/m;
+{
+  const section = facts.renderRuntimeDelegationGuidanceForRuntime('dsh');
+  const guidance = dshAdapter.capabilities.delegation_guidance;
+  assert(section.startsWith(facts.DELEGATION_GUIDANCE_START) && section.endsWith(facts.DELEGATION_GUIDANCE_END)
+    && section.includes('## Runtime adapter facts')
+    && section.includes('Host: DSH. If the running host is not DSH')
+    && section.includes(guidance.native_routes) && section.includes(guidance.availability),
+    'DSH adapter section renders the host guard, native_routes, and availability');
+  assert(!RETIRED_ROLE_RE.test(section) && !RETIRED_BINDING_RE.test(section),
+    'DSH adapter section names no retired role and pins no model: ' + section);
+}
 assert.deepStrictEqual(dshAdapter.compact_protocol.events, [],
   'DSH compact protocol installs NO lifecycle events (no hooks)');
 assert.strictEqual(dshAdapter.install_scope.global_discovery, 'supported',
@@ -74,12 +82,10 @@ assert.strictEqual(dshAdapter.install_scope.global_discovery, 'supported',
     'sync-dsh-edition emits exactly .dsh/skills/<name>/SKILL.md files');
 }
 
-assert.strictEqual(agents.ROLES.length, 7, 'the canonical catalog is exactly 7 roles');
 assert.strictEqual(typeof sync.renderAgent, 'undefined',
   'sync-dsh-edition exposes no agent renderer — DSH is native_only');
 assert.strictEqual(typeof sync.renderSkill, 'function',
   'sync-dsh-edition still renders the native command skills');
-void contracts;
 
 const claudeTokens = /(CLAUDE_PLUGIN_ROOT|\.claude\/kaola-workflow|--runtime claude|subagent_type:\s*"<role>")/;
 const commandNames = ['workflow-init', 'workflow-next', 'kaola-workflow-finalize'];
@@ -93,6 +99,8 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
       forge + '/' + name + ' skill contains no Claude path/token');
     assert(!/^\s*(model|subagent|agent|triggers):/mi.test(skill),
       forge + '/' + name + ' skill has no model/subagent/agent/triggers frontmatter');
+    assert(!RETIRED_ROLE_RE.test(skill) && !RETIRED_BINDING_RE.test(skill),
+      forge + '/' + name + ' skill names no retired role and pins no subagent model');
     assert(/^name: /m.test(skill) && /^description: /m.test(skill),
       forge + '/' + name + ' skill carries required DSH name+description frontmatter');
     if (name !== 'workflow-init') {
@@ -100,7 +108,7 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
         && !/KW-RUNTIME-DELEGATION-(?:START|END)/.test(skill)
         && !/Runtime dispatch contract \(always loaded\)/i.test(skill),
         forge + '/' + name + ' skill carries no dispatch block (the always-loaded carrier owns it)');
-      assert(skill.split(agents.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+      assert(skill.split(facts.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
         forge + '/' + name + ' skill carries the always-loaded-carrier pointer exactly once');
     }
     if (name !== 'workflow-init') {
@@ -124,13 +132,13 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
 }
 
 function hostGuardFor(runtime) {
-  const host = typeof agents.runtimeHostName === 'function'
-    ? agents.runtimeHostName(runtime)
+  const host = typeof facts.runtimeHostName === 'function'
+    ? facts.runtimeHostName(runtime)
     : runtime.charAt(0).toUpperCase() + runtime.slice(1);
   return 'Host: ' + host + '. If the running host is not ' + host;
 }
-for (const runtime of agents.RUNTIMES) {
-  const text = agents.renderRuntimeDelegationGuidanceForRuntime(runtime);
+for (const runtime of facts.RUNTIMES) {
+  const text = facts.renderRuntimeDelegationGuidanceForRuntime(runtime);
   assert(text.includes(hostGuardFor(runtime)), 'host guard present for ' + runtime);
 }
 
@@ -186,10 +194,6 @@ try {
   assert(fs.existsSync(path.join(homeRoot, 'AGENTS.md')), 'global AGENTS.md carrier installed');
   assert(!fs.existsSync(path.join(homeRoot, 'agents')),
     'global install deploys NO agents dir — DSH is native_only');
-  for (const role of agents.ROLES) {
-    assert(!fs.existsSync(path.join(homeRoot, 'agents', role + '.md')),
-      'global install deploys no profile for ' + role);
-  }
   for (const forbidden of ['settings.yaml', '.env', '.credentials.yaml', 'hooks.json', 'commands']) {
     assert(!fs.existsSync(path.join(homeRoot, forbidden)),
       'global install writes no user-owned DSH surface ' + forbidden);

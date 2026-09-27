@@ -52,6 +52,7 @@ const TEXT_VIOLATIONS = Object.freeze([
   ['pinned subagent model', /\bpins?\b[^\n]{0,80}\bmodel\b|\bmodel\s*[:=]\s*["'`]?(?:sonnet|opus|haiku|fable|inherit|gpt-[\w.-]+|grok-[\w.-]+)/i],
   ['pinned subagent effort', /model_reasoning_effort|\beffort\s*[:=]\s*["'`]?(?:low|medium|high|xhigh|max)\b/i],
   ['Kaola-owned role profile', /installed Kaola profile|Kaola role profile|named Kaola role|Kaola-installed role/i],
+  ['named-role fallback', /exact named role|named role's identity/i],
 ]);
 
 function textViolations(label, text) {
@@ -152,6 +153,7 @@ mustFlag(textViolations('m', 'model = "gpt-6-luna"'), 'pinned Codex model');
 mustFlag(textViolations('m', 'model_reasoning_effort = "max"'), 'pinned Codex effort');
 mustFlag(textViolations('m', 'Every generated agent pins grok-4.7 as its model.'), 'pinned Grok model');
 mustFlag(textViolations('m', 'installed Kaola profiles carry the tool boundary'), 'Kaola profile reference');
+mustFlag(textViolations('m', 'The absence of an exact named role is not proof that dispatch is unavailable.'), 'named-role fallback');
 mustFlag(dispatchBlockViolations('m', '<!-- KW-RUNTIME-DISPATCH-START -->\n## Delegation\n'), 'dispatch block without the native-only rule');
 assert.deepStrictEqual(dispatchBlockViolations('m',
   '<!-- KW-RUNTIME-DISPATCH-START -->\n' + NATIVE_ONLY_STATEMENTS.join('\n')), [],
@@ -223,8 +225,9 @@ for (const row of [...routing.GENERATED_SURFACES, ...routing.RUNTIME_RECOVERY_SU
 for (const f of fs.readdirSync(path.join(ROOT, 'templates', 'routing')).filter(f => f.endsWith('.md'))) {
   surfaces.set('templates/routing/' + f, fs.readFileSync(path.join(ROOT, 'templates', 'routing', f), 'utf8'));
 }
-surfaces.set('templates/global/kaola-workflow-global.md',
-  fs.readFileSync(path.join(ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8'));
+for (const rel of ['templates/global/kaola-workflow-global.md', 'templates/axioms.md']) {
+  surfaces.set(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+}
 const RECOVERY_RUNTIMES = ['claude', 'codex', 'grok', 'cursor', 'devin', 'droid', 'dsh', 'zcode'];
 for (const runtime of RECOVERY_RUNTIMES) {
   for (const forge of routing.FORGES) {

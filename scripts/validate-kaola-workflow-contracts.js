@@ -353,97 +353,43 @@ assert(!exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`),
 // mechanism, but that is pinned where it is actually produced/consumed, not in these reviewer role
 // prompts. No pin on the three reviewer `.toml` bodies' CURRENT wording replaces it: assertConcept
 // is norm+includes, so it reds on an equivalent rephrasing — a new wording gate, not a behavior
-// check. The structural authority (generate-agent-profiles.js --check, validate-vendored-agents.js:
-// render == authority, hash-bound) and native-host acceptance (mission 14) already carry this
-// responsibility.
+// check. #1101 retired the reviewer role bodies themselves.
 
-// issue #332: source agent-profile schema wall. require() the installer (the #325
-// require.main guard means require() never runs main()) and assert its source-tree
-// validator passes — every agents/*.toml has a matching non-empty top-level `name`,
-// a description, valid nickname_candidates, inherited runtime-key omission plus the single subagent binding,
-// a non-blank developer_instructions, every
-// config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
-// This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
-// new role file (the issue-scout class) unregistered.
-const codexInstaller = require(path.join(root, pluginRoot, 'scripts', 'install-codex-agent-profiles.js'));
-const codexProfiles = codexInstaller.validateSourceProfiles(path.join(root, pluginRoot));
-assert(codexProfiles.ok,
-  'Codex source agent profiles fail schema validation:\n  - ' + codexProfiles.errors.join('\n  - '));
+// #1101: Codex ships no role profile. The three plugins carry no agents/ directory and no
+// config/agents.toml, the kernel carries no pinned role policy, and the preflight reports
+// Kaola-owned leftovers instead of validating profiles.
 const codexSchema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
 const codexPreflight = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js'));
-const sorted = values => [...values].sort();
-assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_ROLES)),
-  'Codex installer pinned-role policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_ROLES)),
-  'Codex preflight pinned-role policy must match adaptive schema');
-assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-6-luna'
-    && codexSchema.CODEX_PINNED_EFFORT === 'max',
-  'Codex pinned subagent binding must be gpt-6-luna/max');
 for (const edition of ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']) {
-  const dir = path.join(root, 'plugins', edition, 'agents');
-  for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort()) {
-    const text = fs.readFileSync(path.join(dir, file), 'utf8');
-    const top = codexSchema.profileTopLevelShape(text).outside;
-    assert((top.match(/^model\s*=\s*"gpt-6-luna"\s*$/gm) || []).length === 1
-        && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
-      'plugins/' + edition + '/agents/' + file
-        + ' must carry exactly one model = "gpt-6-luna" and one model_reasoning_effort = "max" line');
-    const role = file.slice(0, -5);
-    assert(codexSchema.validateProfileText(text, role).length === 0,
-      'plugins/' + edition + '/agents/' + file + ' fails kernel profile validation: '
-        + codexSchema.validateProfileText(text, role).join('; '));
-  }
+  assert(!exists('plugins/' + edition + '/agents'), 'plugins/' + edition + '/agents must stay retired (#1101)');
+  assert(!exists('plugins/' + edition + '/config/agents.toml'),
+    'plugins/' + edition + '/config/agents.toml must stay retired (#1101)');
 }
-assert(codexInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
-    && codexInstaller.CODEX_STANDARD_EFFORT === 'medium'
-    && codexPreflight.CODEX_STANDARD_MODEL === codexInstaller.CODEX_STANDARD_MODEL
-    && codexPreflight.CODEX_STANDARD_EFFORT === codexInstaller.CODEX_STANDARD_EFFORT,
-  'Codex installer/preflight historical standard migration pair must be gpt-5.6-sol/medium');
-assert(codexInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
-    && codexInstaller.CODEX_REASONING_EFFORT === 'xhigh'
-    && codexPreflight.CODEX_REASONING_MODEL === codexInstaller.CODEX_REASONING_MODEL
-    && codexPreflight.CODEX_REASONING_EFFORT === codexInstaller.CODEX_REASONING_EFFORT,
-  'Codex installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, '.codex-plugin');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'isCodexPluginScriptDir');
-
-// issue #332 (OWNER comment): README Codex role-catalog contract. Derive the role set from
-// config/agents.toml, then pin README to it: the role-list block must equal the derived role set,
-// and the retired `docs-lookup` must appear nowhere in that block. #451 retired the per-role
-// reasoning-effort table, and #581 routes planner effort through per-spawn dispatch metadata instead
-// of a profile matrix, so there is no effort row to pin.
-function deriveCodexRoleCatalog() {
-  const templateText = read(`${pluginRoot}/config/agents.toml`);
-  const roles = [];
-  const re = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let m;
-  // The <role>-max variants remain retired. Base profiles pin the single subagent binding;
-  // the catalog derives the role SET only.
-  while ((m = re.exec(templateText)) !== null) {
-    roles.push(m[1]);
-  }
-  return { roles };
+for (const retired of ['CODEX_PINNED_ROLES', 'CODEX_PINNED_MODEL', 'CODEX_PINNED_EFFORT', 'validateProfileText']) {
+  assert(!(retired in codexSchema), 'the kernel must not export ' + retired + ' (#1101)');
+  assert(!(retired in codexPreflight), 'the Codex preflight must not export ' + retired + ' (#1101)');
 }
+assert(Array.isArray(codexSchema.RETIRED_PROFILE_FILES) && codexSchema.RETIRED_PROFILE_FILES.length === 24
+    && codexSchema.MANIFEST_BASENAME === '.kaola-managed-profiles.json',
+  'the kernel keeps the 24-name retired profile inventory and the ownership manifest basename');
+assert(codexPreflight.RETIRED_ROLE_RESIDUE_STATUS === 'retired_role_residue'
+    && typeof codexPreflight.inspectRetiredRoleResidue === 'function',
+  'the Codex preflight reports retired-role residue');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'loadCodexSessionProof');
 
-const { roles: catalogRoles } = deriveCodexRoleCatalog();
-assert(catalogRoles.length > 0 && !catalogRoles.includes('docs-lookup'),
-  'the derived Codex role catalog is non-empty and omits the retired docs-lookup role');
-
-// The single subagent binding and runtime-native defaults remain adapter metadata. The workflow
-// policy must not turn them into a fixed per-spawn model/effort pair or reviewer escalation rule.
+// The dispatch contract hands model and effort to the host; the workflow policy must not turn them
+// into a fixed per-spawn model/effort pair or reviewer escalation rule.
 const routingSkels = [
   'templates/routing/next.skeleton.md',
   'templates/routing/finalize.skeleton.md',
 ];
 const dispatchContract = read('templates/routing/dispatch-contract.md');
 const normalizedDispatchContract = norm(dispatchContract);
+const HOST_DECIDES = /let its own defaults, limits, and permissions[\s\S]*decide model, effort/i;
 assert(/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
   'shared dispatch contract must carry the execution-economics judgment');
-assert(/runtime-native defaults/i.test(normalizedDispatchContract)
-    || /subagent default binding[\s\S]*task-sensitive override/i.test(normalizedDispatchContract),
-  'shared dispatch contract must leave model/effort selection to runtime metadata or task context');
+assert(HOST_DECIDES.test(normalizedDispatchContract),
+  'shared dispatch contract must leave model/effort selection to the host and the user');
 for (const rel of routingSkels) {
   const text = read(rel);
   assert((text.match(/<!-- SLOT:runtime-dispatch-common -->/g) || []).length === 1,
@@ -457,47 +403,8 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   const rendered = norm(read(rel));
   assert(/dispatch when it materially reduces main-context residue/i.test(rendered),
     rel + ' must render the shared execution-economics judgment');
-  assert(/runtime-native defaults/i.test(rendered)
-      || /subagent default binding[\s\S]*task-sensitive override/i.test(rendered),
-    rel + ' must render the shared model-selection rule');
+  assert(HOST_DECIDES.test(rendered), rel + ' must render the host-owned model-selection rule');
 }
-// #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
-// exactly the agent profiles present in agents/ — both directions. A profile copied without its
-// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
-// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
-{
-  const configNames = new Set();
-  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let cm;
-  while ((cm = reCfg.exec(read(`${pluginRoot}/config/agents.toml`))) !== null) configNames.add(cm[1]);
-  const dirNames = new Set(
-    fs.readdirSync(path.join(root, pluginRoot, 'agents'))
-      .filter(f => f.endsWith('.toml'))
-      .map(f => f.slice(0, -5))
-  );
-  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
-  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
-  assert(missingTables.length === 0 && danglingTables.length === 0,
-    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
-    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
-    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
-}
-
-// #451 (supersedes #405): the <role>-max xhigh effort-variant matrix is RETIRED. The per-node tier
-// now drives a session reasoning-effort signal (the dispatch descriptor), so NO generated -max
-// profile files and NO [agents.<role>-max] tables may survive in the source tree. Forbid both —
-// a leftover -max artifact (a bad merge, a stale generator) reds this chain.
-{
-  const strayMaxFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
-    .filter(f => f.endsWith('-max.toml'))
-    .sort();
-  assert(strayMaxFiles.length === 0,
-    '#451: retired -max profile file(s) must be removed from agents/: ' + strayMaxFiles.join(', '));
-  const maxTables = (read(`${pluginRoot}/config/agents.toml`).match(/^\[agents\.[a-z0-9-]+-max\]/gm) || []);
-  assert(maxTables.length === 0,
-    '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
-}
-
 
 // #400: registry-driven route-reachability contract. Every route/skill target a claim/startup/resume
 // receipt can emit MUST resolve to an installed surface — the Codex dead zone (#400) was the schema
@@ -508,63 +415,28 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
 // The claim no longer emits an executable next-skill target. Generated skill surfaces are checked
 // by their own routing/edition parity generators; workflow state remains claim/sink/liveness data.
 
-// #1033: the universal behavior authority and seven runtime adapters must be checked by the
+// #1033 / #1101: runtime architecture acceptance and the native-only guard run in the
 // producer-selected chain.
 {
   const pkg = JSON.parse(read('package.json'));
   const claudeChain = (pkg.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('generate-agent-profiles.js --check'),
-    '#1033: scripts."test:kaola-workflow:claude" must check generated agent profiles');
+  assert(claudeChain.includes('test-issue-1101-native-only.js'),
+    '#1101: scripts."test:kaola-workflow:claude" must run the native-only guard');
   assert(claudeChain.includes('test-runtime-agent-architecture.js'),
     '#1033: scripts."test:kaola-workflow:claude" must run runtime architecture acceptance');
 }
 
-
-// All-role repository/install wall. Generated sources, all three Codex installer
-// editions, the root/plugin-cache preflight, validation-runner distribution, and profile
-// lifecycle APIs must agree before any installed-scope compliance claim can be made.
+// Installed-copy wall: the three Codex installer editions, the root and plugin preflights, and the
+// validation runner stay byte-identical, and the install manifest ships the runner.
 {
-  const generator = require('./generate-agent-profiles.js');
-  const generatedErrors = generator.checkGeneratedProfiles(root);
-  assert(generatedErrors.length === 0,
-    'generated runtime-native agent profiles must be current: ' + generatedErrors.join('; '));
-
   const editionRoots = [
     'plugins/kaola-workflow',
     'plugins/kaola-workflow-gitlab',
     'plugins/kaola-workflow-gitea',
   ];
-  const installerFiles = [];
-  for (const edition of editionRoots) {
-    const installerFile = edition + '/scripts/install-codex-agent-profiles.js';
-    installerFiles.push(read(installerFile));
-    const installer = require(path.join(root, installerFile));
-    const sourceCheck = installer.validateSourceProfiles(path.join(root, edition));
-    assert(sourceCheck.ok, edition + ' agent profile source contract failed: ' + sourceCheck.errors.join('; '));
-    assert(sourceCheck.repair === null, edition + ' current source must not carry a repair command');
-    const forge = edition === 'plugins/kaola-workflow'
-      ? 'github'
-      : edition.replace('plugins/kaola-workflow-', '');
-    for (const role of generator.ROLES) {
-      const entry = sourceCheck.entries.find(candidate => candidate.role === role);
-      assert(entry && entry.sourceText,
-        edition + ' must expose generated agent source for ' + role);
-      const sidecar = generator.manifestProfileEntry('codex', role, root, 'codex-' + forge);
-      assert(generator.sha256(entry.sourceText) === sidecar.resolved_profile_sha256,
-        edition + ' profile source must match its generated manifest sidecar digest for ' + role);
-      assert(/^[0-9a-f]{64}$/.test(sidecar.behavior_sha256)
-        && /^[0-9a-f]{64}$/.test(sidecar.adapter_capabilities_sha256)
-        && /^[0-9a-f]{64}$/.test(sidecar.resolved_profile_sha256),
-      edition + ' must bind behavior, adapter, and resolved profile digests for ' + role);
-      assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
-        edition + ' must not carry receipt hashes in agent-visible text for ' + role);
-      assert(/^model\s*=\s*"gpt-6-luna"\s*$/m.test(entry.sourceText)
-        && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
-        edition + ' pinned profiles must carry the gpt-6-luna/max subagent binding');
-    }
-  }
+  const installerFiles = editionRoots.map(edition => read(edition + '/scripts/install-codex-agent-profiles.js'));
   assert(new Set(installerFiles).size === 1,
-    'all three Codex profile installers must remain byte-identical');
+    'all three Codex installers must remain byte-identical');
 
   const preflightFiles = [
     'scripts/kaola-workflow-codex-preflight.js',
@@ -572,10 +444,6 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   ].map(read);
   assert(new Set(preflightFiles).size === 1,
     'root and all three Codex preflights must remain byte-identical');
-  assert(preflightFiles[0].includes("scope: 'repository'")
-    && preflightFiles[0].includes("scope: 'plugin_cache'")
-    && preflightFiles[0].includes('pluginCacheStale'),
-  'Codex doctor must fail closed over repository and read-only plugin-cache profile drift');
 
   const runnerFiles = [
     'scripts/kaola-workflow-validation-runner.js',
@@ -588,15 +456,9 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
     assert(manifest.supportScripts(forge).includes('kaola-workflow-validation-runner.js'),
       'install manifest must ship the validation runner for ' + forge);
   }
-
-  for (const edition of editionRoots) {
-  }
-  // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME Codex paths by the root
-  // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
-  // (each also pins the contract fields) — in the always-selected claude chain.
 }
 
-// PROVENANCE_BAN: Codex prompt surfaces (agents/*.toml, skills/*/SKILL.md) must not embed
+// PROVENANCE_BAN: Codex prompt surfaces (skills/*/SKILL.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
 // docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
@@ -604,14 +466,11 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
 // See docs/conventions.md.
 {
   const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
-  const codexAgentFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
-    .filter(f => f.endsWith('.toml'))
-    .map(f => pluginRoot + '/agents/' + f);
   const codexSkillFiles = fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
     .filter(e => e.isDirectory())
     .map(e => pluginRoot + '/skills/' + e.name + '/SKILL.md')
     .filter(f => exists(f));
-  for (const rel of [...codexAgentFiles, ...codexSkillFiles]) {
+  for (const rel of codexSkillFiles) {
     const lines = read(rel).split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(PROVENANCE_BAN);
@@ -625,8 +484,7 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
 }
 
 // B2 model-noun purge (#609, the codex twin of #537; #610 renamed the plan vocabulary to neutral
-// tokens with legacy aliases): Codex prompt surfaces (agents/*.toml, config/agents.toml,
-// skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if they were this
+// tokens with legacy aliases): Codex prompt surfaces (skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if they were this
 // runtime's models ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku", "opus ~= 5x
 // sonnet"). Those read as nonsense on the Codex runtime, where the plan tokens translate at
 // dispatch to a per-spawn reasoning_effort. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS
@@ -641,18 +499,11 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
     .replace(/\{opus\|sonnet\}/g, '')            // the closed model-column set literal (rank tokens)
     .replace(/model:\s*(?:opus|sonnet)\b/g, '')  // the `model: opus`/`model: sonnet` effort-map tokens
     .replace(/`opus`\/`sonnet`/g, '');            // #610: the legacy-alias-pair mention
-  const b2AgentFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
-    .filter(f => f.endsWith('.toml'))
-    .map(f => pluginRoot + '/agents/' + f);
   const b2SkillFiles = fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
     .filter(e => e.isDirectory())
     .map(e => pluginRoot + '/skills/' + e.name + '/SKILL.md')
     .filter(f => exists(f));
-  const b2Surfaces = [
-    ...b2AgentFiles,
-    ...(exists(`${pluginRoot}/config/agents.toml`) ? [`${pluginRoot}/config/agents.toml`] : []),
-    ...b2SkillFiles
-  ];
+  const b2Surfaces = [...b2SkillFiles];
   for (const rel of b2Surfaces) {
     const lines = read(rel).split('\n');
     for (let i = 0; i < lines.length; i++) {

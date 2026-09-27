@@ -18,9 +18,12 @@
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
 const { GENERATED_SURFACES, RUNTIME_RECOVERY_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
 const ALL_GENERATED_SURFACES = [...GENERATED_SURFACES, ...RUNTIME_RECOVERY_SURFACES];
-// ONE list, two consumers: the all-role generator owns the retired-vocabulary ban and the routing
-// surfaces are held to the same bytes rather than to a second copy that could drift from it.
-const { ADAPTER_SOURCE, BEHAVIOR_SOURCE, RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
+// The runtime adapter facts own the declared data source slots.js renders the adapter section from.
+const { ADAPTER_SOURCE } = require('./runtime-adapter-facts.js');
+// Retired ADR 0017 vocabulary. It used to live in the role-profile generator (retired by #1101,
+// which removed the last other consumer), so the routing surfaces now hold the list here, copied
+// verbatim from that generator.
+const RETIRED_VOCABULARY_BAN = /\bnode-id\b|\bgate_effect\b|\bgate_mode\b|\bgate_aggregation\b|\bchange_gate\b|\breplicated_majority\b|\bpartitioned_all\b|\bexecution_status\b|\bclaim_outcome\b|\breview_scope_expanded\b|\bdomain_outcome:/;
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES, GLOBAL_WORKFLOW_CONTRACT_SOURCE } = require('../templates/routing/slots.js');
 const fs = require('fs');
@@ -49,25 +52,39 @@ function eq(actual, expected, msg) {
   assert(actual === expected, `${msg}\n    expected: ${JSON.stringify(expected)}\n    actual:   ${JSON.stringify(actual)}`);
 }
 
-const behaviorContracts = JSON.parse(fs.readFileSync(
-  path.join(__dirname, '..', 'templates', 'agents', 'behavior-contracts.json'), 'utf8'));
-const allRoles = Object.keys(behaviorContracts.roles);
+// The roles #1101 retired, read from the provenance history (the only place they are still named).
+const provenance = JSON.parse(fs.readFileSync(
+  path.join(__dirname, '..', 'templates', 'agents', 'provenance.json'), 'utf8'));
+const retiredRoles = Object.keys(provenance.retired_roles || {});
 const normalizeProse = text => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-const roleMentions = text => allRoles.filter(role =>
+const roleMentions = text => retiredRoles.filter(role =>
   new RegExp(`(?:^|[^a-z0-9-])${role}(?:$|[^a-z0-9-])`).test(String(text || '').toLowerCase()));
 const retiredRunWideInline = text =>
   /if\s+the\s+runtime\s+cannot\s+spawn\s+(?:an?\s+)?role\s+agent[\s\S]{0,100}?keep\s+the\s+work\s+inline/i.test(text);
 
-// #1062: a binding surface carries one `**Roles:**` line naming exactly the 7-role roster and one
-// `**Subagent default:**` line — the tier-partitioned rosters are gone.
-function bindingRosterGaps(text) {
-  const prose = normalizeProse(text);
-  const roster = prose.match(/\*\*roles:\*\*\s*(.*?)(?=\.\s|$)/);
+// #1101 (ADR 0029): Kaola-Workflow defines no subagent roles. A next/finalize surface carries the
+// native-only dispatch block — both native-only statements and the runtime adapter facts — and
+// no `**Roles:**` roster, no `**Subagent default:**` binding, and no retired role name.
+const NATIVE_ONLY_STATEMENTS = [
+  'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+  'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+];
+function nativeOnlyDispatchGaps(text) {
+  const body = String(text || '');
+  const prose = normalizeProse(body);
   const gaps = [];
-  if (!roster || JSON.stringify(roleMentions(roster[1]).sort()) !== JSON.stringify([...allRoles].sort())) {
-    gaps.push('roles-line');
+  if (!body.includes('<!-- KW-RUNTIME-DISPATCH-START -->') || !body.includes('<!-- KW-RUNTIME-DISPATCH-END -->')) {
+    gaps.push('dispatch-block');
   }
-  if (!/\*\*subagent default:\*\*/.test(prose)) gaps.push('subagent-default-line');
+  if (!body.includes('<!-- KW-RUNTIME-DELEGATION-START -->') || !/## Runtime adapter facts/.test(body)) {
+    gaps.push('adapter-facts');
+  }
+  for (const statement of NATIVE_ONLY_STATEMENTS) {
+    if (!prose.includes(normalizeProse(statement))) gaps.push('native-only-statement');
+  }
+  if (/\*\*roles:\*\*/.test(prose)) gaps.push('retired-roles-line');
+  if (/\*\*subagent default:\*\*/.test(prose)) gaps.push('retired-subagent-default-line');
+  for (const role of roleMentions(body)) gaps.push(`retired-role:${role}`);
   return gaps;
 }
 
@@ -365,9 +382,9 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
         assert(rendered.includes(token), `real ${topic} token ${token} propagates to ${row.path}`);
       }
       if (topic === 'next' || topic === 'finalize') {
-        const rosterGaps = bindingRosterGaps(rendered);
-        assert(rosterGaps.length === 0,
-          `real ${topic} behavior-authority role roster propagates to ${row.path} — missing ${JSON.stringify(rosterGaps)}`);
+        const nativeGaps = nativeOnlyDispatchGaps(rendered);
+        assert(nativeGaps.length === 0,
+          `real ${topic} native-only dispatch contract propagates to ${row.path} — gaps ${JSON.stringify(nativeGaps)}`);
       }
       if (topic === 'next') {
         assert(!retiredRunWideInline(rendered),
@@ -382,6 +399,26 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   assert(retiredRunWideInline(itemLocalBoundary
     + ' If the runtime cannot spawn a role agent, keep the work inline and say so.'),
   'real next fallback mutation RED detects the retired broad sentence appended below valid item-local guidance');
+
+  // Mutation proof for the native-only detector, against the real next render held in memory:
+  // each reintroduction of the retired role layer, and each loss of the native-only rule, is seen.
+  const nextRow = GENERATED_SURFACES.find(r => r.topic === 'next' && r.surface_type === 'command' && r.forge === 'github');
+  const nextRendered = renderSkeleton(loadSkeleton(nextRow.skeleton, nextRow.topic),
+    { surface_type: nextRow.surface_type, forge: nextRow.forge }, ir);
+  eq(nativeOnlyDispatchGaps(nextRendered).length, 0, 'native-only mutation (GREEN): the real next render has no gap');
+  assert(retiredRoles.length === 7, `native-only: provenance names the seven retired roles — got ${retiredRoles.length}`);
+  const mutations = [
+    ['a reintroduced roster', t => t.replace('## Runtime adapter facts', '## Runtime adapter facts\n\n**Roles:** `a`, `b`.'), 'retired-roles-line'],
+    ['a reintroduced subagent default', t => t.replace('## Runtime adapter facts', '## Runtime adapter facts\n\n**Subagent default:** sonnet.'), 'retired-subagent-default-line'],
+    ['a reintroduced role name', t => t + '\nDispatch the tdd-guide first.\n', 'retired-role:tdd-guide'],
+    ['a dropped native-only statement', t => t.split(NATIVE_ONLY_STATEMENTS[1]).join(''), 'native-only-statement'],
+    ['a dropped adapter section', t => t.split('## Runtime adapter facts').join('## Adapter'), 'adapter-facts'],
+  ];
+  for (const [what, mutate, gap] of mutations) {
+    const mutated = mutate(nextRendered);
+    assert(mutated !== nextRendered, `native-only mutation: ${what} actually changed the render`);
+    assert(nativeOnlyDispatchGaps(mutated).includes(gap), `native-only mutation (RED): ${what} is detected as ${gap}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +873,6 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // slots.js now renders runtime-native next/finalize guidance from this declared data source.
     // It is not visible in Node's require graph, so copy the path exported by its owning module.
     copy(ADAPTER_SOURCE);
-    copy(BEHAVIOR_SOURCE);
     copy(path.relative(repo, GLOBAL_WORKFLOW_CONTRACT_SOURCE));
     copy(path.join('templates', 'routing', 'dispatch-contract.md'));
     for (const skeleton of new Set(ALL_GENERATED_SURFACES.map(r => r.skeleton))) {

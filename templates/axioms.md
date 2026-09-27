@@ -13,8 +13,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 **Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
 **Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
-choice never establishes a run-wide default. The absence of an exact named role is not proof that
-all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+choice never establishes a run-wide default. Keep one owner for the current cohesive production
 surface when handoff and integration cost exceed the benefit, but that scope does not absorb
 independent research, test authorship, documentation, or review items. Dispatch when it materially
 reduces main-context residue, lets a clean context check what your own cannot, or enables genuinely

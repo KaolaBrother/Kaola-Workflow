@@ -15,11 +15,6 @@ const path = require('path');
 
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
-for (const retired of ['DEFAULT_AGENT_MODELS', 'resolveAgentModel', 'formatAgentArgument',
-  'extractFrontmatterModel', 'isCodexPluginScriptDir']) {
-  assert.ok(!(retired in resolver), `the Codex-session module no longer exports ${retired}`);
-}
-
 assert.strictEqual(typeof resolver.loadCodexSessionProof, 'function', 'loadCodexSessionProof is exported');
 const tmpSessionHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-session-proof-'));
 try {
