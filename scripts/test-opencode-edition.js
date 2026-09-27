@@ -49,6 +49,15 @@ const REPO = sync.REPO;
 // checkout, which is how the installers run), the tree belongs beside the script.
 // ---------------------------------------------------------------------------
 const TREE_ROOT = (() => {
+  // An explicit isolated root bound to THIS checkout wins, as in the generators: both
+  // KAOLA_EDITION_TREE_ROOT and KAOLA_EDITION_TREE_FOR absolute, the latter naming REPO.
+  {
+    const root = process.env.KAOLA_EDITION_TREE_ROOT;
+    const forRepo = process.env.KAOLA_EDITION_TREE_FOR;
+    const real = p => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
+    if (root && forRepo && path.isAbsolute(root) && path.isAbsolute(forRepo)
+        && real(forRepo) === real(REPO)) return path.resolve(root);
+  }
   const { spawnSync } = require('child_process');
   // spawn-class: environment
   const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: REPO, encoding: 'utf8' });
@@ -1570,12 +1579,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       fs.writeFileSync(path.join(singular, 'notes.txt'), 'keep this note\n');
     };
 
-    // Native ownership admission must classify topology before any deployment mutation. A
-    // directory or FIFO at the manifest name is not an absent manifest; a directory at a
-    // same-name profile is not an absent profile. Exercise both project and global roots and
-    // fingerprint every scoped tree so copying the plugin (or any other runtime surface) before
-    // refusal cannot masquerade as a safe failure. FIFO processes carry a hard timeout, while the
-    // oracle uses lstat only and therefore never opens the pipe.
+    // Native ownership admission still classifies topology before touching anything: a directory
+    // or FIFO at the manifest name is not an absent manifest, and a directory at a same-name
+    // profile is not an absent profile. Since #1101 (H9) the installer no longer deploys agents,
+    // so such a carrier is not a reason to refuse the install: it is reported as a preserved
+    // non_regular carrier, left byte- and topology-intact (never followed or opened), and the
+    // install continues. Before #1101 the install refused before any mutation. FIFO processes
+    // carry a hard timeout, while the oracle uses lstat only and therefore never opens the pipe.
     for (const scope of ['project', 'global']) {
       for (const carrier of ['manifest-directory', 'manifest-fifo', 'profile-directory']) {
         const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-carrier-home-'));
@@ -1619,11 +1629,18 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
             && textEquals(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n'),
             label + ' (#1033/#1062): the unrecorded role-named directory is preserved byte-intact');
         } else {
-          assert(!result.error && !result.ok,
-            label + ' (#1033/R2): install refuses the non-regular native ownership carrier without blocking (status '
-            + result.status + ', error ' + (result.error && result.error.code) + ')');
-          assert(after === before,
-            label + ' (#1033/R2): refusal happens before any agent, plugin, command, hook, config, or runtime mutation');
+          assert(!result.error && result.ok,
+            label + ' (#1033/R2, #1101 H9): install continues over the non-regular native ownership carrier '
+            + 'without blocking (status ' + result.status + ', error ' + (result.error && result.error.code) + ')');
+          assert(carrier === 'manifest-directory'
+            ? fs.lstatSync(manifest).isDirectory() && textEquals(path.join(manifest, 'OWNER_SENTINEL'), 'owner manifest directory\n')
+            : fs.lstatSync(manifest).isFIFO(),
+            label + ' (#1033/R2, #1101 H9): the non-regular carrier keeps its topology and bytes');
+          assert((result.stdout + result.stderr).includes(
+            'Preserved retired Kaola-Workflow agent (non_regular): ' + manifest),
+            label + ' (#1101 H9): the non-regular carrier is reported as preserved non_regular');
+          assert(after !== before,
+            label + ' (#1101 H9): the install proceeded (its command/plugin surfaces were written)');
         }
         try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
         try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
@@ -1632,12 +1649,12 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     }
 
     // A previous plural manifest may outlive one of the profiles it recorded. Retirement does
-    // not weaken the topology boundary: a basename absent from SOURCE_AGENT_DIR is still an
-    // owner-selected carrier when it is a symlink or another non-regular node. Exercise the real
-    // project and global installers, and fingerprint the whole scoped world so refusal must happen
-    // before current agents, commands, hooks, plugins, config, or the manifest itself can change.
-    // The hash-equal symlink is the credible near miss: following it makes the old ownership hash
-    // appear valid even though the link and its external target are not Kaola-owned files.
+    // not weaken the topology boundary: a recorded basename is still an owner-selected carrier
+    // when it is a symlink or another non-regular node, so it is never followed, removed, or
+    // replaced. The hash-equal symlink is the credible near miss: following it makes the old
+    // ownership hash appear valid even though the link and its external target are not
+    // Kaola-owned files. Since #1101 (H9) the install reports the carrier as preserved
+    // non_regular and continues instead of refusing before any mutation.
     const retiredPluralProfile = '__kw-retired-native-profile.md';
     assert(!existsSync(path.join(generatedPlural, retiredPluralProfile)),
       'N10-retired-plural fixture: retired basename is absent from SOURCE_AGENT_DIR');
@@ -1684,20 +1701,22 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
           : runInstaller([], { home, dest, timeout: 10000 });
         const after = carrierWorldFingerprint(roots);
         const label = 'N10-retired-plural-' + scope + '-' + carrier;
-        assert(!result.error && !result.ok,
-          label + ' (#1033/R7): install refuses a manifest-recorded retired non-regular profile '
-            + 'without blocking (status ' + result.status + ', error '
+        assert(!result.error && result.ok,
+          label + ' (#1033/R7, #1101 H9): install continues over a manifest-recorded retired '
+            + 'non-regular profile without blocking (status ' + result.status + ', error '
             + (result.error && result.error.code) + ')');
-        assert(after === before,
-          label + ' (#1033/R7): refusal preserves carrier topology and happens before any '
-            + 'agent, plugin, command, hook, config, manifest, or external-target mutation');
+        assert((result.stdout + result.stderr).includes(
+          'Preserved retired Kaola-Workflow agent (non_regular): ' + profile),
+          label + ' (#1101 H9): the retired non-regular profile is reported as preserved non_regular');
+        assert(after !== before,
+          label + ' (#1101 H9): the install proceeded (its command/plugin surfaces were written)');
         if (carrier === 'hash-equal-symlink') {
           assert(sameSymlink(profile, target) && readFileSync(target).equals(retiredBytes),
-            label + ' (#1033/R7): refusal preserves the retired link and its hash-equal external target');
+            label + ' (#1033/R7): the retired link and its hash-equal external target are preserved');
         } else {
           assert(fs.lstatSync(profile).isDirectory()
             && textEquals(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n'),
-          label + ' (#1033/R7): refusal preserves the retired non-regular carrier topology and bytes');
+          label + ' (#1033/R7): the retired non-regular carrier keeps its topology and bytes');
         }
         try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
         try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
@@ -2617,7 +2636,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     assert(r2.ok, 'R2: reinstall exits 0 (got ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
     assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
       'R2 (#795): a retired agent recorded in the previous manifest is removed on reinstall');
-    assert(/Removed retired agent: .*issue-scout\.md/.test(r2.stdout),
+    assert(/Removed retired Kaola-Workflow agent: .*issue-scout\.md/.test(r2.stdout),
       'R2 (#795): the sweep names each removal — stdout: ' + r2.stdout.split('\n').slice(-6).join(' | '));
     for (const n of canonNames) {
       assert(!existsSync(path.join(agentDir, n)),
@@ -2633,7 +2652,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 
     // Idempotent: nothing left to sweep on a converged reinstall.
     const r3 = runInstaller([], { home: r1.home, dest: r1.dest });
-    assert(r3.ok && !/Removed retired agent:/.test(r3.stdout),
+    assert(r3.ok && !/Removed retired Kaola-Workflow agent:/.test(r3.stdout),
       'R2 (#795): a converged reinstall sweeps nothing');
 
     // R3 — --uninstall removes what the manifest claims, INCLUDING an agent retired

@@ -22,6 +22,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
+// Real ZCode agent renders shipped by v11.1.1 (frozen by #1101's migration fixtures).
+const RELEASED_ZCODE_AGENTS = path.join(REPO, 'scripts', 'fixtures', 'issue-1101', 'v11.1.1', 'home', 'dot-zcode', 'agents');
 const INSTALLER = path.join(REPO, 'install-zcode.sh');
 const SYNC = path.join(REPO, 'scripts', 'sync-zcode-edition.js');
 
@@ -229,17 +231,22 @@ function assertNoObsoleteTrustOutput(result, label) {
 // B. Clean project/global installs must not create a ZCode hook declaration,
 // receipt, ambient shell, or obsolete trust hand-off. Commands remain the
 // actual ZCode edition surface; this runtime installs no Kaola role profiles,
-// so a previously deployed roster is removed instead.
-const RETIRED_ROLES = ['code-explorer', 'knowledge-lookup', 'planner', 'code-architect',
-  'tdd-guide', 'implementer', 'investigator', 'build-error-resolver', 'code-reviewer',
-  'security-reviewer', 'doc-updater', 'adversarial-verifier', 'synthesizer', 'metric-optimizer'];
+// so a previously deployed roster is retired — on proof only (#1101): a file whose
+// bytes are a released Kaola render is removed; a marker-bearing file that is not
+// a released render is preserved and reported, never deleted by name or marker.
 for (const scope of ['project', 'global']) {
   const fixture = makeFixture(scope);
   try {
-    // Seed a managed retired Kaola roster file at user scope — upgrade must remove
-    // it — beside a user-authored role-name collision that must survive.
-    write(path.join(fixture.zcodeHome, 'agents', 'planner.md'),
-      '---\nname: planner\n---\n<!-- kaola-workflow-managed-agent: true -->\nretired roster file\n');
+    // Seed two real released v11.1.1 ZCode renders at user scope (upgrade must remove
+    // them), a synthetic marker-bearing roster file that no release ever shipped (it must
+    // survive and be reported), and a user-authored role-name collision without the
+    // marker (it must survive). Before #1101 the marker alone authorized removal.
+    for (const released of ['planner.md', 'synthesizer.md']) {
+      write(path.join(fixture.zcodeHome, 'agents', released),
+        fs.readFileSync(path.join(RELEASED_ZCODE_AGENTS, released), 'utf8'));
+    }
+    write(path.join(fixture.zcodeHome, 'agents', 'tdd-guide.md'),
+      '---\nname: tdd-guide\n---\n<!-- kaola-workflow-managed-agent: true -->\nnot a released render\n');
     write(path.join(fixture.zcodeHome, 'agents', 'implementer.md'),
       '---\nname: implementer\n---\nuser-authored profile, no managed marker\n');
     const result = runInstaller(fixture, { global: scope === 'global' });
@@ -263,12 +270,19 @@ for (const scope of ['project', 'global']) {
         'global: no unrelated project hook config is materialized');
     }
     const agentsDir = path.join(fixture.zcodeHome, 'agents');
-    const leftover = fs.existsSync(agentsDir)
-      ? fs.readdirSync(agentsDir).filter(f => RETIRED_ROLES.includes(f.replace(/\.md$/, ''))
-        && fs.readFileSync(path.join(agentsDir, f), 'utf8').includes('kaola-workflow-managed-agent: true'))
-      : [];
-    assertReal(leftover.length === 0,
-      scope + ': no Kaola agent roster remains deployed' + (leftover.length ? ' — ' + leftover.join(',') : ''));
+    for (const released of ['planner.md', 'synthesizer.md']) {
+      assertReal(!fs.existsSync(path.join(agentsDir, released)),
+        scope + ': the released render ' + released + ' is removed on proof');
+      assertReal(outputOf(result).includes('Removed retired Kaola-Workflow agent: ' + path.join(agentsDir, released)),
+        scope + ': the removal of ' + released + ' is reported');
+    }
+    const synthetic = path.join(agentsDir, 'tdd-guide.md');
+    assertReal(fs.existsSync(synthetic)
+        && fs.readFileSync(synthetic, 'utf8').includes('not a released render'),
+      scope + ': a marker-bearing file that is not a released render survives byte-for-byte');
+    assertReal(outputOf(result).includes(
+      'Preserved retired Kaola-Workflow agent (no_ownership_record): ' + synthetic),
+      scope + ': the preserved marker-bearing file is reported as no_ownership_record');
     assertReal(fs.existsSync(path.join(agentsDir, 'implementer.md')),
       scope + ': user-authored agent without the managed marker survives the retired sweep');
     const commandRoot = scope === 'global'

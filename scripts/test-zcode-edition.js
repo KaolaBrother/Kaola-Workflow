@@ -82,6 +82,15 @@ function tmpBase() {
 // of where the tree belongs, and it is what keeps D1 able to fail.
 // ---------------------------------------------------------------------------
 const TREE_ROOT = (() => {
+  // An explicit isolated root bound to THIS checkout wins, as in the generators: both
+  // KAOLA_EDITION_TREE_ROOT and KAOLA_EDITION_TREE_FOR absolute, the latter naming REPO.
+  {
+    const root = process.env.KAOLA_EDITION_TREE_ROOT;
+    const forRepo = process.env.KAOLA_EDITION_TREE_FOR;
+    const real = p => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
+    if (root && forRepo && path.isAbsolute(root) && path.isAbsolute(forRepo)
+        && real(forRepo) === real(REPO)) return path.resolve(root);
+  }
   // spawn-class: environment
   const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: REPO, encoding: 'utf8' });
   if (r.status !== 0) return REPO;
@@ -197,6 +206,11 @@ const ZCODE_ADAPTER = facts.loadRuntimeAdapters(REPO).runtimes.zcode;
 // Older releases stamped every installed role profile with this marker; the installer's
 // retired-file sweep keys on it.
 const KAOLA_MANAGED_MARKER = 'kaola-workflow-managed-agent: true';
+// A real ZCode agent render v11.1.1 shipped (frozen by #1101's migration fixtures), and a
+// marker-bearing file whose bytes no release ever shipped.
+const RELEASED_ZCODE_PLANNER = fs.readFileSync(path.join(__dirname, 'fixtures', 'issue-1101', 'v11.1.1',
+  'home', 'dot-zcode', 'agents', 'planner.md'), 'utf8');
+const SYNTHETIC_MARKER_FILE = '---\nname: tdd-guide\n---\n<!-- ' + KAOLA_MANAGED_MARKER + ' -->\nnot a released render\n';
 
 // ---------------------------------------------------------------------------
 // B0 — additive boundary. zcode is a runtime, not a forge. Read the tree; do
@@ -1275,9 +1289,11 @@ function generatedTreeRelFiles(label) {
 
     // --uninstall removes only kaola-deployed names: user agents in
     // ~/.zcode/agents and foreign config keys/entries survive. The retired
-    // sweep requires the managed marker: a managed retired-role file is
-    // removed, while a user-authored file — even one named like a Kaola
-    // role — is never touched.
+    // sweep requires proof (#1101): a file whose bytes are a released Kaola ZCode
+    // render (here v11.1.1's planner.md) is removed; a marker-bearing file that no
+    // release shipped is preserved and reported as no_ownership_record; a
+    // user-authored file — even one named like a Kaola role — is never touched.
+    // Before #1101 the managed marker alone authorized removal.
     {
       const r = runInstaller([], { beforeRun: fixture => {
         seedUserConfig(fixture);
@@ -1286,23 +1302,31 @@ function generatedTreeRelFiles(label) {
         fs.writeFileSync(liveConfigPath(fixture), JSON.stringify(seeded, null, 2) + '\n');
         const agentsDir = path.join(fixture.zcodeHome, 'agents');
         fs.mkdirSync(agentsDir, { recursive: true });
-        fs.writeFileSync(path.join(agentsDir, 'planner.md'),
-          '---\nname: planner\n---\n<!-- ' + KAOLA_MANAGED_MARKER + ' -->\nretired roster file\n');
+        fs.writeFileSync(path.join(agentsDir, 'planner.md'), RELEASED_ZCODE_PLANNER);
+        fs.writeFileSync(path.join(agentsDir, 'tdd-guide.md'), SYNTHETIC_MARKER_FILE);
         fs.writeFileSync(path.join(agentsDir, 'implementer.md'),
           '---\nname: implementer\n---\nuser-authored profile, no managed marker\n');
         fs.mkdirSync(path.join(fixture.dest, '.zcode', 'agents'), { recursive: true });
-        fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'planner.md'),
-          '---\nname: planner\n---\n<!-- ' + KAOLA_MANAGED_MARKER + ' -->\nretired staged file\n');
+        fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'planner.md'), RELEASED_ZCODE_PLANNER);
+        fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'tdd-guide.md'), SYNTHETIC_MARKER_FILE);
         fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'implementer.md'),
           '---\nname: implementer\n---\nuser-authored staged profile, no managed marker\n');
       } });
       assertReal(r.status === 0, 'G8-uninstall: seed install exits 0');
       assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', 'planner.md')),
-        'G8-uninstall: install sweeps the managed retired-role file from $ZCODE_HOME/agents/');
+        'G8-uninstall: install removes the released retired render from $ZCODE_HOME/agents/');
+      for (const agentsDir of [path.join(r.zcodeHome, 'agents'), path.join(r.dest, '.zcode', 'agents')]) {
+        const synthetic = path.join(agentsDir, 'tdd-guide.md');
+        assertReal(fs.existsSync(synthetic) && fs.readFileSync(synthetic, 'utf8') === SYNTHETIC_MARKER_FILE,
+          'G8-uninstall: a marker-bearing file that is not a released render survives byte-for-byte in ' + agentsDir);
+        assertReal((r.stdout + r.stderr).includes(
+          'Preserved retired Kaola-Workflow agent (no_ownership_record): ' + synthetic),
+          'G8-uninstall: the preserved marker-bearing file is reported as no_ownership_record (' + synthetic + ')');
+      }
       assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', 'implementer.md')),
         'G8-uninstall: install preserves a user-authored role-named file without the managed marker');
       assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'planner.md')),
-        'G8-uninstall: install sweeps the managed retired-role file from <target>/.zcode/agents/');
+        'G8-uninstall: install removes the released retired render from <target>/.zcode/agents/');
       assertReal(fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'implementer.md')),
         'G8-uninstall: install preserves a staged user-authored file without the managed marker');
       const userAgent = path.join(r.zcodeHome, 'agents', 'user-notes.md');
@@ -1331,16 +1355,20 @@ function generatedTreeRelFiles(label) {
       assertReal(ru.status === 0,
         'G8-uninstall: --uninstall exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
       for (const name of RETIRED_ROLES) {
-        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md'))
-          || name === 'implementer',
+        // implementer.md is the user-authored collision; tdd-guide.md is the unprovable
+        // marker-bearing file, which neither install nor uninstall may delete.
+        if (name === 'implementer' || name === 'tdd-guide') continue;
+        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
           'G8-uninstall[' + name + ']: no kaola-managed agent copy in ~/.zcode/agents/');
-        assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', name + '.md'))
-          || name === 'implementer',
+        assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', name + '.md')),
           'G8-uninstall[' + name + ']: no kaola-managed staged agent in <target>/.zcode/agents/');
       }
       assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', 'planner.md'))
         && !fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'planner.md')),
-        'G8-uninstall: managed retired-role files stay removed after uninstall');
+        'G8-uninstall: released retired renders stay removed after uninstall');
+      assertReal(fs.readFileSync(path.join(r.zcodeHome, 'agents', 'tdd-guide.md'), 'utf8') === SYNTHETIC_MARKER_FILE
+        && fs.readFileSync(path.join(r.dest, '.zcode', 'agents', 'tdd-guide.md'), 'utf8') === SYNTHETIC_MARKER_FILE,
+        'G8-uninstall: uninstall does not delete an unprovable marker-bearing file either');
       assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', 'implementer.md'))
         && fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'implementer.md')),
         'G8-uninstall: user-authored role-named files survive uninstall at both scopes');
