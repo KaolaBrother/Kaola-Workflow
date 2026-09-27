@@ -1906,17 +1906,17 @@ function testStaleWorktreeCleanup() {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc2e-')));
     const kwRoot = tmp + '.kw';
     const binDir = path.join(tmp, 'bin');
-    const wtPath = path.join(kwRoot, 'bundle-401-402');
+    const wtPath = path.join(kwRoot, 'bundle-400-402');
     const writeState = (projectDir, extras) => {
       fs.mkdirSync(projectDir, { recursive: true });
       fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
-        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-401-402', 'status: active', '']
+        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-400-402', 'status: active', '']
           .concat(extras).join('\n') + '\n');
     };
     const writeReceipt = (projectDir, states) => {
       fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
       fs.writeFileSync(path.join(projectDir, '.cache', 'sink-receipt.json'), JSON.stringify({
-        project: 'bundle-401-402',
+        project: 'bundle-400-402',
         steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
           stash_restore: 'done', archive_commit: 'done', push_main: states, closure: states }
       }, null, 2) + '\n');
@@ -1924,23 +1924,32 @@ function testStaleWorktreeCleanup() {
     try {
       initGitRepo(tmp);
       writeGlabShimForStale(binDir);
-      // workflow/gitlab-issue-401 is the branch a bundle run of issue 401 really creates; the FOLDER
-      // is bundle-401-402, so no `issue-401` folder exists anywhere.
-      addWorktree(tmp, 'workflow/gitlab-issue-401', wtPath);
-      const ownDir = path.join(wtPath, 'kaola-workflow', 'bundle-401-402');
+      // workflow/gitlab-issue-400 is the branch a bundle run of issue 400 really creates; the FOLDER
+      // is bundle-400-402, so no `issue-400` folder exists anywhere.
+      addWorktree(tmp, 'workflow/gitlab-issue-400', wtPath);
+      // The run's folder lives in the MAIN checkout, so the lane worktree stays CLEAN and the all-done
+      // half below can actually be removed — otherwise `skipped_dirty` would mask the classification.
+      const ownDir = path.join(tmp, 'kaola-workflow', 'bundle-400-402');
       writeState(ownDir, [
-        '## Sink', 'branch: workflow/gitlab-issue-401', 'issue_number: 401', 'sink: merge',
+        '## Sink', 'branch: workflow/gitlab-issue-400', 'issue_number: 400', 'sink: merge',
         'run_posture: worktree', 'main_root: ' + tmp, 'claim_ts: 2026-09-27T00:00:00.000Z',
-        'worktree_path: ' + wtPath, 'issue_numbers: 401,402', 'bundle_id: bundle-401-402', ''
+        'worktree_path: ' + wtPath, 'issue_numbers: 400,402', 'bundle_id: bundle-400-402', ''
       ]);
       writeReceipt(ownDir, 'pending');
       const out1 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
       assert(out1.dry_run === false, 'sc2e: dry_run must be false, got: ' + JSON.stringify(out1));
+      // The classification is what the pin acts on: a DIRTY worktree survives on its own, so "still
+      // exists" cannot separate a pin from a skip. `stale-worktree-check` reports the pin directly.
+      const check1 = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      assert(Array.isArray(check1.active_worktrees) && check1.active_worktrees.some(x => x.path === wtPath),
+        'sc2e: the bundle run\'s lane worktree must be classified ACTIVE — the receipt lives in kaola-workflow/bundle-400-402, so a name derived as issue-400 can never find it, got: ' + JSON.stringify(check1));
+      assert(!Array.isArray(check1.stale_worktrees) || !check1.stale_worktrees.some(x => x.path === wtPath),
+        'sc2e: the pinned lane worktree must NOT be classified stale, got: ' + JSON.stringify(check1.stale_worktrees));
       assert(fs.existsSync(wtPath),
-        'sc2e: a bundle-named run\'s mid-flight receipt must pin its lane worktree — the receipt lives in kaola-workflow/bundle-401-402, so a name derived as issue-401 can never find it');
+        'sc2e: a bundle-named run\'s mid-flight receipt must pin its lane worktree — the receipt lives in kaola-workflow/bundle-400-402, so a name derived as issue-400 can never find it');
       assert(!Array.isArray(out1.removed) || !out1.removed.some(p => p === wtPath),
         'sc2e: removed must NOT contain the bundle run\'s lane worktree, got: ' + JSON.stringify(out1.removed));
-      assert(!Array.isArray(out1.deleted_branch) || !out1.deleted_branch.includes('workflow/gitlab-issue-401'),
+      assert(!Array.isArray(out1.deleted_branch) || !out1.deleted_branch.includes('workflow/gitlab-issue-400'),
         'sc2e: the pinned lane worktree\'s branch must NOT be deleted either, got: ' + JSON.stringify(out1.deleted_branch));
       // All-done keeps today's behavior for the same custom-named run: receipt-driven, never a
       // blanket exemption.
@@ -1963,30 +1972,33 @@ function testStaleWorktreeCleanup() {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc2f-')));
     const kwRoot = tmp + '.kw';
     const binDir = path.join(tmp, 'bin');
-    const wtPath = path.join(kwRoot, 'bundle-401-402');
+    const wtPath = path.join(kwRoot, 'bundle-400-402');
     try {
       initGitRepo(tmp);
       writeGlabShimForStale(binDir);
-      addWorktree(tmp, 'workflow/gitlab-issue-401', wtPath);
-      fs.mkdirSync(path.join(wtPath, 'kaola-workflow', 'bundle-401-402'), { recursive: true });
-      fs.writeFileSync(path.join(wtPath, 'kaola-workflow', 'bundle-401-402', 'workflow-state.md'),
-        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-401-402', 'status: active', '',
-          '## Sink', 'branch: workflow/gitlab-issue-401', 'run_posture: worktree',
+      addWorktree(tmp, 'workflow/gitlab-issue-400', wtPath);
+      // The NEW run's record lives in the MAIN checkout, so the worktree stays CLEAN and the sweep
+      // below is decided by the classification alone, not by `skipped_dirty`.
+      const ownDir = path.join(tmp, 'kaola-workflow', 'bundle-400-402');
+      fs.mkdirSync(ownDir, { recursive: true });
+      fs.writeFileSync(path.join(ownDir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-400-402', 'status: active', '',
+          '## Sink', 'branch: workflow/gitlab-issue-400', 'run_posture: worktree',
           'worktree_path: ' + wtPath, 'claim_ts: 2026-09-27T02:00:00.000Z', ''].join('\n') + '\n');
-      const staleDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-401');
+      const staleDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-400');
       fs.mkdirSync(path.join(staleDir, '.cache'), { recursive: true });
       fs.writeFileSync(path.join(staleDir, 'workflow-state.md'),
-        ['# Kaola-Workflow State', '', '## Project', 'name: issue-401', 'status: closed', '',
-          '## Sink', 'branch: workflow/gitlab-issue-401', 'issue_number: 401',
+        ['# Kaola-Workflow State', '', '## Project', 'name: issue-400', 'status: closed', '',
+          '## Sink', 'branch: workflow/gitlab-issue-400', 'issue_number: 400',
           'worktree_path: ' + wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z', ''].join('\n') + '\n');
       fs.writeFileSync(path.join(staleDir, '.cache', 'sink-receipt.json'), JSON.stringify({
-        project: 'issue-401',
+        project: 'issue-400',
         steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
           stash_restore: 'done', archive_commit: 'done', push_main: 'pending', closure: 'pending' }
       }, null, 2) + '\n');
       const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
       assert(!fs.existsSync(wtPath),
-        'sc2f: an OLD run\'s mid-flight receipt under archive/issue-401 must NOT pin a NEW run\'s worktree that owns bundle-401-402 and has no receipt of its own');
+        'sc2f: an OLD run\'s mid-flight receipt under archive/issue-400 must NOT pin a NEW run\'s worktree that owns bundle-400-402 and has no receipt of its own');
       assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
         'sc2f: removed must contain the unpinned lane worktree, got: ' + JSON.stringify(out.removed));
     } finally {

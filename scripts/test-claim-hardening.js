@@ -5614,6 +5614,29 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     return { out, stdout: r.stdout, stderr: r.stderr };
   };
 
+  // The classification the pin actually acts on. A dirty worktree survives --execute on its own, so
+  // "still exists" cannot distinguish a pinned worktree from a skipped one; `stale-worktree-check`
+  // reports the pin directly.
+  const classify1102 = (root, wtPath) => {
+    // spawn-class: cli-contract
+    const r = spawnS1102(process.execPath, [CLAIM1102, 'stale-worktree-check'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1102, 'gh.js')
+      })
+    });
+    let out = {};
+    try { out = JSON.parse(r.stdout); } catch (_) {}
+    return {
+      stalled: Array.isArray(out.stale_worktrees) && out.stale_worktrees.some(w => w.path === wtPath),
+      active: Array.isArray(out.active_worktrees) && out.active_worktrees.some(w => w.path === wtPath),
+      out,
+      stderr: r.stderr
+    };
+  };
+
   // A fixture repo with one lane worktree on `workflow/issue-96401` — the branch the run's own
   // claim would have created, and the branch a LATER run of the same issue reuses verbatim.
   const makeRepo1102 = () => {
@@ -5661,8 +5684,14 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         'issue_numbers: 96401,96402', 'bundle_id: bundle-96401-96402', ''
       ]);
       writeReceipt1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), midFlightReceipt('bundle-96401-96402'));
+      // The worktree is DIRTY (its run folder is untracked) and a dirty worktree survives on its own,
+      // which would mask the pin. So the pin is read from the CLASSIFICATION instead: `stale-worktree-
+      // check` must report the worktree ACTIVE, not merely unremoved.
       const { out, stderr } = sweep1102(fx.root);
       assert(out.dry_run === false, '#1102 bundle pin: dry_run must be false, got ' + JSON.stringify(out) + '\nstderr: ' + stderr);
+      const cls = classify1102(fx.root, fx.wtPath);
+      assert(cls.active && !cls.stalled,
+        '#1102 bundle pin: the bundle run\'s lane worktree must be classified ACTIVE — a name derived as issue-96401 cannot find a receipt filed under kaola-workflow/bundle-96401-96402, got ' + JSON.stringify(cls.out) + '\nstderr: ' + cls.stderr);
       assert(fs.existsSync(fx.wtPath),
         '#1102 bundle pin: a bundle-named run\'s mid-flight receipt must pin its lane worktree — the receipt lives in kaola-workflow/bundle-96401-96402, so a name derived as issue-96401 can never find it');
       assert(!Array.isArray(out.removed) || !out.removed.some(p => p === fx.wtPath),
@@ -5696,11 +5725,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // Case C — IDENTITY SAFETY. Branches are reused: this is the SECOND run of issue 96401, so the
   // OLD run's archived receipt is mid-flight under a name that is NOT this run's, while THIS run has
   // no receipt yet. Reading the issue-derived name would consume the dead run's receipt and pin a
-  // worktree the current run must be allowed to sweep.
+  // worktree the current run must be allowed to sweep. The current run's record is the LIVE one at
+  // the main checkout — reading it is what keeps the pin off the dead run's receipt.
   {
     const fx = makeRepo1102();
     try {
-      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+      writeState1102(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
         '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
         'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T02:00:00.000Z', ''
       ]);
@@ -5710,6 +5740,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z', ''
       ]);
       writeReceipt1102(staleDir, midFlightReceipt('issue-96401'));
+      const cls = classify1102(fx.root, fx.wtPath);
+      assert(cls.stalled && !cls.active,
+        '#1102 identity safety: the NEW run\'s worktree must be classified STALE — the dead run\'s archive/issue-96401 receipt is not this run\'s receipt, got ' + JSON.stringify(cls.out) + '\nstderr: ' + cls.stderr);
       const { out, stderr } = sweep1102(fx.root);
       assert(!fs.existsSync(fx.wtPath),
         '#1102 identity safety: an OLD run\'s mid-flight receipt under archive/issue-96401 must NOT pin a NEW run\'s worktree that has no receipt of its own — the current run owns bundle-96401-96402, not issue-96401');
@@ -5721,11 +5754,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // Case D — identity safety at its hardest: the OLD run used THIS run's folder name (a re-run of
   // the same bundle) and its mid-flight receipt is still archived. `worktree_path` cannot separate
   // them — both runs claim the same path — so only the claim record separates them, and this run's
-  // strictly NEWER claim_ts does. The dead run's receipt must not pin the live worktree.
+  // strictly NEWER claim_ts does. The dead run's receipt must not pin the live worktree. Both
+  // records live in the main checkout, so the worktree itself stays clean and removal is observable.
   {
     const fx = makeRepo1102();
     try {
-      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+      writeState1102(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
         '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
         'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z', ''
       ]);
@@ -5735,6 +5769,9 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T03:00:00.000Z', ''
       ]);
       writeReceipt1102(older, midFlightReceipt('bundle-96401-96402'));
+      const cls = classify1102(fx.root, fx.wtPath);
+      assert(cls.stalled && !cls.active,
+        '#1102 identity safety (same name, older run): the newer run\'s worktree must be classified STALE — the older archived run\'s receipt is superseded by this run\'s newer claim, got ' + JSON.stringify(cls.out) + '\nstderr: ' + cls.stderr);
       const { out, stderr } = sweep1102(fx.root);
       assert(!fs.existsSync(fx.wtPath),
         '#1102 identity safety (same name, older run): an older archived run\'s receipt must not pin the newer run\'s worktree when the newer run holds no receipt of its own');
@@ -5743,12 +5780,12 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     } finally { cleanup1102(fx); }
   }
 
-  // Case E — /all-done and absent receipts keep today's behavior for a CUSTOM-NAMED run: the pin is
+  // Case E — all-done and absent receipts keep today's behavior for a CUSTOM-NAMED run: the pin is
   // receipt-driven, never an unknown-exemption that a resolver could widen by resolving anything.
   {
     const fx = makeRepo1102();
     try {
-      const projectDir = path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402');
+      const projectDir = path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402');
       writeState1102(projectDir, 'bundle-96401-96402', [
         '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
         'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T00:00:00.000Z', ''
@@ -5760,8 +5797,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       });
       const r1 = sweep1102(fx.root);
       assert(!fs.existsSync(fx.wtPath),
-        '#1102 all-done: a COMPLETED custom-named run\'s leftover lane worktree sweeps exactly as before');
-      assert(Array.isArray(r1.out.removed) && r1.out.removed.some(p => p === fx.wtPath),
+        '#1102 all-done: a COMPLETED custom-named run\'s leftover lane worktree sweeps exactly as before');      assert(Array.isArray(r1.out.removed) && r1.out.removed.some(p => p === fx.wtPath),
         '#1102 all-done: removed must contain the completed run\'s worktree, got ' + JSON.stringify(r1.out.removed) + '\nstderr: ' + r1.stderr);
     } finally { cleanup1102(fx); }
   }
