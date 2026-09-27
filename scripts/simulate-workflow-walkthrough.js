@@ -5822,14 +5822,14 @@ function testE2EGitHubPrFullChain() {
     assert(spResult.status === 0,
       'sink-pr offline should exit 0\nstdout: ' + spResult.stdout + '\nstderr: ' + spResult.stderr);
 
-    const linkedState = fs.readFileSync(path.join(kwDir860, 'workflow-state.md'), 'utf8');
-    assert(linkedState.includes('pr_url:'), 'linked worktree workflow-state.md must contain pr_url after sink-pr');
+    // #1098: sink-pr resolves the MAIN checkout, so the OFFLINE placeholder lands in main's live
+    // state file directly; the worktree copy stays untouched (and the worktree stays clean). The
+    // old test-only mirror step is gone — there is nothing left to mirror.
+    const mainStateFile = path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-state.md');
+    const linkedState = fs.readFileSync(mainStateFile, 'utf8');
+    assert(linkedState.includes('pr_url:'), 'main workflow-state.md must contain pr_url after sink-pr');
     const prStatus = G.git(wt860, ['status', '--porcelain', '--untracked-files=no'], { stdio: 'pipe' });
     assert(prStatus.stdout.toString().trim() === '', 'linked worktree must be clean after sink-pr');
-
-    // test-only: mirror linked-worktree state to main; production runs sink-pr before finalize from main worktree
-    const mainStateFile = path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-state.md');
-    fs.writeFileSync(mainStateFile, linkedState);
 
     // Step 5: watch-pr (cwd=tmp, ONLINE via runClaimOnline; gh shim returns MERGED)
     const wpResult = runClaimOnline(['watch-pr'], tmp, binDir);
@@ -8016,6 +8016,683 @@ function testSinkPrClosesEveryMember() {
         '#1094 ' + c.project + ': the PR body must close every claimed member, got: ' + JSON.stringify(create));
     }
     console.log('testSinkPrClosesEveryMember: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #1098 — existing-PR reuse, idempotent re-entry, and post-merge reconciliation (GitHub legs;
+// the gitlab/gitea legs live in their sink suites). Written first per the issue's test plan.
+// ---------------------------------------------------------------------------
+
+// #1098: a stub `gh` binary for the sink-pr reuse/re-entry legs — logs every argv line so a test
+// can prove which gh verbs ran, and answers pr list / pr view / pr create from per-test payloads.
+// The record-based lookup (a re-entry) hits `pr view`; record-less discovery hits `pr list`.
+function writeSinkPrStubGh(binDir, opts) {
+  const o = opts || {};
+  fs.mkdirSync(binDir, { recursive: true });
+  const argvLog = path.join(binDir, '.gh-argv.json');
+  const lines = [
+    '#!' + process.execPath,
+    "const fs = require('fs');",
+    'const argv = process.argv.slice(2);',
+    "fs.appendFileSync(" + JSON.stringify(argvLog) + ", JSON.stringify(argv) + '\\n');",
+    "if (argv[0] === 'pr' && argv[1] === 'list') { process.stdout.write(" + JSON.stringify(String(o.list == null ? '[]' : o.list)) + " + '\\n'); process.exit(0); }",
+    "if (argv[0] === 'pr' && argv[1] === 'view') { process.stdout.write(" + JSON.stringify(String(o.view == null ? '' : o.view)) + " + '\\n'); process.exit(0); }",
+    "if (argv[0] === 'pr' && argv[1] === 'create') { process.stdout.write(" + JSON.stringify(String(o.create == null ? 'https://github.com/test/repo/pull/41' : o.create)) + " + '\\n'); process.exit(0); }",
+    "if (argv[0] === 'pr' && argv[1] === 'merge') { process.exit(0); }",
+    "process.stdout.write('\\n'); process.exit(0);"
+  ];
+  fs.writeFileSync(path.join(binDir, 'gh'), lines.join('\n'));
+  fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+  return argvLog;
+}
+
+function readGhArgvLog(argvLog) {
+  try {
+    return fs.readFileSync(argvLog, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  } catch (_) { return []; }
+}
+
+function sinkPrOnlineEnv(binDir, env) {
+  return {
+    ...env,
+    KAOLA_WORKFLOW_OFFLINE: '0',
+    PATH: binDir + path.delimiter + (process.env.PATH || '')
+  };
+}
+
+// #1098 T8: plant an ARCHIVED `sink: pr` run the way the standard flow leaves it — untracked in
+// main's working tree — and, when `merged` is set, advance origin/main past local main with a
+// commit simulating the forge's merge of the PR (carrying the archive itself only when
+// `carryArchive` says so; a local-only archive run is the pre-#1098 legacy shape).
+function plantArchivedPrRun(tmp, env, project, issueNo, o) {
+  const opts = o || {};
+  const branch = 'workflow/' + project;
+  const archiveFiles = {
+    'workflow-state.md': 'status: closed\nissue_number: ' + issueNo + '\n\n## Sink\nbranch: ' + branch + '\nsink: pr\npr_url: https://github.com/test/repo/pull/' + issueNo + '\n',
+    'finalization-summary.md': '# Finalization\n',
+    'plan.md': '# Plan\n',
+    '.cache/x.json': '{}\n'
+  };
+  if (opts.merged) {
+    const tw = tmp + '-tw-' + project;
+    G.git(tmp, ['worktree', 'add', '--detach', tw], { env });
+    if (opts.carryArchive) {
+      for (const [rel, content] of Object.entries(archiveFiles)) {
+        const p = path.join(tw, 'kaola-workflow', 'archive', project, rel);
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, content);
+      }
+    }
+    for (const [rel, content] of Object.entries(opts.changes || {})) {
+      fs.writeFileSync(path.join(tw, rel), content);
+    }
+    G.git(tw, ['add', '-A'], { env });
+    G.git(tw, ['commit', '-m', 'merge: ' + project + ' (simulated merged PR)'], { env });
+    G.git(tw, ['push', 'origin', 'HEAD:refs/heads/main'], { env });
+    G.git(tmp, ['worktree', 'remove', '--force', tw], { env });
+  }
+  for (const [rel, content] of Object.entries(archiveFiles)) {
+    const p = path.join(tmp, 'kaola-workflow', 'archive', project, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content);
+  }
+  return archiveFiles;
+}
+
+// #1098: the watch-pr reconciliation legs drive the claim CLI through KAOLA_GH_MOCK_SCRIPT (a
+// gh.js), answering `pr view` with the configured state and `issue view N` per-number open/closed.
+function writeWatchPrGhMock(binDir, opts) {
+  const o = opts || {};
+  const prState = String(o.prState || 'MERGED');
+  const issueStates = o.issueStates || {};
+  fs.mkdirSync(binDir, { recursive: true });
+  const lines = [
+    "'use strict';",
+    'const argv = process.argv.slice(2);',
+    'const a = argv.join(" ");',
+    'if (a.includes("repo view")) { process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n"); process.exit(0); }',
+    'const vm = a.match(/issue view (\\d+)/);',
+    'if (vm) { const st = (' + JSON.stringify(issueStates) + ')[vm[1]] || "open";',
+    '  process.stdout.write(JSON.stringify({number: parseInt(vm[1]), state: st, title: "issue " + vm[1], body: "", labels: []}) + "\\n"); process.exit(0); }',
+    'if (a.includes("pr view")) { process.stdout.write(' + JSON.stringify('{"state":"' + prState + '"}') + ' + "\\n"); process.exit(0); }',
+    'if (a.includes("api") && a.includes("comments")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'if (a.includes("api") && a.includes("DELETE")) { process.exit(0); }',
+    'process.stdout.write("\\n"); process.exit(0);'
+  ];
+  fs.writeFileSync(path.join(binDir, 'gh.js'), lines.join('\n'));
+}
+
+// #1098 T1 — reuse: `pr list` returns an open PR whose body closes every member → no `pr create`,
+// the durable record carries the reused identity, exit 0 with the machine-readable `sink_pr: reused`.
+function testSinkPrReusesExistingPr() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-reuse-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      list: JSON.stringify([{
+        url: 'https://github.com/test/repo/pull/7', number: 7, state: 'OPEN',
+        headRefName: 'workflow/issue-31', baseRefName: 'main',
+        body: 'Closes #31\nCloses #32'
+      }])
+    });
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.bin/\n');
+    const branch = 'workflow/issue-31';
+    G.git(tmp, ['checkout', '-q', 'main'], { env });
+    G.git(tmp, ['checkout', '-b', branch], { env });
+    const liveDir = path.join(tmp, 'kaola-workflow', 'issue-31');
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
+      'status: active\nissue_number: 31\nissue_numbers: 31,32\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization\n');
+    G.git(tmp, ['add', 'kaola-workflow'], { env });
+    G.git(tmp, ['commit', '-m', 'issue-31 work'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-31', '--branch', branch, '--issue', '31'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(result.status === 0,
+      '#1098 T1: reuse should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(/sink_pr: reused/.test(result.stdout),
+      '#1098 T1: stdout must carry the machine-readable reused line, got: ' + result.stdout);
+    const calls = readGhArgvLog(argvLog);
+    assert(!calls.some(c => c[1] === 'create'),
+      '#1098 T1: reuse must not call gh pr create, got: ' + JSON.stringify(calls));
+    assert(calls.some(c => c[1] === 'list'),
+      '#1098 T1: record-less discovery must query gh pr list');
+    const state = fs.readFileSync(path.join(liveDir, 'workflow-state.md'), 'utf8');
+    assert(/pr_url: https:\/\/github\.com\/test\/repo\/pull\/7/.test(state),
+      '#1098 T1: state must record the reused PR URL, got:\n' + state);
+    const record = JSON.parse(fs.readFileSync(path.join(liveDir, '.cache', 'sink-pr-result.json'), 'utf8'));
+    assert(record.pr_url === 'https://github.com/test/repo/pull/7' && record.pr_number === 7,
+      '#1098 T1: the durable record must carry the reused PR identity, got: ' + JSON.stringify(record));
+    console.log('testSinkPrReusesExistingPr: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T2 — re-entry idempotency: the first call creates; the second reuses via the durable
+// record (no create), the summary carries exactly one PR URL line, the branch tip does not move,
+// and the durable record is byte-identical (a timestamp must not rewrite it).
+function testSinkPrReentryIdempotent() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-reentry-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const binDir = path.join(tmp, '.bin');
+    const openPr = JSON.stringify({
+      url: 'https://github.com/test/repo/pull/42', number: 42, state: 'OPEN',
+      headRefName: 'workflow/issue-43', baseRefName: 'main',
+      body: 'Closes #43'
+    });
+    const argvLog = writeSinkPrStubGh(binDir, { list: '[]', view: openPr, create: 'https://github.com/test/repo/pull/42' });
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.bin/\n');
+    const branch = 'workflow/issue-43';
+    G.git(tmp, ['checkout', '-q', 'main'], { env });
+    G.git(tmp, ['checkout', '-b', branch], { env });
+    const liveDir = path.join(tmp, 'kaola-workflow', 'issue-43');
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
+      'status: active\nissue_number: 43\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization\n');
+    G.git(tmp, ['add', 'kaola-workflow'], { env });
+    G.git(tmp, ['commit', '-m', 'issue-43 work'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    const run = () => spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-43', '--branch', branch, '--issue', '43'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    // spawn-class: cli-contract
+    const first = run();
+    assert(first.status === 0,
+      '#1098 T2: first call should exit 0\nstdout: ' + first.stdout + '\nstderr: ' + first.stderr);
+    assert(/sink_pr: created/.test(first.stdout),
+      '#1098 T2: first call reports created, got: ' + first.stdout);
+    const recordPath = path.join(liveDir, '.cache', 'sink-pr-result.json');
+    const recordBefore = fs.readFileSync(recordPath);
+    const tipAfterFirst = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const second = run();
+    assert(second.status === 0,
+      '#1098 T2: re-entry should exit 0\nstdout: ' + second.stdout + '\nstderr: ' + second.stderr);
+    assert(/sink_pr: reused/.test(second.stdout),
+      '#1098 T2: re-entry reports reused, got: ' + second.stdout);
+    const calls = readGhArgvLog(argvLog);
+    assert(calls.filter(c => c[1] === 'create').length === 1,
+      '#1098 T2: exactly one create across both calls, got: ' + JSON.stringify(calls));
+    const summary = fs.readFileSync(path.join(liveDir, 'finalization-summary.md'), 'utf8');
+    assert((summary.match(/^PR URL: /gm) || []).length === 1,
+      '#1098 T2: the summary must carry exactly one PR URL line after re-entry, got:\n' + summary);
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === tipAfterFirst,
+      '#1098 T2: re-entry must not move the branch tip');
+    assert(Buffer.compare(fs.readFileSync(recordPath), recordBefore) === 0,
+      '#1098 T2: the durable record must be byte-identical across re-entry (timestamp churn is a new commit per re-entry)');
+    console.log('testSinkPrReentryIdempotent: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T3 — the record shows MERGED and the remote branch is deleted (the pr_auto_merge
+// --delete-branch shape): no push, no create, no merge; the remote branch stays deleted and the
+// run reports `sink_pr: already_merged` for the reconciliation path to pick up.
+function testSinkPrAlreadyMergedSkipsRepublish() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-merged-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const branch = 'workflow/issue-33';
+    G.git(tmp, ['checkout', '-q', 'main'], { env });
+    G.git(tmp, ['checkout', '-b', branch], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'feat\n');
+    G.git(tmp, ['add', 'feat.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'work'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    G.git(tmp, ['push', 'origin', '--delete', branch], { env });
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-33');
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 33\n\n## Sink\nbranch: ' + branch + '\nsink: pr\npr_url: https://github.com/test/repo/pull/33\n');
+    fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n');
+    fs.writeFileSync(path.join(archDir, '.cache', 'sink-pr-result.json'), JSON.stringify({
+      project: 'issue-33', branch: branch,
+      pr_url: 'https://github.com/test/repo/pull/33', pr_number: 33,
+      timestamp: '2026-09-27T00:00:00.000Z'
+    }, null, 2) + '\n');
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      view: JSON.stringify({
+        url: 'https://github.com/test/repo/pull/33', number: 33, state: 'MERGED',
+        headRefName: branch, baseRefName: 'main', body: 'Closes #33'
+      })
+    });
+    const localTipBefore = G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim();
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-33', '--branch', branch, '--issue', '33'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(result.status === 0,
+      '#1098 T3: already-merged re-entry should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(/sink_pr: already_merged/.test(result.stdout),
+      '#1098 T3: stdout must report already_merged, got: ' + result.stdout);
+    const calls = readGhArgvLog(argvLog);
+    assert(!calls.some(c => c[1] === 'create' || c[1] === 'merge'),
+      '#1098 T3: a merged PR must not be created or merged again, got: ' + JSON.stringify(calls));
+    const remoteHeads = G.git(tmp, ['ls-remote', '--heads', 'origin'], { env }).stdout.toString();
+    assert(!remoteHeads.includes(branch),
+      '#1098 T3: the deleted remote branch must stay deleted (no push), got: ' + remoteHeads);
+    assert(G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim() === localTipBefore,
+      '#1098 T3: a merged PR must not move the local branch');
+    console.log('testSinkPrAlreadyMergedSkipsRepublish: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T4 — the record shows CLOSED (not merged): refuse with pr_closed_unmerged, and do not
+// push or create. The orchestrator decides whether to reopen.
+function testSinkPrClosedUnmergedRefuses() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-closed-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const branch = 'workflow/issue-44';
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-44');
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 44\n\n## Sink\nbranch: ' + branch + '\nsink: pr\npr_url: https://github.com/test/repo/pull/44\n');
+    fs.writeFileSync(path.join(archDir, '.cache', 'sink-pr-result.json'), JSON.stringify({
+      project: 'issue-44', branch: branch,
+      pr_url: 'https://github.com/test/repo/pull/44', pr_number: 44,
+      timestamp: '2026-09-27T00:00:00.000Z'
+    }, null, 2) + '\n');
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      view: JSON.stringify({
+        url: 'https://github.com/test/repo/pull/44', number: 44, state: 'CLOSED',
+        headRefName: branch, baseRefName: 'main', body: 'Closes #44'
+      })
+    });
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-44', '--branch', branch, '--issue', '44'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(result.status !== 0, '#1098 T4: a closed-unmerged PR must be refused, got exit 0');
+    assert(/pr_closed_unmerged/.test(result.stderr),
+      '#1098 T4: the refusal must name pr_closed_unmerged, got: ' + result.stderr);
+    const calls = readGhArgvLog(argvLog);
+    assert(!calls.some(c => c[1] === 'create'),
+      '#1098 T4: a refused re-entry must not create a PR, got: ' + JSON.stringify(calls));
+    const remoteHeads = G.git(tmp, ['ls-remote', '--heads', 'origin'], { env }).stdout.toString();
+    assert(!remoteHeads.includes(branch),
+      '#1098 T4: a refused re-entry must not push the branch, got: ' + remoteHeads);
+    console.log('testSinkPrClosedUnmergedRefuses: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T5 — a reused PR whose body is missing a member's `Closes #n` must be refused naming the
+// missing member (bundle all-or-none, #592/#1094); nothing is created or pushed.
+function testSinkPrReuseRefusesMissingCloses() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-missing-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      list: JSON.stringify([{
+        url: 'https://github.com/test/repo/pull/8', number: 8, state: 'OPEN',
+        headRefName: 'workflow/issue-51', baseRefName: 'main',
+        body: 'Closes #51'
+      }])
+    });
+    const branch = 'workflow/issue-51';
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-51');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 51\nissue_numbers: 51,52\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-51', '--branch', branch, '--issue', '51', '--issue-numbers', '51,52'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(result.status !== 0, '#1098 T5: a reused PR missing a member Closes must be refused');
+    assert(/Closes/.test(result.stderr) && /52/.test(result.stderr),
+      '#1098 T5: the refusal must name the missing member (52), got: ' + result.stderr);
+    const calls = readGhArgvLog(argvLog);
+    assert(!calls.some(c => c[1] === 'create'),
+      '#1098 T5: the refusal must not create a PR, got: ' + JSON.stringify(calls));
+    const remoteHeads = G.git(tmp, ['ls-remote', '--heads', 'origin'], { env }).stdout.toString();
+    assert(!remoteHeads.includes(branch),
+      '#1098 T5: the refusal must not push the branch, got: ' + remoteHeads);
+    console.log('testSinkPrReuseRefusesMissingCloses: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T6 — a reused PR whose base is not the resolved default branch must be refused (candidate
+// identity: head==branch, base==default); nothing is created or pushed.
+function testSinkPrReuseRefusesBaseMismatch() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-base-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      list: JSON.stringify([{
+        url: 'https://github.com/test/repo/pull/9', number: 9, state: 'OPEN',
+        headRefName: 'workflow/issue-53', baseRefName: 'develop',
+        body: 'Closes #53'
+      }])
+    });
+    const branch = 'workflow/issue-53';
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-53');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 53\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', 'issue-53', '--branch', branch, '--issue', '53'
+    ], { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(result.status !== 0, '#1098 T6: a base-mismatched reused PR must be refused');
+    assert(/base/.test(result.stderr) && /develop/.test(result.stderr) && /main/.test(result.stderr),
+      '#1098 T6: the refusal must name the base mismatch (develop vs main), got: ' + result.stderr);
+    const calls = readGhArgvLog(argvLog);
+    assert(!calls.some(c => c[1] === 'create'),
+      '#1098 T6: the refusal must not create a PR, got: ' + JSON.stringify(calls));
+    const remoteHeads = G.git(tmp, ['ls-remote', '--heads', 'origin'], { env }).stdout.toString();
+    assert(!remoteHeads.includes(branch),
+      '#1098 T6: the refusal must not push the branch, got: ' + remoteHeads);
+    console.log('testSinkPrReuseRefusesBaseMismatch: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T7 — linked posture: the archive rides the PR branch (commitPathsOntoCandidate onto the
+// branch tip, ff the checked-out dev worktree, plain push — never the default branch), from the
+// MAIN checkout AND from the DEV WORKTREE (the scenario-B fix), and a keep-open archive is still
+// refused from the worktree (the guard widened, never narrowed).
+function testSinkPrLinkedPosturePublishesArchive() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-linked-')));
+  const remotePath = tmp + '-remote';
+  const wtRoot = tmp + '-wt';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const worktrees = [];
+  const scenario = (project, issueNo, runCwd, opts) => {
+    const o = opts || {};
+    const branch = 'workflow/' + project;
+    const wt = path.join(wtRoot, project);
+    worktrees.push(wt);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), project + '\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', project + ' work'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    const pushedTip = G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim();
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: ' + issueNo + '\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n'
+      + (o.keepOpen ? 'issue_action: comment_keep_open\n' : ''));
+    fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n');
+    fs.writeFileSync(path.join(archDir, 'plan.md'), '# Plan\n');
+    fs.writeFileSync(path.join(archDir, '.cache', 'x.json'), '{}\n');
+    const binDir = path.join(tmp, '.bin-' + project);
+    writeSinkPrStubGh(binDir, { list: '[]', create: 'https://github.com/test/repo/pull/' + issueNo });
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', project, '--branch', branch, '--issue', String(issueNo)
+    ], { cwd: runCwd, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    return { result, headBefore, pushedTip, branch, wt, archDir };
+  };
+  const assertPublishes = (tag, s, project) => {
+    assert(s.result.status === 0,
+      '#1098 T7' + tag + ': sink-pr should exit 0\nstdout: ' + s.result.stdout + '\nstderr: ' + s.result.stderr);
+    assert(/sink_pr: created/.test(s.result.stdout),
+      '#1098 T7' + tag + ': stdout must carry sink_pr: created, got: ' + s.result.stdout);
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === s.headBefore,
+      '#1098 T7' + tag + ': local main must not move');
+    assert(G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], { env }).stdout.toString().trim() === '',
+      '#1098 T7' + tag + ': main index and tracked files must be untouched');
+    const remoteTree = G.git(tmp, ['ls-tree', '-r', '--name-only', 'origin/' + s.branch], { env }).stdout.toString();
+    for (const f of ['plan.md', '.cache/x.json', 'workflow-state.md', 'finalization-summary.md', '.cache/sink-pr-result.json']) {
+      assert(remoteTree.includes('kaola-workflow/archive/' + project + '/' + f),
+        '#1098 T7' + tag + ': the remote branch must carry the whole archive (' + f + '), got:\n' + remoteTree);
+    }
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', project)),
+      '#1098 T7' + tag + ': no live dir may reappear in main');
+    assert(!fs.existsSync(path.join(s.wt, 'kaola-workflow', project)),
+      '#1098 T7' + tag + ': no live dir may reappear in the dev worktree');
+    const newTip = G.git(tmp, ['rev-parse', s.branch], { env }).stdout.toString().trim();
+    assert(newTip !== s.pushedTip,
+      '#1098 T7' + tag + ': the archive commit must advance the branch');
+    assert(newTip === G.git(tmp, ['rev-parse', 'origin/' + s.branch], { env }).stdout.toString().trim(),
+      '#1098 T7' + tag + ': local and remote branch tips must match after the push');
+    assert(G.git(s.wt, ['status', '--porcelain'], { env }).stdout.toString().trim() === '',
+      '#1098 T7' + tag + ': the dev worktree stays clean after the ff advance');
+  };
+  try {
+    initGitRepoWithBareRemote(tmp);
+    // (A) run from the MAIN checkout
+    assertPublishes('A', scenario('issue-34', 34, tmp), 'issue-34');
+    // (B) run from the DEV WORKTREE — main-root resolution must make both postures equivalent
+    assertPublishes('B', scenario('issue-35', 35, path.join(wtRoot, 'issue-35')), 'issue-35');
+    // (C) a keep-open archive is still refused from the worktree (new case; old refusal tests stay)
+    const c = scenario('issue-36', 36, path.join(wtRoot, 'issue-36'), { keepOpen: true });
+    assert(c.result.status !== 0,
+      '#1098 T7C: keep-open must still be refused from the dev worktree, got exit 0');
+    assert(/merge-sink-only/.test(c.result.stderr),
+      '#1098 T7C: the refusal must say merge-sink-only, got: ' + c.result.stderr);
+    console.log('testSinkPrLinkedPosturePublishesArchive: PASSED');
+  } finally {
+    for (const wt of worktrees) {
+      try { G.git(tmp, ['worktree', 'remove', '--force', wt], { env }); } catch (_) {}
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T8a — MERGED with the archive already on origin: the main checkout is fast-forwarded
+// under the publish lock (its own byte-identical untracked archive moved aside), publication is
+// `published`, closeout is per-member, and the NEXT watch-pr no longer sees the run (tracked at
+// HEAD after the ff — the reconciliation face is bounded and stateless).
+function testWatchPrReconcilesMergedPublishedRun() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-merged-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    plantArchivedPrRun(tmp, env, 'issue-36', 36, { merged: true, carryArchive: true });
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'MERGED', issueStates: { '36': 'closed' } });
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(result.watched === 0,
+      '#1098 T8a: an archived run is not live — watched must be 0, got: ' + JSON.stringify(result));
+    assert(Array.isArray(result.reconciled) && result.reconciled.length === 1,
+      '#1098 T8a: exactly one reconciled entry, got: ' + JSON.stringify(result));
+    const rec = result.reconciled[0];
+    assert(rec.folder === 'issue-36' && rec.pr_url === 'https://github.com/test/repo/pull/36',
+      '#1098 T8a: the entry names the run and its PR, got: ' + JSON.stringify(rec));
+    assert(rec.publication === 'published',
+      '#1098 T8a: publication must be published, got: ' + JSON.stringify(rec));
+    assert(rec.archive === 'published',
+      '#1098 T8a: the archive is on origin — archive must be published, got: ' + JSON.stringify(rec));
+    assert(rec.closeout === 'closed',
+      '#1098 T8a: every member closed — closeout must be closed, got: ' + JSON.stringify(rec));
+    assert(rec.main_checkout === 'advanced',
+      '#1098 T8a: main must be advanced, got: ' + JSON.stringify(rec));
+    assert(rec.receipt && rec.receipt.remote_issue_closed === 'already_closed',
+      '#1098 T8a: the receipt must carry the member disposition, got: ' + JSON.stringify(rec.receipt));
+    assert(rec.closure_invariants && rec.closure_invariants.ok === true,
+      '#1098 T8a: invariants must be ok on the happy path, got: ' + JSON.stringify(rec.closure_invariants));
+    const headAfter = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    assert(headAfter !== headBefore, '#1098 T8a: main must actually move');
+    assert(headAfter === G.git(tmp, ['rev-parse', 'origin/main'], { env }).stdout.toString().trim(),
+      '#1098 T8a: main must be advanced to origin/main');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-36', 'workflow-state.md')),
+      '#1098 T8a: the archive stays on disk (never moved or deleted)');
+    assert(G.git(tmp, ['ls-files', '--', 'kaola-workflow/archive/issue-36/workflow-state.md'], { env }).stdout.toString().trim() !== '',
+      '#1098 T8a: the archive is tracked after the ff');
+    // Second run: the ff made the run tracked at HEAD — out of the scan face for good.
+    const result2 = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(!result2.reconciled,
+      '#1098 T8a: a reconciled run must leave the scan face, got: ' + JSON.stringify(result2.reconciled));
+    console.log('testWatchPrReconcilesMergedPublishedRun: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T8b — still OPEN: publication is pending, nothing is modified (no advance, no probes,
+// no claim release), and the archive stays exactly where it is.
+function testWatchPrReconcilesOpenRunPending() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-open-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    plantArchivedPrRun(tmp, env, 'issue-37', 37, {});
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'OPEN', issueStates: { '37': 'open' } });
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    const rec = (result.reconciled || [])[0];
+    assert(rec && rec.folder === 'issue-37' && rec.publication === 'pending',
+      '#1098 T8b: an OPEN PR must report publication pending, got: ' + JSON.stringify(result.reconciled));
+    assert(rec.closeout === undefined && rec.main_checkout === undefined && rec.receipt === undefined,
+      '#1098 T8b: an OPEN run must not be probed or advanced, got: ' + JSON.stringify(rec));
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === headBefore,
+      '#1098 T8b: an OPEN run must not move main');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-37', 'workflow-state.md')),
+      '#1098 T8b: the archive stays on disk untouched');
+    assert(G.git(tmp, ['ls-files', '--', 'kaola-workflow/archive/issue-37/'], { env }).stdout.toString().trim() === '',
+      '#1098 T8b: an OPEN run stays untracked (no tracked modifications)');
+    console.log('testWatchPrReconcilesOpenRunPending: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T8c — CLOSED without merging: publication is not_published with reason pr_closed_unmerged;
+// the archive — the only run record — is left exactly as it was, byte for byte.
+function testWatchPrReconcilesClosedRunUntouched() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-closed-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const archiveFiles = plantArchivedPrRun(tmp, env, 'issue-38', 38, {});
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'CLOSED', issueStates: { '38': 'open' } });
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    const rec = (result.reconciled || [])[0];
+    assert(rec && rec.folder === 'issue-38' && rec.publication === 'not_published' && rec.reason === 'pr_closed_unmerged',
+      '#1098 T8c: a closed-unmerged PR must report not_published/pr_closed_unmerged, got: ' + JSON.stringify(result.reconciled));
+    assert(rec.main_checkout === undefined,
+      '#1098 T8c: a closed-unmerged run must not be advanced, got: ' + JSON.stringify(rec));
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === headBefore,
+      '#1098 T8c: a closed-unmerged run must not move main');
+    for (const [rel, content] of Object.entries(archiveFiles)) {
+      const p = path.join(tmp, 'kaola-workflow', 'archive', 'issue-38', rel);
+      assert(fs.readFileSync(p, 'utf8') === content,
+        '#1098 T8c: the archive must stay byte-identical (' + rel + ')');
+    }
+    console.log('testWatchPrReconcilesClosedRunUntouched: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T8d — MERGED but the ff is refused by foreign tracked modifications: main_checkout is
+// `behind:<git reason>` (reported, never auto-resolved), publication is still published, and
+// neither the local change nor the archive is touched.
+function testWatchPrReconcilesForeignDirtBehind() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-behind-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    plantArchivedPrRun(tmp, env, 'issue-39', 39, { merged: true, carryArchive: true, changes: { 'README.md': 'fixture v2\n' } });
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'local edit\n');
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'MERGED', issueStates: { '39': 'closed' } });
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    const rec = (result.reconciled || [])[0];
+    assert(rec && rec.publication === 'published' && rec.archive === 'published',
+      '#1098 T8d: the merge is real — publication stays published, got: ' + JSON.stringify(rec));
+    assert(typeof rec.main_checkout === 'string' && rec.main_checkout.indexOf('behind:') === 0,
+      '#1098 T8d: a refused ff must report main_checkout behind:<reason>, got: ' + JSON.stringify(rec));
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === headBefore,
+      '#1098 T8d: a refused ff must not move main');
+    assert(fs.readFileSync(path.join(tmp, 'README.md'), 'utf8') === 'local edit\n',
+      '#1098 T8d: the foreign local change must survive the refused ff untouched');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-39', 'plan.md')),
+      '#1098 T8d: the archive stays on disk untouched');
+    assert(G.git(tmp, ['ls-files', '--', 'kaola-workflow/archive/issue-39/'], { env }).stdout.toString().trim() === '',
+      '#1098 T8d: the archive is restored untracked after the refused ff');
+    console.log('testWatchPrReconcilesForeignDirtBehind: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T8e — MERGED but the archive never reached origin (the pre-#1098 legacy shape):
+// publication is published, archive is local_only (reported, not repaired), the main checkout
+// still advances to the merge point, and the local archive survives untracked.
+function testWatchPrReconcilesLocalOnlyArchive() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-local-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    plantArchivedPrRun(tmp, env, 'issue-40', 40, { merged: true, carryArchive: false, changes: { 'README.md': 'fixture v2\n' } });
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'MERGED', issueStates: { '40': 'open' } });
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    const rec = (result.reconciled || [])[0];
+    assert(rec && rec.publication === 'published' && rec.archive === 'local_only',
+      '#1098 T8e: a merged PR whose archive never reached origin reports published/local_only, got: ' + JSON.stringify(rec));
+    assert(rec.closeout === 'incomplete',
+      '#1098 T8e: an open member reports closeout incomplete (never a partial close), got: ' + JSON.stringify(rec));
+    assert(rec.main_checkout === 'advanced',
+      '#1098 T8e: main still advances to the merge point, got: ' + JSON.stringify(rec));
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() ===
+      G.git(tmp, ['rev-parse', 'origin/main'], { env }).stdout.toString().trim(),
+      '#1098 T8e: main must be at the merge point');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-40', 'workflow-state.md')),
+      '#1098 T8e: the local_only archive survives on disk');
+    assert(G.git(tmp, ['ls-files', '--', 'kaola-workflow/archive/issue-40/'], { env }).stdout.toString().trim() === '',
+      '#1098 T8e: the local_only archive stays untracked');
+    console.log('testWatchPrReconcilesLocalOnlyArchive: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(remotePath, { recursive: true, force: true });
@@ -11774,6 +12451,18 @@ function buildRegistry() {
   add('testSinkMergeKeepOpenArchivedStateGuard',          testSinkMergeKeepOpenArchivedStateGuard);
   add('testSinkPrKeepOpenRefusal',                        testSinkPrKeepOpenRefusal);
   add('testSinkPrClosesEveryMember',                      testSinkPrClosesEveryMember);
+  add('testSinkPrReusesExistingPr',                       testSinkPrReusesExistingPr);
+  add('testSinkPrReentryIdempotent',                      testSinkPrReentryIdempotent);
+  add('testSinkPrAlreadyMergedSkipsRepublish',            testSinkPrAlreadyMergedSkipsRepublish);
+  add('testSinkPrClosedUnmergedRefuses',                  testSinkPrClosedUnmergedRefuses);
+  add('testSinkPrReuseRefusesMissingCloses',              testSinkPrReuseRefusesMissingCloses);
+  add('testSinkPrReuseRefusesBaseMismatch',               testSinkPrReuseRefusesBaseMismatch);
+  add('testSinkPrLinkedPosturePublishesArchive',          testSinkPrLinkedPosturePublishesArchive);
+  add('testWatchPrReconcilesMergedPublishedRun',          testWatchPrReconcilesMergedPublishedRun);
+  add('testWatchPrReconcilesOpenRunPending',               testWatchPrReconcilesOpenRunPending);
+  add('testWatchPrReconcilesClosedRunUntouched',           testWatchPrReconcilesClosedRunUntouched);
+  add('testWatchPrReconcilesForeignDirtBehind',           testWatchPrReconcilesForeignDirtBehind);
+  add('testWatchPrReconcilesLocalOnlyArchive',            testWatchPrReconcilesLocalOnlyArchive);
   add('testClaimNormalizesForeignSinkNoun',               testClaimNormalizesForeignSinkNoun);
   add('testClosureAuditOfflineRemoteClassesSkipped',      testClosureAuditOfflineRemoteClassesSkipped);
   add('testClosureAuditArchiveContentDrift832',           testClosureAuditArchiveContentDrift832);
