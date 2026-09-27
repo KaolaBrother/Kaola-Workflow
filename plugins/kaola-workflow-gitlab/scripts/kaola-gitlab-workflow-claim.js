@@ -5530,10 +5530,17 @@ function unclaimedDerivedDirs(root, projectName, branch, claimTs) {
 // 57fc4c67 and from the lane arm since #1100.)
 // #1102: `runDirs`, when the lane arm passes them (laneReceiptDirs), are the ONLY folders read —
 // never every folder sharing a name, so an old run's leftover receipt cannot pin a new run's worktree.
+// #1103: when `runDirs` is absent the base read is no longer two literal paths. `archiveProjectDir`
+// renames a colliding archive destination to `archive/<project>.archived-<ts>/`, so a run whose
+// closure already moved the folder has its receipt there and nowhere else. Widening the folder SET
+// cannot widen the pin's identity: the ambiguous and older-run rules stay #1102's, because this
+// default set is only reached when no record resolved an owner, and a record-free run has no second
+// run to confuse it with. The suffix convention (`<project>.archived-`) is the one the rest of this
+// file already matches on.
 function sinkReceiptResumable(root, projectName, runDirs) {
   for (const dir of runDirs || [
     path.join(root, 'kaola-workflow', projectName),
-    path.join(root, 'kaola-workflow', 'archive', projectName),
+    ...archivedReceiptDirs(root, projectName),
   ]) {
     let receipt = null;
     try { receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8')); } catch (_) { receipt = null; }
@@ -5541,6 +5548,22 @@ function sinkReceiptResumable(root, projectName, runDirs) {
     if (Object.values(receipt.steps).some((v) => v !== 'done')) return true;
   }
   return false;
+}
+
+// #1103: the archive folders that can carry a run's receipt: the exact `archive/<project>` first, as
+// the base read had it, then every collision-renamed `archive/<project>.archived-<ts>/` sibling. The
+// suffix is a sortable timestamp, so the newest archive is read first — the same discipline as the
+// sink's own #429 `resolveSinkReceiptPath` scan. A project name that is not a safe name is read
+// exactly (no sibling scan), so a traversal-shaped name can never widen the directory set.
+function archivedReceiptDirs(root, projectName) {
+  const archiveBase = path.join(root, 'kaola-workflow', 'archive');
+  const dirs = [path.join(archiveBase, projectName)];
+  if (!isSafeName(projectName)) return dirs;
+  let names = [];
+  try { names = fs.readdirSync(archiveBase); } catch (_) { return dirs; }
+  const suffixed = names.filter((name) => name.startsWith(projectName + '.archived-')).sort().reverse();
+  for (const name of suffixed) dirs.push(path.join(archiveBase, name));
+  return dirs;
 }
 
 function collectStale(root) {
