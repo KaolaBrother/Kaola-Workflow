@@ -227,8 +227,11 @@ git pull --ff-only
 ./install-all.sh --check
 ```
 
-When upgrading, reinstall on **every machine**. The installer no longer installs Kaola role
-profiles; see [Installation](docs/installation.md) for upgrade and uninstall. Rebuild Cursor Cloud's
+When upgrading, reinstall on **every machine**. Installers no longer install Kaola role profiles.
+They remove the ones earlier releases installed only when an ownership record or a released-render
+digest proves them unchanged, and report every other Kaola-named file as
+`Preserved retired Kaola-Workflow agent (<reason>): <path>` for you to review and delete by hand;
+see [Upgrading from earlier releases](docs/installation.md#upgrading-from-releases-that-installed-kaola-role-profiles). Rebuild Cursor Cloud's
 saved environment separately. Workflow installers update Workflow carriers; target CLIs and desktop
 applications have their own update process.
 

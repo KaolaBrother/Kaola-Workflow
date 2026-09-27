@@ -118,8 +118,10 @@ interaction in scope, so compaction cannot remove it. It starts no subprocess an
 new copy on each tool call. There is no path selector, JS process, or prompt composition.
 
 `--uninstall` removes only kaola-deployed names. A subsequent bare install
-redeploys the edition. The installer no longer installs Kaola role profiles; see
-[Installation](installation.md) for upgrade and uninstall.
+redeploys the edition. No Grok profile is installed. Install and `--uninstall` retire the profiles
+earlier releases copied into `agents/` only when their bytes equal a released Grok render, and keep
+and report any other Kaola-named file; see
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles).
 
 ## Why no compact hook
 

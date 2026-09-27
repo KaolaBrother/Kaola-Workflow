@@ -35,9 +35,10 @@ native Skill re-invocation — never a manual `read` of the skill file.
 - `.zcode/config.json`: an empty deterministic hook declaration object.
 - `.zcode/kaola-workflow/scripts/`: support-script launchers used by the skill surface.
 
-The render produces nothing under `.zcode/agents/`. The installer no longer installs Kaola role
-profiles and removes a retired one only while it carries the managed marker; see
-[Installation](installation.md) for upgrade and uninstall. Pre-#1079 flat commands under
+The render produces nothing under `.zcode/agents/`. Install and uninstall remove a profile an
+earlier release deployed only when its bytes equal a released ZCode render; the managed marker alone
+is not proof, and an edited or unrecorded Kaola-named profile is kept and reported (see
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)). Pre-#1079 flat commands under
 `.zcode/commands/` are retired: install and uninstall remove exactly the three deployed basenames
 (`workflow-next`, `workflow-init`, `kaola-workflow-finalize`) and preserve every other, user-owned
 file.
@@ -77,8 +78,9 @@ Kaola installing no profile is never evidence that ZCode lacks subagent capabili
 
 ZCode discovers skills at workspace scope (`.zcode/skills/`) and user scope
 (`${ZCODE_HOME:-~/.zcode}/skills/`); subagent profiles are discovered only at user scope. A project
-install stages skills under `<target>/.zcode/skills/`. The installer no longer installs Kaola role
-profiles at any scope; see [Installation](installation.md) for upgrade and uninstall. On upgrade it
+install stages skills under `<target>/.zcode/skills/`. The installer installs no Kaola role
+profiles at any scope and retires released ones from both `<target>/.zcode/agents/` and
+`${ZCODE_HOME:-~/.zcode}/agents/` (see above). On upgrade it
 retires the three legacy command basenames from the resolved scope's `commands/` directory,
 preserving every user-authored file.
 

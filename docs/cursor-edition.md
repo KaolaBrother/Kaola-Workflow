@@ -234,8 +234,10 @@ does not run through `install.sh --forge`.
 > leg of its nine-runtime sequence, with a per-runtime PASS/FAIL summary.
 > `--global` inherits this installer's user-home-only Cursor layout: it is not
 > permission to update every consumer repository. Project `.cursor` carriers
-> need an explicit `--target` or `install-all.sh --project`. The installer no longer installs
-> Kaola role profiles; see [Installation](installation.md) for upgrade and uninstall. Cursor Cloud
+> need an explicit `--target` or `install-all.sh --project`. No Cursor agent is installed; install,
+> `--ensure-target`, and uninstall retire the agents earlier releases wrote under `agents/` only on
+> receipt-digest or released-render proof, reporting the rest on stderr (see
+> [Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)). Cursor Cloud
 > must rebuild its saved environment before an upgrade takes effect there — an old Build keeps
 > serving what it installed. It never installs or
 > updates Cursor Cloud; that path begins only inside a confirmed Cursor Cloud

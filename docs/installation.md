@@ -37,7 +37,7 @@ global-contract carrier itself: every runtime installer installs its own carrier
 ./install-all.sh --project=/absolute/repository/path --yes
 ```
 
-`--check` is read-only and prints one `[global-contract] <runtime>: …` line per runtime. `--global` is the default for OpenCode, Codex profiles, Kimi, Grok, Cursor,
+`--check` is read-only and prints one `[global-contract] <runtime>: …` line per runtime. `--global` is the default for OpenCode, Codex, Kimi, Grok, Cursor,
 ZCode, Devin, and Droid; Claude has one runtime-wide install. `--project[=DIR]` selects project scope where the
 runtime supports it. Run `./install-all.sh --help` for the current option contract.
 
@@ -47,7 +47,7 @@ Codex marketplace plugin for the user; Codex forge selection belongs to the inst
 
 ### Global contract carriers
 
-Each runtime installer — `install.sh` and the Codex profile installer included — installs only its
+Each runtime installer — `install.sh` and the Codex installer included — installs only its
 own global-contract carrier, as its last step, through
 `node scripts/kaola-workflow-global-contract.js install --runtime <runtime> --json`. A standalone
 install is therefore complete on its own, and no install order matters. `install-all.sh` produces
@@ -76,12 +76,15 @@ If it does not match, `OWNER_CONFLICT` is reported for that runtime only. In
 ./install.sh --yes --forge=github
 ```
 
-The installer deploys commands, profiles, support scripts, and the compact-recovery hook. Restart
-Claude Code after install or update. Choose `--forge=gitlab` or `--forge=gitea` for those editions.
+The installer deploys commands, support scripts, and the compact-recovery hook. It installs no
+subagent profile and retires the ones earlier releases installed (see
+[Upgrading from earlier releases](#upgrading-from-releases-that-installed-kaola-role-profiles)).
+Restart Claude Code after install or update. Choose `--forge=gitlab` or `--forge=gitea` for those
+editions.
 
 ### Codex
 
-Codex separates marketplace registration, plugin installation, and profile/hook installation.
+Codex separates marketplace registration, plugin installation, and hook installation.
 Register the local checkout, then install exactly one forge edition:
 
 ```bash
@@ -93,8 +96,15 @@ codex plugin add kaola-workflow@kaolabrother-kaola-workflow
 # codex plugin add kaola-workflow-gitea@kaolabrother-kaola-workflow
 ```
 
-Run the profile installer from the active plugin root, or run `./install-all.sh --yes` after the
-plugin is present:
+Run the Codex installer from the active plugin root, or run `./install-all.sh --yes` after the
+plugin is present. The entry point keeps its historical name, `install-codex-agent-profiles.js`,
+but installs and registers no profile. It retires the role profiles, ownership record, and
+`# BEGIN/END kaola-workflow agents` registration block that earlier releases wrote in the target
+scope (see [Upgrading from earlier releases](#upgrading-from-releases-that-installed-kaola-role-profiles)).
+It then installs the global compact hook (`~/.codex/hooks.json`), its version-less hook home
+(`~/.codex/kaola-workflow/`), and the `~/.codex/AGENTS.md` global-contract carrier. It also reports
+the dispatch posture and `multi_agent_v2` state it reads from `config.toml` but never writes them.
+The doctor is a read-only diagnostic:
 
 ```bash
 node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
@@ -114,19 +124,13 @@ Workflow installer does not install or upgrade either Codex surface, and Workflo
 require a particular desktop bundle version.
 
 Open Codex, run `/hooks`, and approve the `kaola-workflow:` entries. Trust is content-hash based, so
-changed hook bytes require renewed approval. Exit that session, rerun the profile installer and
+changed hook bytes require renewed approval. Exit that session, rerun the installer and
 doctor, then start a fresh working session. Automation that has independently vetted the hook source
 may use `codex exec --dangerously-bypass-hook-trust` for that run; it does not persist approval.
 
-Kaola's named task dispatch requires the runtime's MultiAgentV2 feature. Keep user-owned Codex
-configuration changes explicit and verify the live CLI because this capability is version-sensitive.
-The current supported shape is:
-
-```toml
-[features.multi_agent_v2]
-enabled = true
-max_concurrent_threads_per_session = 5
-```
+Kaola-Workflow requires no Codex dispatch mode and sets no Codex version floor. The installer and
+doctor report `multi_agent_v2`, the dispatch posture, and the V2 bounds as host facts, never as a
+refusal. Multi-agent configuration in `config.toml` stays user-owned.
 
 ### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH
 
@@ -143,9 +147,10 @@ Each additive installer accepts a forge, global or project scope, and non-intera
 ./install-dsh.sh      --global --yes --forge=github
 ```
 
-For project scope, use `--target /absolute/repository/path`. Cursor intentionally requires explicit
+For project scope, use `--target /absolute/repository/path` (Devin, Droid, and DSH use
+`--project[=DIR]`). Cursor intentionally requires explicit
 `--target` for project materialization. Start a fresh runtime session after installation so native
-commands and profiles are rediscovered.
+commands and skills are rediscovered.
 
 Carrier, configuration, hook, scope, precedence, and upgrade details:
 
@@ -195,8 +200,8 @@ git pull --ff-only
 ./install-all.sh --check
 ```
 
-For Codex, a version-keyed plugin cache may need an explicit remove and add before profiles are
-refreshed:
+For Codex, a version-keyed plugin cache may need an explicit remove and add before the active plugin
+root carries the new release:
 
 ```bash
 codex plugin remove kaola-workflow@<marketplace>
@@ -212,6 +217,121 @@ Git source and is not the local-path replacement.
 
 Cursor Cloud updates repeat its setup transaction, Save Build, and fresh top-level Agent sequence.
 Local `install-all.sh` correctly reports that remote target as `REMOTE_REQUIRED`.
+
+## Upgrading from releases that installed Kaola role profiles
+
+Kaola-Workflow ships no subagent role profiles ([ADR 0029](decisions/0029-native-subagents-only.md),
+#1101). Earlier releases installed them for Claude Code, Codex, Grok, Cursor, ZCode, Devin, Kimi,
+and OpenCode. Every one of those installers now retires them instead. Install, reinstall, upgrade,
+and (where the runtime has one) uninstall remove a retired profile only when the evidence proves
+Kaola wrote it and it is unchanged:
+
+- **Ownership record**: the directory's ownership record lists the file with the sha256 the file
+  still has. For Claude Code and Kimi, which stamped `kaola-workflow-managed-agent: true` into every
+  recorded file, the file must also still carry that marker.
+- **Released render**: the file's bytes equal a profile that some Kaola release installed for that
+  runtime. The digests are frozen in `scripts/kaola-workflow-retired-agents.js` (Codex:
+  `RELEASED_PROFILE_SHA256` in its installer) and never extended; how they were collected is
+  recorded in `scripts/fixtures/issue-1101/PROVENANCE.md`.
+
+Only files named after a role that some release installed, or listed in the record, are considered
+(Codex: every `.toml` in the Kaola-owned `.codex/agents/kaola-workflow/`). Any other file in a
+shared agents directory is neither touched nor reported. Symlinks and other non-regular entries are
+never followed. A readable ownership record is removed once it has been read. Each decision is
+reported, one line per path:
+
+```text
+Removed retired Kaola-Workflow agent: <path>
+Removed retired Kaola-Workflow agent record: <path>
+Preserved retired Kaola-Workflow agent (<reason>): <path>
+```
+
+| Reason | Meaning |
+|---|---|
+| `modified_since_install` | The record lists the file, but its bytes (or its managed marker) changed after install. |
+| `no_ownership_record` | No record lists the file and its bytes are not a released render: a copied or edited profile, or your own file under a Kaola role name. |
+| `non_regular` | A symlink or other non-file entry, or an agents directory or record that is not a regular directory or file. |
+
+A preserved file does not fail anything: the retirement step exits 0 and the install or uninstall
+continues. From then on the file is yours. Review each reported path and delete it by hand if you no
+longer want it. The record is gone after the first run, so a later run reports that same file as
+`no_ownership_record`. A shell installer stops with a `… sweep failed for <dir>` error only when the
+retirement step itself cannot run (a usage or I/O error). `uninstall.sh` prints a warning in that
+case and continues. `./install-all.sh --yes` runs every one of these installers at global scope. A
+project scope migrates when that project is reinstalled at project scope (for example
+`install-all.sh --project=DIR --yes`).
+
+Nothing is resurrected. No installer deploys an agents directory, even when a stale generated
+edition tree or an older plugin source still contains profiles.
+
+Per runtime:
+
+- **Claude Code**: `install.sh` and `uninstall.sh` retire `${KAOLA_AGENT_DIR:-~/.claude/agents}`
+  against `.kaola-workflow-agent-manifest`, on the record proof only: there is no Claude
+  released-render catalog, so without that manifest nothing is deleted. The agent model manifest
+  `.kaola-agent-models.json` that older installs wrote is deleted, reported as
+  `Removed retired agent model manifest: <path>` on install and
+  `Removed agent model manifest: <path>` on uninstall.
+- **Codex**: `install-codex-agent-profiles.js` keeps its name because `install-all.sh`, the
+  preflight, and older plugin caches invoke it. In the target scope (the home directory under
+  `--global`, or a project root) it retires `.codex/agents/kaola-workflow/*.toml` and the
+  `.kaola-managed-profiles.json` record, and strips the `# BEGIN/END kaola-workflow agents` block
+  from `.codex/config.toml` only when the block's body is exactly one a release wrote. It reports
+  that block separately:
+
+  ```text
+  Removed retired Kaola-Workflow agent registrations: <config.toml>
+  Preserved retired Kaola-Workflow agent registrations (<reason>): <config.toml>
+  ```
+
+  Codex adds these reasons: `referenced_by_user_config` (a `config_file` entry left in that
+  `config.toml` still points at the profile, so it is kept), `unsupported_record` (the record is
+  unparseable or has a newer schema), `ambiguous_markers` (the marker lines are not one well-formed
+  pair), and `mixed_managed_block` (the block's body is not one a release wrote). Pre-rename
+  `codex-workflow` leftovers (`.codex/agents/codex-workflow/*.toml` and a
+  `# BEGIN codex-workflow agents` block) are only reported, as `no_ownership_record`. Files under
+  `CODEX_HOME` are not a retirement target and are left untouched.
+  `kaola-workflow-codex-preflight.js` reports any remaining profile, record, or block as
+  `retired_role_residue` (exit 1). Without `--no-autofix` it runs this installer for each such
+  scope. If the installer preserved files, the preflight exits 1 with `autofix_attempted: true` and
+  a repair telling you to review and delete them by hand. `--doctor` only reports.
+- **Grok**: `install-grok.sh` and its `--uninstall` retire `<scope>/agents`, where the scope is
+  `${GROK_HOME:-~/.grok}` or `<project>/.grok`. There is no record, so only the released-render
+  proof applies.
+- **Cursor**: the proof is a receipt row `agents/<name>.md` whose digest the file still has, or a
+  released render (receipt-less v10.0.1-era installs). Install, `--ensure-target`, and `--uninstall`
+  all retire, and Cursor prints the report lines on stderr. The `agents/` receipt rows are consumed
+  and never carried into a new receipt, and an `agents/` row in an older receipt never makes the
+  global authority stale. A project's `.cursor/agents` migrates the next time that project is
+  materialized after the global upgrade: `install-cursor.sh --target DIR`, or the installed
+  `kaola-workflow-cursor-surface.js --ensure-target DIR`.
+- **ZCode**: install and `--uninstall` retire both the staged `<project>/.zcode/agents` and
+  `${ZCODE_HOME:-~/.zcode}/agents`, on the released-render proof only. The managed marker alone is
+  not proof.
+- **Devin**: install retires `${DEVIN_CONFIG_DIR:-~/.config/devin}/agents` or
+  `<project>/.devin/agents` on the released-render proof. There is no Devin uninstaller.
+  `install-devin.sh --check` fails only while a released profile is still installed. It prints
+  `Retired Kaola-Workflow agent still installed: <path>` and
+  `check: retired Kaola agent profile still installed under <dir>`; rerun the install to clear it. A
+  kept, edited profile does not fail `--check`.
+- **Kimi**: install and `--uninstall` retire native agents in `<scope>/agents`, where the scope is
+  `${KIMI_CODE_HOME:-~/.kimi-code}` or `<project>/.kimi-code`, against
+  `.kaola-workflow-agent-manifest` (with the managed marker) or a released render. They also retire
+  the role Skills of every release that shipped them, `<scope>/skills/kaola-role-<role>/`: a Skill
+  directory is removed only when it holds exactly one `SKILL.md` whose bytes are a released render.
+  Any other `kaola-role-*` entry is kept and reported.
+- **OpenCode**: install and `--uninstall` retire `<layout>/agents` and the retired singular
+  `<layout>/agent`, each against its `.kaola-workflow-agent-manifest` or a released render. The
+  layout is `<project>/.opencode` or `<config>` (`${OPENCODE_CONFIG_DIR:-~/.config/opencode}`);
+  `--global` also retires the nested `<config>/.opencode/agent` that the v6.7–v6.8 global installs
+  wrote. `opencode.json` is never edited: its `agent.<role>` entries carry no ownership evidence, so
+  each one under a Kaola role name is only reported. Remove it by hand if you do not want it:
+
+  ```text
+  Preserved retired Kaola-Workflow agent binding (no_ownership_record): <opencode.json> agent.<role>
+  ```
+
+Droid and DSH have no retirement step.
 
 ## Uninstall
 
@@ -252,12 +372,14 @@ Devin has no uninstaller yet. To remove only its carrier, run
 `node scripts/kaola-workflow-global-contract.js uninstall --runtime devin --json`; its skills,
 support scripts, and hook entry must be removed by hand.
 
-Remove Codex with its own profile installer, then remove the plugin through its native command.
-`--global --uninstall` removes the global profiles, the managed `[agents.*]` block in
-`~/.codex/config.toml`, the `kaola-workflow:` entries in `~/.codex/hooks.json` (other entries and the
-file itself stay), and the hook home `~/.codex/kaola-workflow`. A project-scope uninstall removes only
-that project's profiles and config block; the global hooks serve every Codex scope and stay until the
-global uninstall. A profile whose bytes no longer match the recorded hash is preserved and reported:
+Remove Codex with its own installer entry point, then remove the plugin through its native command.
+`--global --uninstall` retires the global role profiles, their record, and the
+`# BEGIN/END kaola-workflow agents` block in `~/.codex/config.toml` with the same proof the install
+uses. It also removes the `kaola-workflow:` entries in `~/.codex/hooks.json` (other entries and the
+file itself stay), the hook home `~/.codex/kaola-workflow`, and Codex's managed region in
+`~/.codex/AGENTS.md`. A project-scope uninstall retires only that project's profiles and block; the
+global hooks serve every Codex scope and stay until the global uninstall. A profile or block that
+cannot be proven Kaola's and unchanged is preserved and reported:
 
 ```bash
 node ~/kaola-workflow/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js --global --uninstall

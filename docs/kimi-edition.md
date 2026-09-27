@@ -116,8 +116,10 @@ Project installs write command Skills below `<project>/.kimi-code/`. Global inst
 write them directly below `$KIMI_CODE_HOME`. Support scripts remain user-scoped in both
 cases.
 
-The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
-upgrade and uninstall. Reinstall is idempotent. Uninstall removes only ownership-proven artifacts,
+The installer installs no Kaola role profiles. Install and uninstall retire the native agents
+(`agents/`, against its manifest) and the `kaola-role-*` role Skills that earlier releases installed,
+only on proof, and report every other Kaola-named entry; see
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles). Reinstall is idempotent. Uninstall removes only ownership-proven artifacts,
 the three reserved Kaola command Skills, managed support files, and the retired managed config
 block. It preserves the user's other agents, Skills, config content, and the shared
 `~/.config/kaola-workflow/config.json`.

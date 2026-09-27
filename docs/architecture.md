@@ -566,8 +566,11 @@ Provenance is a separate axis in `templates/agents/provenance.json` and
 [`agents-source.md`](agents-source.md). It is validated and durable but excluded from prompt bodies;
 it keeps the attribution for the retired role contracts only.
 
-The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
-upgrade and uninstall. `kaola-workflow-codex-preflight.js --doctor` is an explicit diagnostic; live
+Installers install no role profile. They retire the ones earlier releases installed through
+`scripts/kaola-workflow-retired-agents.js` (Codex: its own installer): a file is removed only when
+its ownership record or a frozen released-render catalog proves it unchanged, and everything else is
+kept and reported (see [Installation](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)).
+`kaola-workflow-codex-preflight.js --doctor` is an explicit diagnostic; live
 next/finalize surfaces do not turn it into an entry gate.
 
 ### Native dispatch

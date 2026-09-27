@@ -61,8 +61,9 @@ nesting/concurrency limits stay host-owned.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
-The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
-upgrade and uninstall. The `next` and `finalize` Codex skills do not invoke
+`install-codex-agent-profiles.js` keeps its name but installs no profile; it retires the ones
+earlier releases installed, only on proof (see
+[Installation](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)). The `next` and `finalize` Codex skills do not invoke
 `kaola-workflow-codex-preflight.js`, parse or autofix its output, or make it a workflow entry,
 resume, or dispatch verdict; `--doctor` is an explicit, user-invoked diagnostic, never an ordinary
 session gate. See `docs/api.md` § Installation and edition sync for the explicit doctor boundary.
@@ -138,6 +139,22 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
   and exits non-zero only after all attempts finish. A source-spelling assertion is not acceptable
   uninstall coverage: exercise the real installer against a sandbox, assert the retired artifact is
   absent, and mutation-prove the guard by deleting the cleanup behavior.
+- **Run the edition suites from a worktree against an isolated tree root (#1101).** The OpenCode,
+  Kimi, Grok, Cursor, and ZCode generators write their generated edition trees into the *main*
+  checkout, which every worktree shares. Run from a linked worktree, a suite's D0 parity check would
+  read whatever another session last rendered there, and its self-provision step (`sync --write`)
+  would write into the main checkout. Point the generators, the installers that resolve
+  `--print-tree-root`, and those five suites at a throwaway root bound to this checkout (run from
+  the worktree root):
+
+  ```bash
+  KAOLA_EDITION_TREE_ROOT=$(mktemp -d) KAOLA_EDITION_TREE_FOR=$PWD node scripts/test-zcode-edition.js
+  KAOLA_EDITION_TREE_ROOT=$(mktemp -d) KAOLA_EDITION_TREE_FOR=$PWD npm run test:kaola-workflow:editions
+  ```
+
+  Both values must be absolute (a relative one throws). The override applies only to the checkout
+  `KAOLA_EDITION_TREE_FOR` names, so a fixture's throwaway repository copy keeps its own root.
+  Unset, the trees land in the main checkout as before.
 - **Single-scenario dev loop (#357).** `node scripts/simulate-workflow-walkthrough.js --list` prints the scenario registry (one name per line; ordering-coupled head scenarios carry a `[shared-tmp group]` marker and always run as one unit); `--only <name|prefix>` runs just the matching scenario(s) in seconds — use it to reproduce a single failure instead of re-running the full suite (the full-run sentinel prints only on full runs). The harness is fail-closed and isolated: a missing gh-shim file throws instead of falling through to the real `gh`, `runNode` children get a 120s timeout, a scrubbed `KAOLA_*` env, and global-git-config isolation (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), and the gitlab/gitea edition runner-of-runners print a delimited `CHILD FAILURE` block (last-30-line stdout/stderr tails) when a child test file fails.
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 - **Edition behavioral coverage (issue #342).** A green forge chain certifies *structure* (registries, forbidden tokens, file existence) — it is **insufficient evidence of forge behavioral parity** unless an edition-level test exercises the feature. A cross-edition feature that adds or changes behavior in a HAND-PORTED edition script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`) MUST add behavioral scenarios to that edition's walkthrough (`simulate-{gitlab,gitea}-workflow-walkthrough.js`) driving the real edition CLI, mirroring the root coverage modulo forge nouns. Byte-synced scripts (the codex mirrors under `plugins/kaola-workflow/scripts/`, enforced by `validate-script-sync.js`) inherit root behavioral coverage and need no duplicate scenarios. A throwaway `$TMPDIR` smoke proves a repair but is not coverage — commit the scenarios (the #328 CR1/CR2 lesson: the gitlab/gitea bundle-finalization half shipped under four green chains because the chains certified structure only).

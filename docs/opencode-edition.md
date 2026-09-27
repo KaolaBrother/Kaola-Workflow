@@ -227,8 +227,11 @@ hooks plugin. It writes no configuration: `opencode.json` and the shared
 `~/.config/kaola-workflow/config.json` are user-owned
 and no installer creates or edits them.
 
-The installer no longer installs Kaola role profiles; see [Installation](installation.md) for
-upgrade and uninstall.
+The installer installs no Kaola role profiles. Install and uninstall retire the profiles earlier
+releases wrote to `agents/`, the singular `agent/`, and (global) the nested `.opencode/agent`, only
+on manifest or released-render proof. Kaola-role `agent.<role>` bindings in `opencode.json` are
+reported, never edited; see
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles).
 
 ### Deploy layout — project vs global (scope-dependent)
 
@@ -252,8 +255,8 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 Older Kaola releases wrote profiles and commands to the non-native singular `agent/` and `command/`
 directories. On install, those directories are migration inputs, not ownership shortcuts. A legacy
 current command is removed only when its complete bytes equal the current generated source;
-retired-name and modified near-misses survive. For earlier Kaola profiles, see
-[Installation](installation.md) for upgrade and uninstall.
+retired-name and modified near-misses survive. Earlier Kaola profiles in `agent/` are retired on
+the same proof as `agents/` (see [Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)).
 
 ## Uninstall
 
@@ -263,9 +266,9 @@ retired-name and modified near-misses survive. For earlier Kaola profiles, see
 ./install-opencode.sh --uninstall --global        # remove the global ~/.config/opencode install
 ```
 
-`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. The installer no
-longer installs Kaola role profiles; see [Installation](installation.md) for how earlier ones are
-handled on upgrade and uninstall. Commands and hooks are removed by
+`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. It retires earlier
+Kaola profiles with the same proof the install uses (see
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles)). Commands and hooks are removed by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
 `RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
 the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you

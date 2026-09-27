@@ -25,8 +25,10 @@ The installer writes under the Devin user config directory `~/.config/devin`:
 - the managed global contract to `AGENTS.md`;
 - exactly one Kaola-owned `UserPromptSubmit` command hook in `config.json`.
 
-It installs nothing under `agents/` or `.devin/agents/`. The installer no longer installs Kaola
-role profiles; see [Installation](installation.md) for upgrade and uninstall.
+It installs nothing under `agents/` or `.devin/agents/`. Install removes the agent profiles earlier
+releases put there only when their bytes equal a released Devin render; an edited or unrecorded one
+is kept and reported. `--check` fails only while a released profile is still installed. See
+[Upgrading from earlier releases](installation.md#upgrading-from-releases-that-installed-kaola-role-profiles).
 
 Existing non-Kaola hooks are preserved. `--check` compares installed bytes with generated sources.
 

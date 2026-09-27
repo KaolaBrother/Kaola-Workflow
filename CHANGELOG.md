@@ -87,6 +87,44 @@
   the attribution for the retired contracts. `kaola-workflow-resolve-agent-model.js` keeps only
   the Codex session proof (`loadCodexSessionProof`); its tests move to
   `scripts/test-codex-session-proof.js`.
+- **Installers retire the role profiles earlier releases installed, only on proof (#1101).** The
+  Claude, Codex, Grok, Cursor, ZCode, Devin, Kimi, and OpenCode installers install no profile. On
+  install, reinstall, upgrade, and uninstall they remove a retired profile only when its ownership
+  record still lists the file with its current sha256 (plus the managed marker where the runtime
+  stamped one), or when its bytes equal a render some release installed. The frozen per-runtime
+  catalogs are in the new shared `scripts/kaola-workflow-retired-agents.js` (`retire`,
+  `retire-skills`, `report-bindings`; `--check` exits 1 while a proven file or record remains), with
+  provenance in `scripts/fixtures/issue-1101/PROVENANCE.md`. Every other file with a Kaola role name
+  is kept and reported as `Preserved retired Kaola-Workflow agent (<reason>): <path>`
+  (`modified_since_install`, `no_ownership_record`, `non_regular`), next to
+  `Removed retired Kaola-Workflow agent: <path>`, and the install still exits 0. Kept files are the
+  owner's to review and delete by hand. A stale source tree or plugin cache never redeploys a
+  profile.
+  Per runtime: Codex keeps the `install-codex-agent-profiles.js` entry name, now retiring profiles,
+  their record, and the `# BEGIN/END kaola-workflow agents` block (reported as `… agent record: …` /
+  `… agent registrations (<reason>): …`) and installing only the hook, hook home, and carrier.
+  Pre-rename `codex-workflow` leftovers are only reported, and `CODEX_HOME` is untouched. Cursor
+  consumes receipt `agents/` rows, which no longer make the authority stale, and migrates a project
+  on its next `--target` install or `--ensure-target`. ZCode and Devin need byte proof rather than
+  the managed marker, and `install-devin.sh --check` fails only while a released profile remains.
+  Kimi retires the role Skills of every release. OpenCode reports `opencode.json` `agent.<role>`
+  bindings without editing the file. Symlinked carriers, ambiguous Codex marker blocks,
+  future-schema records, and non-regular Kimi/OpenCode carriers are now reported instead of refusing
+  the install. `docs/installation.md` § Upgrading from releases that installed Kaola role profiles
+  documents the migration.
+- **The Codex preflight and doctor check host facts and retired-role residue only (#1101).**
+  `kaola-workflow-codex-preflight.js` no longer requires `multi_agent_v2` or refuses when it is off:
+  dispatch mode, posture, and V2 bounds are reported. It no longer enforces the Codex `0.145.0`
+  version floor (`codex_version_unsupported`, exit 7, is gone; `--codex-version` is ignored). It
+  reports leftover profiles, records, or marker blocks as `retired_role_residue` (exit 1), and its
+  autofix runs the installer. If the installer preserved files, it returns exit 1 with
+  `autofix_attempted: true` and a delete-by-hand repair.
+- **Edition suites can run from a worktree against an isolated tree root (#1101).** With
+  `KAOLA_EDITION_TREE_ROOT` and `KAOLA_EDITION_TREE_FOR` (both absolute, the latter naming the
+  checkout), the OpenCode, Kimi, Grok, Cursor, and ZCode generators, the installers that resolve
+  `--print-tree-root`, and those five edition suites use the isolated root. They then no longer
+  read and self-provision the main checkout's shared generated trees. The override applies only to
+  the named checkout; unset, nothing changes.
 - **The merge sink merges in a private integration worktree, not the shared checkout (#1097).** The
   `--sink` transaction now builds and rebases its candidate in `W` — a fresh linked worktree at
   `.kw/integrate/<project>` — and runs the validation chains there, so the shared checkout is never
