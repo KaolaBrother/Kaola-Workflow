@@ -6260,6 +6260,267 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   fs.rmSync(binDir1102, { recursive: true, force: true });
 }
 
+// --- #1103: the resumability pin must also read a COLLISION-RENAMED archive ---------------------
+// `archiveProjectDir` suffixes a new archive destination when `archive/<project>` already exists
+// (`dest += '.archived-' + ts`), so a run whose closure already moved the folder can sit under
+// `archive/<project>.archived-<ts>/` with the live folder gone. `sinkReceiptResumable` read exactly
+// two literal paths, so that half of the pin silently missed and the sweep fell back to
+// `(isClosed || isArchived) && !inActiveSet` — sweeping a live run's own worktree.
+//
+// The name convention is not new: the same file already matches archives with
+// `name.startsWith(project + '.archived-')` (`findArchiveAuthorities`, the #429 receipt resolver,
+// the #694 `readCurrentClaimTs` scan). #1102's identity rules are reused verbatim — this block adds
+// ONLY the suffixed archive to the folder set, and never a parallel ownership mechanism. Identity
+// safety still holds: with several archives of one issue, the pin reads the folders of the ONE
+// resolved current run; when no run can be determined it reads nothing from the ambiguous set.
+{
+  const { execFileSync: execFS1103, spawnSync: spawnS1103 } = require('child_process');
+  const CLAIM1103 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_1103 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g1103 = (cwd, args) => execFS1103('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_1103 });
+
+  const PENDING_1103 = { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' };
+  const DONE_1103 = { preflight: 'done', merge: 'done', push_main: 'done', closure: 'done' };
+  const midFlight1103 = (project, extra) => Object.assign({
+    project,
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+      stash_restore: 'done', archive_commit: 'done', push_main: 'pending', closure: 'pending' }
+  }, extra || {});
+
+  // 96401 is CLOSED, which is both the stale trigger and the reason readActiveFolders has already
+  // dropped the folder — so nothing but the pin can decide these cases.
+  const binDir1103 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-bin-'));
+  fs.writeFileSync(path.join(binDir1103, 'gh.js'), [
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('issue view 96401')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+    "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+    "process.stdout.write('[\\n'); process.exit(0);"
+  ].join('\n'));
+
+  const claimEnv1103 = () => Object.assign({}, process.env, {
+    KAOLA_WORKFLOW_OFFLINE: '0',
+    KAOLA_GH_MOCK_SCRIPT: path.join(binDir1103, 'gh.js')
+  });
+  const sweep1103 = (root) => {
+    // spawn-class: cli-contract
+    const r = spawnS1103(process.execPath, [CLAIM1103, 'stale-worktree-cleanup', '--execute'],
+      { cwd: root, encoding: 'utf8', env: claimEnv1103() });
+    let out = {};
+    try { out = JSON.parse(r.stdout); } catch (_) {}
+    return { out, stdout: r.stdout, stderr: r.stderr };
+  };
+  // The classification the pin acts on: a DIRTY worktree survives --execute by itself, so
+  // `stale-worktree-check` is what reports the pin unambiguously.
+  const cls1103 = (root, wtPath) => {
+    // spawn-class: cli-contract
+    const r = spawnS1103(process.execPath, [CLAIM1103, 'stale-worktree-check'],
+      { cwd: root, encoding: 'utf8', env: claimEnv1103() });
+    let out = {};
+    try { out = JSON.parse(r.stdout); } catch (_) {}
+    return {
+      stalled: Array.isArray(out.stale_worktrees) && out.stale_worktrees.some(w => w.path === wtPath),
+      active: Array.isArray(out.active_worktrees) && out.active_worktrees.some(w => w.path === wtPath),
+      out, stderr: r.stderr
+    };
+  };
+  const classifyIntegration1103 = (out, wtPath) =>
+    Array.isArray(out.stale_integration_worktrees) && out.stale_integration_worktrees.some(w => w.path === wtPath);
+
+  const makeRepo1103 = (wtName) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-')));
+    const kwRoot = root + '.kw';
+    g1103(root, ['init', '-b', 'main']);
+    g1103(root, ['config', 'user.email', 't@t.com']);
+    g1103(root, ['config', 'user.name', 'Test']);
+    g1103(root, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+    g1103(root, ['add', 'README.md']);
+    g1103(root, ['commit', '-m', 'init']);
+    fs.mkdirSync(kwRoot, { recursive: true });
+    const wtPath = path.join(kwRoot, wtName || 'issue-96401');
+    g1103(root, ['worktree', 'add', '-b', 'workflow/issue-96401', '--', wtPath, 'HEAD']);
+    return { root, kwRoot, wtPath };
+  };
+  const cleanup1103 = (fx) => {
+    try { fs.rmSync(fx.root, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(fx.kwRoot, { recursive: true, force: true }); } catch (_) {}
+  };
+  const state1103 = (dir, name, lines) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+      ['# Kaola-Workflow State', '', '## Project', 'name: ' + name, 'status: active', '', '## Sink']
+        .concat(lines).join('\n') + '\n');
+  };
+  const receipt1103 = (dir, obj) => {
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj, null, 2) + '\n');
+  };
+  const AR1103 = ['kaola-workflow', 'archive'];
+  const SUFFIX1103 = 'issue-96401.archived-2026-09-27T09-00-00-000Z';
+
+  // A — THE COLLISION-RENAMED ARCHIVE, lane arm, DERIVED fallback. No workflow-state.md anywhere, so
+  // no record names the branch: the base read is the two literal paths, and the run's only receipt
+  // sits in the suffixed archive with the live folder gone. Pre-fix the pin read two absent paths and
+  // the closed issue swept the run's own worktree.
+  {
+    const fx = makeRepo1103();
+    try {
+      receipt1103(path.join(fx.root, ...AR1103, SUFFIX1103), midFlight1103('issue-96401'));
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.active && !c.stalled,
+        '#1103 A: a receipt-only run archived as archive/<project>.archived-<ts>/ must keep its derived lane pin — the live folder is gone, so the two literal paths find nothing, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      const s = sweep1103(fx.root);
+      assert(fs.existsSync(fx.wtPath),
+        '#1103 A: --execute must NOT remove the lane worktree whose only receipt is in the collision-renamed archive, got removed=' + JSON.stringify(s.out.removed) + '\nstderr: ' + s.stderr);
+      assert(!Array.isArray(s.out.removed) || !s.out.removed.some(p => p === fx.wtPath),
+        '#1103 A: removed must not name the pinned worktree, got ' + JSON.stringify(s.out.removed));
+    } finally { cleanup1103(fx); }
+  }
+
+  // B — the SAME shape on the integration arm (~line 5883). No record is consulted there, so the
+  // suffixed archive is the only place the receipt can be found.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-int-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+    try {
+      g1103(root, ['init', '-b', 'main']);
+      g1103(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1103(root, ['add', 'README.md']);
+      g1103(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1103(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      receipt1103(path.join(root, ...AR1103, SUFFIX1103), midFlight1103('issue-96401'));
+      const c = cls1103(root, wPath);
+      assert(!classifyIntegration1103(c.out, wPath),
+        '#1103 B: an integration W whose only receipt is in archive/<project>.archived-<ts>/ must stay PINNED — the sink resumes from that .cache once closure moved the folder, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // C — several archives of ONE issue. The CURRENT run is the live record; the earlier run's
+  // leftover mid-flight receipt sits in a suffixed archive. The suffixed archive must be VISIBLE to
+  // the resolver (so the current run's own suffixed folder would be read) without letting the older
+  // run's receipt pin the newer run: only the resolved run's folders count.
+  {
+    const fx = makeRepo1103();
+    try {
+      state1103(path.join(fx.root, 'kaola-workflow', 'issue-96401'), 'issue-96401',
+        ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z']);
+      receipt1103(path.join(fx.root, 'kaola-workflow', 'issue-96401'), { project: 'issue-96401', steps: DONE_1103 });
+      const old = path.join(fx.root, ...AR1103, 'issue-96401.archived-2026-09-25T00-00-00-000Z');
+      state1103(old, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-24T03:00:00.000Z']);
+      receipt1103(old, { project: 'issue-96401', branch: 'workflow/issue-96401', claim_ts: '2026-09-24T03:00:00.000Z', steps: PENDING_1103 });
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.stalled && !c.active,
+        '#1103 C: an OLDER suffixed archive\'s abandoned mid-flight receipt must NOT pin the current live run whose own receipt is all-done, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // D — no live record at all: the current run IS the suffixed archive (strictly newest claim_ts,
+  // #1102's `readCurrentClaimTs` rule), the plain archive is an older disposed run. The current run's
+  // own receipt must pin, and it is reachable only through the suffix.
+  {
+    const fx = makeRepo1103();
+    try {
+      const plain = path.join(fx.root, ...AR1103, 'issue-96401');
+      state1103(plain, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      const b = path.join(fx.root, ...AR1103, SUFFIX1103);
+      state1103(b, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      receipt1103(b, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_1103 });
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.active && !c.stalled,
+        '#1103 D: the newest archived claim\'s own mid-flight receipt, filed under the collision-renamed name, must keep the lane worktree PINNED, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // E — UNDETERMINABLE ⇒ NO PIN. Two archived records of one issue with a claim_ts TIE and no live
+  // record: #1102 refuses to guess the owner, so the ambiguous set decides nothing. One of the tied
+  // archives is the collision-renamed one holding a mid-flight receipt — making the suffix visible
+  // must NOT turn that receipt into a guess.
+  {
+    const fx = makeRepo1103();
+    try {
+      const a = path.join(fx.root, ...AR1103, 'issue-96401');
+      state1103(a, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      const b = path.join(fx.root, ...AR1103, SUFFIX1103);
+      state1103(b, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      receipt1103(b, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_1103 });
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.stalled && !c.active,
+        '#1103 E: a claim_ts tie with no live record is undetermined, so a tied suffixed archive\'s mid-flight receipt must NOT pin, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // F — regression: an ALL-DONE receipt in the collision-renamed archive sweeps exactly as before.
+  {
+    const fx = makeRepo1103();
+    try {
+      receipt1103(path.join(fx.root, ...AR1103, SUFFIX1103), { project: 'issue-96401', steps: DONE_1103 });
+      const s = sweep1103(fx.root);
+      assert(!fs.existsSync(fx.wtPath),
+        '#1103 F: an all-done receipt — even in a collision-renamed archive — must sweep exactly as before; the pin is receipt-driven, never a blanket exemption');
+      assert(Array.isArray(s.out.removed) && s.out.removed.some(p => p === fx.wtPath),
+        '#1103 F: removed must contain the completed run\'s lane worktree, got ' + JSON.stringify(s.out.removed) + '\nstderr: ' + s.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // G — regression: an ABSENT receipt in the collision-renamed archive sweeps exactly as before.
+  {
+    const fx = makeRepo1103();
+    try {
+      fs.mkdirSync(path.join(fx.root, ...AR1103, SUFFIX1103), { recursive: true });
+      const s = sweep1103(fx.root);
+      assert(!fs.existsSync(fx.wtPath),
+        '#1103 G: an archive with no receipt at all must sweep exactly as before');
+      assert(Array.isArray(s.out.removed) && s.out.removed.some(p => p === fx.wtPath),
+        '#1103 G: removed must contain the receipt-less worktree, got ' + JSON.stringify(s.out.removed) + '\nstderr: ' + s.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // H — regression: the exact `archive/<project>` path still works, on both arms.
+  {
+    const fx = makeRepo1103();
+    try {
+      state1103(path.join(fx.root, 'kaola-workflow', 'issue-96401'), 'issue-96401',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt1103(path.join(fx.root, ...AR1103, 'issue-96401'),
+        { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_1103 });
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.active && !c.stalled,
+        '#1103 H: the exact archive/<project> receipt must still pin after the suffix is added, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally { cleanup1103(fx); }
+  }
+
+  // I — the same regression on the integration arm's exact archive path.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-int2-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+    try {
+      g1103(root, ['init', '-b', 'main']);
+      g1103(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1103(root, ['add', 'README.md']);
+      g1103(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1103(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      receipt1103(path.join(root, ...AR1103, 'issue-96401'), midFlight1103('issue-96401'));
+      const c = cls1103(root, wPath);
+      assert(!classifyIntegration1103(c.out, wPath),
+        '#1103 I: the exact archive/<project> receipt must still pin the integration W, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  fs.rmSync(binDir1103, { recursive: true, force: true });
+}
+
 spawnCensus.report();
 
 if (failed > 0) {

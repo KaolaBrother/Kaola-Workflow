@@ -2174,6 +2174,144 @@ function testStaleWorktreeCleanup() {
     }, false, 'a derived folder whose state names another branch must never pin this worktree');
   }
 
+  // Sub-case 2h (#1103): the pin must also read a COLLISION-RENAMED archive. `archiveProjectDir`
+  // suffixes the destination when `archive/<project>` already exists, so once closure moved the
+  // folder the run's receipt can sit under `archive/<project>.archived-<ts>/` with the live folder
+  // gone. The pin read exactly two literal paths, so that half silently missed and the sweep fell
+  // back to `(closed || archived) && !active` — sweeping a live run's own worktree. The suffix
+  // convention is already in the file (`name.startsWith(project + '.archived-')`); #1102's identity
+  // rules are reused verbatim, and an undeterminable owner still pins nothing.
+  {
+    const mkRepo = () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-2h-')));
+      const kwRoot = tmp + '.kw';
+      const binDir = path.join(tmp, 'bin');
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-400');
+      addWorktree(tmp, 'workflow/gitea-issue-400', wtPath);
+      return { tmp, kwRoot, binDir, wtPath };
+    };
+    const cleanup2h = (fx) => {
+      fs.rmSync(fx.tmp, { recursive: true, force: true });
+      try { fs.rmSync(fx.kwRoot, { recursive: true, force: true }); } catch (_) {}
+    };
+    const state2h = (dir, name, lines) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: ' + name, 'status: active', '', '## Sink']
+          .concat(lines).join('\n') + '\n');
+    };
+    const receipt2h = (dir, obj) => {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj));
+    };
+    const cls2h = (fx) => {
+      const o = runClaimOnline(['stale-worktree-check'], fx.tmp, fx.binDir);
+      return {
+        stalled: Array.isArray(o.stale_worktrees) && o.stale_worktrees.some(w => w.path === fx.wtPath),
+        active: Array.isArray(o.active_worktrees) && o.active_worktrees.some(w => w.path === fx.wtPath),
+        out: o
+      };
+    };
+    const AR2H = ['kaola-workflow', 'archive'];
+    const SUFFIX2H = 'issue-400.archived-2026-09-27T09-00-00-000Z';
+    const PENDING2H = { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' };
+    const DONE2H = { preflight: 'done', merge: 'done', push_main: 'done', closure: 'done' };
+
+    // 2h-A — derived fallback: no record names the branch, the run's only receipt is the suffixed
+    // archive, the live folder is gone. Pre-fix the two literal paths found nothing and swept it.
+    {
+      const fx = mkRepo();
+      try {
+        receipt2h(path.join(fx.tmp, ...AR2H, SUFFIX2H), { project: 'issue-400', steps: PENDING2H });
+        const c = cls2h(fx);
+        assert(c.active && !c.stalled,
+          'sc2h-A: a receipt-only run archived as archive/<project>.archived-<ts>/ must keep its derived lane pin, got: ' + JSON.stringify(c.out));
+        const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], fx.tmp, fx.binDir);
+        assert(fs.existsSync(fx.wtPath),
+          'sc2h-A: --execute must NOT remove the lane worktree whose only receipt is in the collision-renamed archive');
+        assert(!Array.isArray(out.removed) || !out.removed.some(p => p === fx.wtPath),
+          'sc2h-A: removed must not name the pinned worktree, got: ' + JSON.stringify(out.removed));
+      } finally { cleanup2h(fx); }
+    }
+
+    // 2h-B — the CURRENT run is the suffixed archive (strictly newest claim_ts, no live record); its
+    // own mid-flight receipt must pin, and the suffix is the only path that reaches it.
+    {
+      const fx = mkRepo();
+      try {
+        state2h(path.join(fx.tmp, ...AR2H, 'issue-400'), 'issue-400',
+          ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+        const b = path.join(fx.tmp, ...AR2H, SUFFIX2H);
+        state2h(b, 'issue-400', ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        receipt2h(b, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2H });
+        const c = cls2h(fx);
+        assert(c.active && !c.stalled,
+          'sc2h-B: the newest archived claim\'s own mid-flight receipt, filed under the collision-renamed name, must keep the lane worktree PINNED, got: ' + JSON.stringify(c.out));
+      } finally { cleanup2h(fx); }
+    }
+
+    // 2h-C — identity safety with the suffix visible: an OLDER suffixed archive's abandoned
+    // mid-flight receipt must not pin the current live run whose own receipt is all-done.
+    {
+      const fx = mkRepo();
+      try {
+        state2h(path.join(fx.tmp, 'kaola-workflow', 'issue-400'), 'issue-400',
+          ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receipt2h(path.join(fx.tmp, 'kaola-workflow', 'issue-400'), { project: 'issue-400', steps: DONE2H });
+        const old = path.join(fx.tmp, ...AR2H, 'issue-400.archived-2026-09-25T00-00-00-000Z');
+        state2h(old, 'issue-400', ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-24T03:00:00.000Z']);
+        receipt2h(old, { project: 'issue-400', branch: 'workflow/gitea-issue-400', claim_ts: '2026-09-24T03:00:00.000Z', steps: PENDING2H });
+        const c = cls2h(fx);
+        assert(c.stalled && !c.active,
+          'sc2h-C: an OLDER suffixed archive\'s abandoned mid-flight receipt must NOT pin the current live run, got: ' + JSON.stringify(c.out));
+      } finally { cleanup2h(fx); }
+    }
+
+    // 2h-D — undeterminable ⇒ no pin. A claim_ts tie across the plain and the suffixed archive with no
+    // live record: the ambiguous set decides nothing even though the suffixed one is mid-flight.
+    {
+      const fx = mkRepo();
+      try {
+        state2h(path.join(fx.tmp, ...AR2H, 'issue-400'), 'issue-400',
+          ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        const b = path.join(fx.tmp, ...AR2H, SUFFIX2H);
+        state2h(b, 'issue-400', ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        receipt2h(b, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2H });
+        const c = cls2h(fx);
+        assert(c.stalled && !c.active,
+          'sc2h-D: a claim_ts tie with no live record is undetermined, so a tied suffixed archive\'s mid-flight receipt must NOT pin, got: ' + JSON.stringify(c.out));
+      } finally { cleanup2h(fx); }
+    }
+
+    // 2h-E — regression: all-done in the suffixed archive sweeps exactly as before; the exact
+    // archive/<project> path still pins.
+    {
+      const fx = mkRepo();
+      try {
+        receipt2h(path.join(fx.tmp, ...AR2H, SUFFIX2H), { project: 'issue-400', steps: DONE2H });
+        const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], fx.tmp, fx.binDir);
+        assert(!fs.existsSync(fx.wtPath),
+          'sc2h-E: an all-done receipt — even in a collision-renamed archive — must sweep exactly as before');
+        assert(Array.isArray(out.removed) && out.removed.some(p => p === fx.wtPath),
+          'sc2h-E: removed must contain the completed run\'s lane worktree, got: ' + JSON.stringify(out.removed));
+      } finally { cleanup2h(fx); }
+    }
+    {
+      const fx = mkRepo();
+      try {
+        state2h(path.join(fx.tmp, 'kaola-workflow', 'issue-400'), 'issue-400',
+          ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+        receipt2h(path.join(fx.tmp, ...AR2H, 'issue-400'),
+          { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2H });
+        const c = cls2h(fx);
+        assert(c.active && !c.stalled,
+          'sc2h-E: the exact archive/<project> receipt must still pin after the suffix is added, got: ' + JSON.stringify(c.out));
+      } finally { cleanup2h(fx); }
+    }
+  }
+
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc3-')));
