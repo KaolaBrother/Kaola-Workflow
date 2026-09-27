@@ -5606,7 +5606,7 @@ function collectStale(root) {
         // all done means a sink that still owns this W. All-done or absent (a pre-receipt
         // legacy leftover, or a completed sink's garbage) sweeps exactly as before.
         // #1102: this arm already HOLDS the true project — the directory name — so it needs no
-        // resolution; only the receipt lookup must stop assuming the project is `issue-<N>`.
+        // resolution; the receipt is read from that project under the main checkout.
         const sinkResumableW = sinkReceiptResumable(root, projectName, null);
         if ((isArchivedW || isClosedW) && !inActiveSetW && !sinkResumableW) {
           stale_integration_worktrees.push({
