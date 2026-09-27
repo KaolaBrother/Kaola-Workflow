@@ -259,38 +259,41 @@ if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') 
 }
 
 // ---------------------------------------------------------------------------
-// 7) #629 bullet 2: config/agents.toml BYTE_IDENTICAL_GROUPS entry — the three
-//    plugins/*/config/agents.toml files are byte-identical at HEAD but were previously
-//    uncovered (only derived NAME parity was forge-checked).
+// 7) #629 bullet 2: the byte-group primitive. Its original subject, the config/agents.toml triple,
+//    retired with the Codex role profiles (#1101); the mechanism is proven on a surviving group,
+//    and no group may re-register a role registration or profile.
 // ---------------------------------------------------------------------------
-const agentsTomlGroup = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => g.label === 'config/agents.toml triple');
-assert(!!agentsTomlGroup, '#629 bullet 2: BYTE_IDENTICAL_GROUPS carries a config/agents.toml triple entry');
+assert(!(sync.BYTE_IDENTICAL_GROUPS || []).some(g =>
+  /agents\.toml|agent-profile toml/.test(g.label) || (g.files || []).some(f => /\/agents\/|agents\.toml$/.test(f))),
+  '#1101: BYTE_IDENTICAL_GROUPS registers no Codex role registration or profile group');
+const byteGroup = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => g.label === 'resolve-agent-model module copies');
+assert(!!byteGroup, '#629 bullet 2: BYTE_IDENTICAL_GROUPS carries the resolve-agent-model copies group');
 assert(typeof sync.checkByteIdenticalGroup === 'function',
   '#629 bullet 2: checkByteIdenticalGroup exported (shared byte-group-check primitive)');
 
 // 7a) MECHANISM (RED-PROOF): a divergent byte planted into one copy FIXTURE (not a real file) is CAUGHT.
-if (agentsTomlGroup && typeof sync.checkByteIdenticalGroup === 'function') {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-agentstoml-plant-'));
+if (byteGroup && typeof sync.checkByteIdenticalGroup === 'function') {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bytegroup-plant-'));
   try {
-    const refText = fs.readFileSync(path.join(repoRoot, agentsTomlGroup.files[0]), 'utf8');
-    for (let i = 0; i < agentsTomlGroup.files.length; i++) {
-      const rel = agentsTomlGroup.files[i];
+    const refText = fs.readFileSync(path.join(repoRoot, byteGroup.files[0]), 'utf8');
+    for (let i = 0; i < byteGroup.files.length; i++) {
+      const rel = byteGroup.files[i];
       fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
-      // plant a divergent developer_instructions byte into the SECOND copy only.
-      const tampered = i === 1 ? refText + '\ndeveloper_instructions = "PLANTED-DRIFT"\n' : refText;
+      // plant a divergent byte into the SECOND copy only.
+      const tampered = i === 1 ? refText + '\n// PLANTED-DRIFT\n' : refText;
       fs.writeFileSync(path.join(tmp, rel), tampered);
     }
-    const res = sync.checkByteIdenticalGroup(agentsTomlGroup, tmp);
+    const res = sync.checkByteIdenticalGroup(byteGroup, tmp);
     assert(res.missing.length === 0 && res.drift.length === 1,
-      '#629 bullet 2 RED-PROOF: a divergent developer_instructions byte planted in one copy fixture reds, got ' + JSON.stringify(res));
+      '#629 bullet 2 RED-PROOF: a divergent byte planted in one copy fixture reds, got ' + JSON.stringify(res));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
 // 7b) GREEN AT HEAD: the real config/agents.toml triple is byte-identical (md5 579c8575...).
-if (agentsTomlGroup && typeof sync.checkByteIdenticalGroup === 'function') {
-  const res = sync.checkByteIdenticalGroup(agentsTomlGroup, repoRoot);
+if (byteGroup && typeof sync.checkByteIdenticalGroup === 'function') {
+  const res = sync.checkByteIdenticalGroup(byteGroup, repoRoot);
   assert(res.missing.length === 0 && res.drift.length === 0,
     '#629 bullet 2: the real config/agents.toml triple is byte-identical at HEAD, got ' + JSON.stringify(res));
 }
