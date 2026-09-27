@@ -81,37 +81,36 @@ receipts; they do not acquire repository-prompt ownership.
 ## Routing-surface handoff interface
 
 `/workflow-next` and `/kaola-workflow-finalize` carry compact natural-language handoff guidance.
-When work is sent to another role, the request names the requested result or question, relevant
-evidence and authority/custody, the exact landing locator, and the stop condition. The receiving
-role's profile remains authoritative for universal behavior; the existing owner keeps product intent
-and the final verdict. There is no handoff field schema, ordering rule, parser, or linter.
+When work is dispatched, the brief names the requested result or question, relevant evidence and
+custody, the exact landing locator, and the stop condition; the orchestrator keeps product intent
+and the final verdict. There is no handoff field schema, ordering rule, parser, or linter, and no
+Kaola role profile on the receiving side (#1101, ADR 0029): the child is whatever native type the
+host exposes.
 
-The separate, marked `KW-RUNTIME-DELEGATION` region is generated adapter data. It exposes native
-profile discovery, the dispatch carrier, the adapter's single `**Subagent default:**` binding plus
-a `**Roles:**` line naming the seven roles, tool boundary, honest
-named/built-in alternatives, and runtime availability/limits — or, on a `native_only` adapter, the
-sentence that this runtime installs no Kaola role profiles by design. The common fallback remains per-item:
-an absent exact role triggers a search of other adequate native child routes; a generic route keeps
-its real identity; inline applies only to that item when no route fits.
+The separate, marked `KW-RUNTIME-DELEGATION` region is generated adapter data. It carries a host
+guard ("if the running host is not X, ignore this section and follow the running host's own native
+subagent schema and catalog") and the adapter's two measured facts, `native_routes` and
+`availability`, from `templates/agents/runtime-capabilities.json`. It names no role, roster, model,
+or effort. The common dispatch contract beside it states that Kaola defines no subagent roles,
+role profiles, or subagent model and effort bindings, and that Kaola installing no profiles is
+never evidence that the host lacks subagent capability.
 
-The roster derives from the seven-role `ROLES` list backed by
-`templates/agents/behavior-contracts.json`; `renderRuntimeDelegationGuidance()` places it
-beside the runtime adapter's `subagent_default`. The per-tier roster export is gone with
-the intent axis (ADR 0025).
-
-`generate-agent-profiles.js` exports the routing interface:
+`scripts/runtime-adapter-facts.js` exports the routing interface:
 
 | Export | Contract |
 | --- | --- |
+| `loadRuntimeAdapters(root)` / `validateRuntimeAdapters(source)` | load and validate the schema-2 facts; every retired role capability (`RETIRED_CAPABILITIES`) is rejected |
 | `renderRuntimeDelegationGuidance(adapter)` | render one complete marked block from a validated adapter |
-| `runtimeAdapter(runtime, forge, root)` | resolve one of the ten closed adapter variants; Codex is forge-keyed |
+| `runtimeAdapter(runtime, forge, root)` | resolve one of the twelve closed adapter variants; Codex is forge-keyed |
 | `renderRuntimeDelegationGuidanceForRuntime(runtime, forge, root)` | resolve then render the block |
 | `replaceRuntimeDelegationGuidance(content, runtime, forge, root)` | replace exactly one balanced marker region; missing or duplicate markers fail loudly |
+| `deferRuntimeDispatchBlock(content)` | replace the marked dispatch region with `ALWAYS_LOADED_DISPATCH_POINTER` on runtimes whose always-loaded carrier already holds it |
 
 `generate-routing-surfaces.js` exports `renderCompactRecoveryPrompt(runtime, forge)`. It renders a
 complete direct prompt from `compact-recovery.skeleton.md`, the single
-`dispatch-contract.md`, and the selected runtime adapter. Only `claude`, `codex`, `grok`, `cursor`, and
-`devin` have a compact-recovery rendering in the measured scope.
+`dispatch-contract.md`, and the selected runtime adapter. `claude`, `codex`, `grok`, `cursor`,
+`devin`, `droid`, `dsh`, and `zcode` have a compact-recovery rendering; `claude` and `codex` point
+at the reloaded Next/Finalization prompt instead of restating the dispatch block.
 
 ### Task-clarity guidance (#1053)
 
@@ -2008,45 +2007,26 @@ retired `parallel_mode`) is ignored, never rewritten.
   contract and is reachable without invoking Next or Finalize. Organizing issues does not
   auto-claim. This repository still has no `kaola-workflow/config.json`.
 
-### Agent model resolution
+### Subagent model and effort
 
-The per-role intent field and the three-tier axis are retired (ADR 0025,
-#1062). `templates/agents/runtime-capabilities.json` classifies each adapter as
-`role_dispatch: "named_profile"` (binding) or `"native_only"`. A binding adapter declares exactly
-one `subagent_default` (`model`, optional `effort`, one-sentence `summary`); a `native_only`
-adapter declares none and carries only `named_roles: false`, `deterministic_profiles: false`, and
-a `delegation_guidance` of `native_routes` plus `availability`:
+Kaola-Workflow resolves no subagent model or effort (#1101, ADR 0029). No runtime installs a Kaola
+role profile, so nothing pins `model` or `effort`; the host's own defaults, the user's
+configuration, and the user's explicit instructions decide both. The retired pieces are
+`DEFAULT_AGENT_MODELS`, `resolveAgentModel`, `formatAgentArgument`, `extractFrontmatterModel`, and
+the `kaola-workflow-resolve-agent-model.js <agent-name>` CLI, plus the kernel's
+`CODEX_PINNED_ROLES`, `CODEX_PINNED_MODEL`, `CODEX_PINNED_EFFORT`, and `validateProfileText`.
 
-- Claude profiles pin `model: sonnet`; effort is not pinned;
-- Codex TOML profiles pin `model = "gpt-6-luna"` and `model_reasoning_effort = "max"`; file
-  values take precedence over spawn parameters and the parent session, so dispatch omits both;
-- Grok profiles pin `model: grok-4.7` + `effort: medium`;
-- Cursor profiles pin `model: grok-4.7[effort=medium]`; omit-model dispatch is the named-catalog
-  carrier on CLI, local App, and correctly saved Cloud environments (a custom subagent that omits
-  `model` inherits the parent, which is why the pin selects the cheaper child);
-- OpenCode, Kimi, ZCode, Devin, and Droid are `native_only`: no Kaola role profiles; children inherit the
-  session model or a vendor router owns the choice, so dispatch goes through the vendor harness.
+`kaola-workflow-resolve-agent-model.js` (four byte-identical copies, installed under that name)
+now exports only the Codex session proof:
 
-The kernel anchor `kaola-workflow-adaptive-schema.js` exports `CODEX_PINNED_ROLES`,
-`CODEX_PINNED_MODEL` (`gpt-6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the three
-retired per-tier roster constants — and
-`validateProfileText`, which now requires exactly one `model = "gpt-6-luna"` and one
-`model_reasoning_effort = "max"` top-level line in every Codex TOML (the pre-#1062 rule required
-both keys omitted).
+| Export | Contract |
+| --- | --- |
+| `loadCodexSessionProof({ codexHome, threadId })` | find the one session JSONL under `<codexHome>/sessions` whose `session_meta.payload.id` equals `threadId` and return `{ status: 'fresh', thread_id, model, reasoning_effort, observed_at, source: 'session_jsonl' }` from its latest `turn_context`; any ambiguity, bound breach, swap, or malformed record returns `status: 'absent'` with null fields |
+| `CODEX_SESSION_SCAN_MAX_FILES` / `_DEPTH` / `_DIRS` / `_ENTRIES`, `CODEX_SESSION_FILE_MAX_BYTES` | the scan bounds |
 
-The exact current bindings are machine data and are summarized in `runtime-capabilities.md`.
-Next/finalize expose them as the `**Subagent default:**` binding, not as mission-ledger state, a
-fixed pipeline,
-or a ban on runtime-supported task-sensitive choices. A missing required native capability yields a
-specific per-item `capability_gap`; it is not emulated by granting wider tools, impersonating a
-named role, silently dropping the restriction, or declaring the rest of the run inline.
-
-Finalize's dispatch example names `implementer` with no `model=` field, because the installed
-profile already carries the adapter's pin. A task-sensitive override or supported inherited pair remains valid. Codex
-resolves roles through recursive directory discovery (`~/.codex/agents/` user, `.codex/agents/`
-project, `name` as identity) and the effective project or user `.codex/config.toml`, whose managed
-`[agents.<role>]` registration references `.codex/agents/kaola-workflow/<role>.toml`, while bundled
-`agents.toml` is only installer source.
+The kernel keeps `MANIFEST_BASENAME` (`.kaola-managed-profiles.json`) and `RETIRED_PROFILE_FILES`
+(all 24 role-profile basenames any release shipped) only as ownership candidates for upgrade and
+uninstall; a name alone never authorizes a deletion.
 
 ## Environment Variables
 
