@@ -33,7 +33,6 @@
 const path = require('path');
 const routing = require('./generate-routing-surfaces.js');
 const manifest = require('./kaola-workflow-install-manifest.js');
-const agentGen = require('./generate-agent-profiles');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -146,11 +145,6 @@ function yamlScalar(value) {
   return s;
 }
 
-// The full canonical role roster, as every runtime edition's MANAGED_ROLES set derives it.
-function listCanonAgents() {
-  return [...agentGen.ROLES];
-}
-
 // The command surfaces a runtime edition renders FROM, for a forge, as sorted basenames. Sourced
 // from the routing-surface registry rather than a directory listing, so the forge variants are the
 // generated, byte-checked surfaces themselves — a runtime edition holds no command list of its own
@@ -218,7 +212,6 @@ module.exports = {
   parseFrontmatter,
   parseTools,
   yamlScalar,
-  listCanonAgents,
   listCanonCommands,
   canonCommandPath,
   commandRel,

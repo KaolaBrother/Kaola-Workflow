@@ -2,42 +2,17 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
-// WHAT THIS MAP ANSWERS FOR: each role's installed-profile model — the single subagent binding
-// consumers read as metadata/defaults.
+// kaola-workflow-resolve-agent-model.js — reads the model and reasoning effort the CURRENT Codex
+// session actually runs, from that session's own JSONL record under $CODEX_HOME/sessions.
 //
-// IT DOES NOT DECIDE A CLAUDE CODE `Agent(...)` DISPATCH. There the explicit `model=` argument wins,
-// and its absence means `inherit` — the spawning conversation's model. Nothing on that path consults
-// this map, so dropping a `model=` does not fall back to the model declared here.
+// It no longer resolves any subagent model. Kaola-Workflow defines no subagent roles, role
+// profiles, or model bindings (#1101, ADR 0029): the role->model map, the frontmatter/default
+// resolution chain, and the `<agent-name>` CLI were retired with the roles. The basename is kept
+// because every edition installs this module under it.
 //
-// Within this script's own resolution the map IS the last word for an installed agent: the installer
-// rewrites each installed agent's frontmatter to `model: inherit`, so the frontmatter step below can
-// never fire for one. Keep an entry byte-equal to its source `agents/<role>.md` frontmatter: the two
-// are one declaration seen from two sides, and a divergence silently re-points the role at a
-// different model on every install.
-//
-// GENERATED (#29 audit): the block below is written by `node scripts/generate-agent-profiles.js
-// --write` (drift reported by `--check`) from the SAME derivation that writes each
-// agents/<role>.md `model:` frontmatter line — the claude adapter's `subagent_default.model`
-// in templates/agents/runtime-capabilities.json — so this map and that
-// frontmatter can never independently drift again. The per-role rationale for a given role's
-// model lives in git history and in templates/agents/behavior-contracts.json, not here.
-// GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)
-const DEFAULT_AGENT_MODELS = {
-  'code-explorer': 'sonnet',
-  'code-reviewer': 'sonnet',
-  'doc-updater': 'sonnet',
-  'implementer': 'sonnet',
-  'investigator': 'sonnet',
-  'knowledge-lookup': 'sonnet',
-  'tdd-guide': 'sonnet'
-};
-// END GENERATED
-
-// This resolver stays dependency-free so installed runtimes can use its metadata without a schema
-// sibling on disk.
+// Dependency-free so installed runtimes can use it without a schema sibling on disk.
 
 const CODEX_SESSION_SCAN_MAX_FILES = 2048;
 const CODEX_SESSION_SCAN_MAX_DEPTH = 8;
@@ -207,156 +182,11 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
   }
 }
 
-function homeDir() {
-  return process.env.HOME || os.homedir();
-}
-
-function defaultAgentDir() {
-  return process.env.KAOLA_AGENT_DIR || path.join(homeDir(), '.claude', 'agents');
-}
-
-function isCodexPluginScriptDir(scriptDir = __dirname) {
-  const root = path.resolve(scriptDir, '..');
-  const pluginBundle = fs.existsSync(path.join(root, '.codex-plugin', 'plugin.json'));
-  const stableHookHome = path.basename(root) === 'kaola-workflow'
-    && path.basename(path.dirname(root)) === '.codex';
-  return pluginBundle || stableHookHome;
-}
-
-function extractFrontmatterModel(content) {
-  const match = String(content || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return '';
-  const modelLine = match[1].split(/\r?\n/).find(line => /^\s*model\s*:/.test(line));
-  if (!modelLine) return '';
-  return modelLine.replace(/^\s*model\s*:\s*/, '').trim().replace(/^['"]|['"]$/g, '');
-}
-
-function modelFromFile(agentName, agentDir) {
-  try {
-    return extractFrontmatterModel(fs.readFileSync(path.join(agentDir, `${agentName}.md`), 'utf8'));
-  } catch {
-    return '';
-  }
-}
-
-// Resolution is a TWO-step chain: frontmatter -> DEFAULT_AGENT_MODELS. There is no install-written
-// model manifest and no install-time model axis; a file dropped in the agent dir cannot influence
-// resolution.
-//
-// The chain used to have a THIRD step in front of these two — a per-node `model` cell the caller
-// read off the frozen plan and applied before asking this function. That cell is gone: a mission in
-// the mission ledger carries no role and no model, and the orchestrator decides the model at the
-// moment it dispatches. A caller may still pass an explicit model; it simply no longer comes from
-// a declaration made before the work was understood.
-//
-// FOR AN INSTALLED AGENT THE FRONTMATTER STEP NEVER FIRES. The installer rewrites every installed
-// agent's frontmatter to `model: inherit`, and step 1 skips `inherit` by design, so an installed
-// agent's chain is effectively DEFAULT_AGENT_MODELS -> inherit (empty). The frontmatter step
-// governs exactly one case: an ad-hoc dispatch pointed at the SOURCE tree
-// (`--agent-dir <repo>/agents`), where the frontmatter has not been neutralized. That is why
-// DEFAULT_AGENT_MODELS must stay byte-equal to the source frontmatter — the two are the same
-// declaration read from two directories, and only their agreement makes the binding install-invariant.
-function resolveAgentModelRaw(name, dir, options = {}) {
-  // Keep Codex declarative role defaults independent of whatever a co-installed runtime
-  // wrote into its own agent dir: the static map alone answers for the Codex plugin.
-  if (options.staticDefaults && DEFAULT_AGENT_MODELS[name]) {
-    const v = DEFAULT_AGENT_MODELS[name];
-    return v.toLowerCase() === 'inherit' ? '' : v;
-  }
-
-  // 1. frontmatter, only if not 'inherit'
-  const fm = modelFromFile(name, dir);
-  if (fm && fm.toLowerCase() !== 'inherit') return fm;
-
-  // 2. DEFAULT_AGENT_MODELS
-  const def = DEFAULT_AGENT_MODELS[name];
-  if (def) return def.toLowerCase() === 'inherit' ? '' : def;
-
-  // 3. empty
-  return '';
-}
-
-function resolveAgentModel(agentName, options = {}) {
-  const name = String(agentName || '').trim();
-  if (!name) return '';
-  const dir = options.agentDir || defaultAgentDir();
-  const staticDefaults = options.staticDefaults === true
-    || (options.staticDefaults !== false && isCodexPluginScriptDir());
-  return resolveAgentModelRaw(name, dir, { ...options, staticDefaults });
-}
-
-function formatAgentArgument(model) {
-  if (!model) return '';
-  return `model="${String(model).replace(/"/g, '\\"')}",`;
-}
-
-function parseArgs(argv) {
-  const args = {
-    agent: '',
-    format: 'raw',
-    agentDir: ''
-  };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--raw') {
-      args.format = 'raw';
-    } else if (arg === '--json') {
-      args.format = 'json';
-    } else if (arg === '--agent-arg') {
-      args.format = 'agent-arg';
-    } else if (arg === '--agent-dir') {
-      args.agentDir = argv[i + 1] || '';
-      i += 1;
-    } else if (arg.startsWith('--agent-dir=')) {
-      args.agentDir = arg.slice('--agent-dir='.length);
-    } else if (!args.agent) {
-      args.agent = arg;
-    } else {
-      throw new Error(`unexpected argument: ${arg}`);
-    }
-  }
-
-  return args;
-}
-
-function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (err) {
-    console.error(err.message);
-    process.exit(2);
-  }
-
-  if (!args.agent) {
-    console.error('usage: kaola-workflow-resolve-agent-model.js <agent-name> [--raw|--json|--agent-arg] [--agent-dir DIR]');
-    process.exit(2);
-  }
-
-  const model = resolveAgentModel(args.agent, { agentDir: args.agentDir || undefined });
-  if (args.format === 'json') {
-    process.stdout.write(`${JSON.stringify({ agent: args.agent, model })}\n`);
-  } else if (args.format === 'agent-arg') {
-    const arg = formatAgentArgument(model);
-    if (arg) process.stdout.write(`${arg}\n`);
-  } else if (model) {
-    process.stdout.write(`${model}\n`);
-  }
-}
-
-if (require.main === module) main();
-
 module.exports = {
-  DEFAULT_AGENT_MODELS,
   loadCodexSessionProof,
   CODEX_SESSION_SCAN_MAX_FILES,
   CODEX_SESSION_SCAN_MAX_DEPTH,
   CODEX_SESSION_SCAN_MAX_DIRS,
   CODEX_SESSION_SCAN_MAX_ENTRIES,
   CODEX_SESSION_FILE_MAX_BYTES,
-  extractFrontmatterModel,
-  formatAgentArgument,
-  isCodexPluginScriptDir,
-  resolveAgentModel
 };

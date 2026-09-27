@@ -1,19 +1,20 @@
 {
-  "schema_version": 2,
-  "authority": "templates/agents/behavior-contracts.json is the current authoring authority for every role; all fourteen role contracts are Kaola-authored. The text below records where earlier versions of six contracts came from and how the current content was measured against that source; it does not describe current authorship, governance, or a re-vendor relationship.",
+  "schema_version": 3,
+  "authority": "Kaola-Workflow defines no subagent roles: the seven Kaola-authored role contracts and every generated role profile were retired by #1101 (ADR 0029). This file keeps the attribution for material that remains readable in git history and kaola-workflow/archive/: earlier versions of three retired role contracts were derived from the origin below. It describes no current content.",
   "origins": {
     "everything_claude_code": {
       "repository": "https://github.com/affaan-m/everything-claude-code",
       "pinned_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
       "license": "MIT License",
       "copyright": "Copyright (c) 2026 Affaan Mustafa",
-      "relationship": "historical (retired by #1054)",
-      "retained_material": "none in the current role contracts; earlier derived contracts remain in git history and kaola-workflow/archive/ under this license"
+      "relationship": "historical (derived contracts retired by #1054; roles retired by #1101)",
+      "retained_material": "none in the current tree; earlier derived contracts remain in git history and kaola-workflow/archive/ under this license"
     }
   },
-  "roles": {
+  "retired_roles": {
     "code-explorer": {
       "source_kind": "kaola_authored",
+      "retired_by": "#1101",
       "history": {
         "origin": "everything_claude_code",
         "upstream_path": "agents/code-explorer.md",
@@ -27,10 +28,12 @@
       }
     },
     "code-reviewer": {
-      "source_kind": "kaola_authored"
+      "source_kind": "kaola_authored",
+      "retired_by": "#1101"
     },
     "doc-updater": {
       "source_kind": "kaola_authored",
+      "retired_by": "#1101",
       "history": {
         "origin": "everything_claude_code",
         "upstream_path": "agents/doc-updater.md",
@@ -44,16 +47,20 @@
       }
     },
     "implementer": {
-      "source_kind": "kaola_authored"
+      "source_kind": "kaola_authored",
+      "retired_by": "#1101"
     },
     "investigator": {
-      "source_kind": "kaola_authored"
+      "source_kind": "kaola_authored",
+      "retired_by": "#1101"
     },
     "knowledge-lookup": {
-      "source_kind": "kaola_authored"
+      "source_kind": "kaola_authored",
+      "retired_by": "#1101"
     },
     "tdd-guide": {
       "source_kind": "kaola_authored",
+      "retired_by": "#1101",
       "history": {
         "origin": "everything_claude_code",
         "upstream_path": "agents/tdd-guide.md",

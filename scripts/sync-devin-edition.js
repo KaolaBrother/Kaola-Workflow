@@ -2,7 +2,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const agentGen = require('./generate-agent-profiles.js');
+const adapterFacts = require('./runtime-adapter-facts.js');
 const forgeLayout = require('./runtime-edition-forge.js');
 
 const REPO = path.resolve(__dirname, '..');
@@ -43,7 +43,7 @@ function devinNativeDispatchProse(card) {
 function transformCommandBody(body, forge) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  text = agentGen.deferRuntimeDispatchBlock(text);
+  text = adapterFacts.deferRuntimeDispatchBlock(text);
   text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, devinNativeDispatchProse);
   text = rewriteClaudeScriptPaths(text);
   text = text.replace(/--runtime claude\b/g, '--runtime devin');

@@ -37,7 +37,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const agentGen = require('./generate-agent-profiles');
+const adapterFacts = require('./runtime-adapter-facts');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -73,7 +73,6 @@ const TREE_ROOT = (() => {
 })();
 
 const DEFAULT_FORGE = 'github';
-const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 const CANON_PLUGINS_DIR = path.join(REPO, 'templates', 'opencode', 'plugins');
 
@@ -105,8 +104,6 @@ const PLUGIN_SCRIPTS = [];
 
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
 const { parseFrontmatter, parseTools } = forgeLayout;
-
-const { listCanonAgents } = forgeLayout;
 
 // The command surfaces this edition renders FROM, for a forge. Sourced from the
 // routing-surface registry rather than a directory listing, so the forge variants
@@ -156,30 +153,13 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
 }
 
-// OpenCode installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
-// native-route instruction, naming no Kaola role as dispatchable.
-function opencodeNativeDispatchProse(card) {
-  if (card.includes('doc-updater')) {
-    return 'Use a native route or work inline for documentation work — broad `general`, read-only '
-      + '`explore`, or read-only external-research `scout` as the item\'s boundary requires. Put '
-      + 'the changed files, checklist, working directory, and custody boundary in the brief.\n';
-  }
-  return 'Use a native route or work inline for this routed fix — broad `general`, read-only '
-    + '`explore`, or read-only external-research `scout` as the item\'s boundary requires. Put '
-    + 'the failure command, evidence path, working directory, and custody boundary in the brief.\n';
-}
-
 // The canonical section this transform substitutes at — the TRIGGER, never a heading it emits.
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
-    text = agentGen.replaceRuntimeDelegationGuidance(text, 'opencode', forge);
+  if (text.includes(adapterFacts.DELEGATION_GUIDANCE_START)) {
+    text = adapterFacts.replaceRuntimeDelegationGuidance(text, 'opencode', forge);
   }
-  // Dispatch-card `Agent(...)` blocks → native-route instructions. Scoped to a whole card
-  // (a line that is exactly `Agent(` through its closing `)` line) so it rewrites ONLY the
-  // dispatch invocation and never prose mentions of the word "agent" or inline `Agent(...)`.
-  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, opencodeNativeDispatchProse);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
@@ -666,8 +646,8 @@ module.exports = {
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools,
-  listCanonAgents, listCanonCommands,
-  CANON_AGENTS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
+  listCanonCommands,
+  CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
   OUT_COMMAND_DIR, OPENCODE_JSON, REPO,
   HOOK_SCRIPTS, PLUGIN_SCRIPTS,
   writePlugin, retiredMdFiles, retiredCopiedFiles, pruneRetired,

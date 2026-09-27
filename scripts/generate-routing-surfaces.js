@@ -54,7 +54,7 @@ const fs = require('fs');
 const path = require('path');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
-const agentProfiles = require('./generate-agent-profiles.js');
+const adapterFacts = require('./runtime-adapter-facts.js');
 
 const REPO = path.resolve(__dirname, '..');
 const TEMPLATE_DIR = path.join(REPO, 'templates', 'routing');
@@ -339,7 +339,7 @@ function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
       ? SLOTS['runtime-dispatch-common']
       : RECOVERY_DISPATCH_DEFERRED_NOTE,
     'runtime-delegation': fullDispatchCarrier
-      ? agentProfiles.renderRuntimeDelegationGuidanceForRuntime(runtime, forge)
+      ? adapterFacts.renderRuntimeDelegationGuidanceForRuntime(runtime, forge)
       : '',
   });
   if (Object.prototype.hasOwnProperty.call(options, 'globalContract')) {

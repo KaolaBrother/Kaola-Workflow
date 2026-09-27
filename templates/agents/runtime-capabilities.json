@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "evidence": {
     "claude_instructions": {
       "kind": "official_docs",
@@ -21,12 +21,6 @@
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "AGENTS.md is discovered from repository root to the current working directory."
     },
-    "codex_agents_dir_discovery_20260921": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1085",
-      "observed_at": "2026-09-21T00:00:00Z",
-      "claim": "codex-cli 0.155.1 resolves custom agent roles through two live paths into one namespace: recursive discovery of standalone role TOML files under $CODEX_HOME/agents/ (the name field is the role identity; scratch probes read four files including two in a nested subdirectory with zero [agents.*] config, and two unregistered files sharing name dup collided as duplicate agent role name discovered in <agents dir>), plus [agents.<role>] blocks with config_file in config.toml (a dangling path warns and is ignored; a cross-path collision reports declared in the same config layer). A literal $CODEX_HOME/agents.toml produced zero startup warnings and is never read. The live ~/.codex carries the seven managed blocks and kaola-workflow role files with no duplicate warning."
-    },
     "opencode_instructions": {
       "kind": "official_docs",
       "locator": "https://opencode.ai/docs/rules/",
@@ -38,12 +32,6 @@
       "locator": "https://github.com/MoonshotAI/kimi-code/blob/%40moonshot-ai%2Fkimi-code%400.38.0/packages/agent-core-v2/src/agent/profile/context.ts",
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "AGENTS.md files are loaded from global and project scopes."
-    },
-    "kimi_global_named_profile_20260827": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
-      "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Kimi Code 0.38.0 selected the user-global kaola-role-implementer profile from each of two unrelated empty Git repositories with no project Kimi or .agents catalog. Both read-only prompt-mode calls returned the exact requested token and left the repositories empty."
     },
     "kimi_secondary_model_ga_20260921": {
       "kind": "runtime_probe",
@@ -69,18 +57,6 @@
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "Cursor Cloud Agent Task catalogs stayed built-in-only for Kaola custom types. A consumer with 14 git-tracked project profiles still exposed generalPurpose, explore, cursor-guide, bugbot, security-review, and best-of-n-runner; omit-model and inherit generalPurpose succeeded; cursor-grok-4.6-high was resolver-rejected. A later producer Cloud parent also lacked Kaola names and additionally exposed explore, computerUse, and videoReview."
     },
-    "cursor_cli_named_profile_20260827": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
-      "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Authenticated standalone Cursor CLI build 2026.08.25-3e8eec8 discovered an explicit project materialization and dispatched the exact custom implementer type. The parent omitted a model override; the Task carrier resolved cursor-grok-4.6-medium and the child returned the requested read-only probe token. Exact binding is verified from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient, and internal `subagentType.custom.name` is provider encoding, not controller call shape."
-    },
-    "cursor_app_local_named_profile_20260827": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
-      "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Cursor App 3.17.21 local IDE Agent exposed all 14 project Kaola types and successfully dispatched exact implementer without repository mutation. The UI did not expose the selected child model, effort, or profile-source carrier."
-    },
     "cursor_cloud_preboot_catalog_20260827": {
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
@@ -98,20 +74,6 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-28T00:00:00Z",
       "claim": "Cursor Cloud environment setup confirmed candidate 101250f293a5439ed73e8ee2127c7501fba9e883, installed the remote machine authority and explicitly materialized the selected repository, and passed current receipt, authority-binding, 14-agent, collision, and byte-idempotence checks. The user manually saved exact Build bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2. New top-level same-repository parent bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d visibly used that Build, exposed nine native plus all 14 Kaola Task types, and exact implementer child bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49 returned PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud."
-    },
-    "grok_model_catalog_20260922": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1088",
-      "observed_at": "2026-09-22T00:00:00Z",
-      "version_floor": "1.0.40",
-      "claim": "Grok CLI 1.0.40's authenticated model catalog (GROK_HOME models_cache.json, fetched 2026-09-21 from cli-chat-proxy.grok.com/v1/models) lists id grok-4.7 (name Grok 4.7) with reasoning_efforts xhigh, high (default), medium, and low, beside grok-4.7-build-fast, grok-4.6, and grok-4.5. The subagent_default pin moved from grok-4.6 to grok-4.7 on this catalog read; a pinned child's resolved model and effort were not re-probed."
-    },
-    "cursor_model_catalog_20260922": {
-      "kind": "runtime_probe",
-      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1088",
-      "observed_at": "2026-09-22T00:00:00Z",
-      "version_floor": "2026.09.15-d2fe57e",
-      "claim": "Cursor CLI 2026.09.15-d2fe57e `cursor-agent models` lists grok-4.7-low, grok-4.7-medium, grok-4.7-high, and grok-4.7-xhigh, each with a -fast twin, without the cursor- prefix the grok-4.6 slugs carry; its help documents quoted bracket overrides on parameterized models. The subagent_default pin moved from grok-4.6[effort=medium] to grok-4.7[effort=medium] on this catalog read; the resolver mapping of that bracket value to a provider slug was not re-probed."
     },
     "zcode_instructions": {
       "kind": "official_docs",
@@ -290,29 +252,17 @@
         "claude_agents_md_native_20260919"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "bridge",
-        "profile_format": "markdown_yaml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model",
-        "tool_binding": "profile_tools",
         "hook_scope": "user_and_project",
-        "subagent_default": {
-          "model": "sonnet",
-          "summary": "every installed Kaola profile pins `model: sonnet`; effort is not pinned and follows the runtime default; omit the per-call model unless the item needs a stronger child"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.",
-          "dispatch_carrier": "Dispatch with `Agent` and `subagent_type: \"<role>\"`; installed Kaola profiles pin `model: sonnet`, so omit the per-call model unless the item needs a stronger child.",
-          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
-          "native_routes": "Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.",
-          "availability": "Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name."
+          "native_routes": "Dispatch with the native `Agent` tool; `subagent_type` names a type from the current catalog — built-in `general-purpose`, read-only `Explore` and `Plan`, catch-all `claude`, and any agent the user, project, or another plugin defines. Background or isolated children and optional agent teams remain Claude-owned options.",
+          "availability": "Inspect the current Agent type catalog and its effective precedence; Claude Code owns child model and effort defaults and permits recursive subagents to its native depth limit, which the host can configure."
         }
       },
       "compact_protocol": {
-        "events": ["SessionStart"],
+        "events": [
+          "SessionStart"
+        ],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
         "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Claude adapter; no private prompt/session binding exists.",
         "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
@@ -329,34 +279,20 @@
     "codex-github": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions",
-        "codex_agents_dir_discovery_20260921"
+        "codex_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "toml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_effort",
-        "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "subagent_default": {
-          "model": "gpt-6-luna",
-          "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`, preserving supported `fork_turns` and service-tier choices.",
-          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
-          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
+          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
         }
       },
       "compact_protocol": {
-        "events": ["SessionStart"],
+        "events": [
+          "SessionStart"
+        ],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
         "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
         "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
@@ -373,34 +309,20 @@
     "codex-gitlab": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions",
-        "codex_agents_dir_discovery_20260921"
+        "codex_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "toml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_effort",
-        "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "subagent_default": {
-          "model": "gpt-6-luna",
-          "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`, preserving supported `fork_turns` and service-tier choices.",
-          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
-          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
+          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
         }
       },
       "compact_protocol": {
-        "events": ["SessionStart"],
+        "events": [
+          "SessionStart"
+        ],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
         "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
         "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
@@ -417,34 +339,20 @@
     "codex-gitea": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions",
-        "codex_agents_dir_discovery_20260921"
+        "codex_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "toml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_effort",
-        "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "subagent_default": {
-          "model": "gpt-6-luna",
-          "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`, preserving supported `fork_turns` and service-tier choices.",
-          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
-          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
+          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
         }
       },
       "compact_protocol": {
-        "events": ["SessionStart"],
+        "events": [
+          "SessionStart"
+        ],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
         "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
         "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
@@ -464,11 +372,7 @@
         "opencode_instructions"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "role_dispatch": "native_only",
         "hook_scope": "plugin_runtime",
         "delegation_guidance": {
           "native_routes": "Native routes are broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
@@ -494,15 +398,10 @@
       "runtime": "kimi",
       "evidence": [
         "kimi_instructions",
-        "kimi_global_named_profile_20260827",
         "kimi_secondary_model_ga_20260921"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "role_dispatch": "native_only",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
           "native_routes": "Native routes are full writable `coder`, read-only `explore`, and non-shell `plan`, dispatched with `Agent` (resume/background) or `AgentSwarm` (up to 128 parallel items); use each under its actual boundary.",
@@ -521,40 +420,26 @@
         "global_discovery": "supported",
         "required_project_materialization": "no",
         "ambient_repository_write": false,
-        "evidence_status": "live_two_repo_global_named_lookup"
+        "evidence_status": "documented"
       }
     },
     "grok": {
       "runtime": "grok",
       "evidence": [
-        "grok_instructions",
-        "grok_model_catalog_20260922"
+        "grok_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "markdown_yaml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_effort",
-        "tool_binding": "profile_tools",
         "hook_scope": "user_and_project",
-        "subagent_default": {
-          "model": "grok-4.7",
-          "effort": "medium",
-          "summary": "every installed Kaola profile pins `model: grok-4.7` with `effort: medium`; omit per-call model and effort because the profile pins both"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find named profiles in the project `.grok/agents/` directory or the user `~/.grok/agents/` directory.",
-          "dispatch_carrier": "Dispatch with `spawn_subagent` and `subagent_type: \"<role>\"`; preserve native background, isolation, resume, and cwd options, but omit per-call model and effort because the profile pins both.",
-          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
-          "native_routes": "Native alternatives include full `general-purpose`, read/shell `explore`, and read/shell `plan`, plus background and isolated children; use the closest truthful contract.",
-          "availability": "Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities."
+          "native_routes": "Dispatch with `spawn_subagent`; `subagent_type` names a type from the live catalog, such as full `general-purpose`, read/shell `explore`, or read/shell `plan`, with native background, isolation, resume, and cwd options.",
+          "availability": "Respect the current `spawn_subagent` catalog and its native options; child model and effort follow Grok's own defaults. Grok children cannot spawn descendants."
         }
       },
       "compact_protocol": {
-        "events": ["machine-global always-loaded rule"],
+        "events": [
+          "machine-global always-loaded rule"
+        ],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
         "session": "One machine-global V2 Rule contains the global contract, operation reload route, mandatory dispatch contract, and Grok adapter.",
         "reload": "Grok passive hook stdout is ignored. Its documented user Rules enter every interaction, so V2 is installed once under GROK_HOME/rules and completely reloads Workflow Next or Finalization after compact.",
@@ -573,43 +458,16 @@
       "evidence": [
         "cursor_instructions",
         "cursor_cloud_task_catalog",
-        "cursor_cli_named_profile_20260827",
-        "cursor_app_local_named_profile_20260827",
         "cursor_cloud_preboot_catalog_20260827",
         "cursor_cloud_saved_environment_20260827",
-        "cursor_cloud_environment_setup_20260828",
-        "cursor_model_catalog_20260922"
+        "cursor_cloud_environment_setup_20260828"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
-        "capability_gap": "explicit",
         "instruction_loading": "direct_nested",
-        "profile_format": "markdown_yaml_parameters",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_effort",
-        "tool_binding": "readonly_flag",
         "hook_scope": "user_and_project",
-        "subagent_default": {
-          "model": "grok-4.7",
-          "effort": "medium",
-          "summary": "every installed Kaola profile pins `model: grok-4.7[effort=medium]`; a custom subagent that omits `model` inherits the parent, so the pin is what selects the cheaper child; omit the per-call `model`"
-        },
-        "dispatch_conformance": {
-          "call_shape": "Task with flat subagent_type",
-          "named_model_field": "omit",
-          "exact_binding": "post_resolution_assertion",
-          "generic_model_enum": "not_named_profile_capability",
-          "provider_model_evidence": "providerOptions.cursor.modelName",
-          "tui_child_transcript": "insufficient"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly.",
-          "dispatch_carrier": "If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-binding requirement is a post-resolution assertion, never authorization to populate that field. In a built-in-only enum, omit-model is the parent, not a profile pin.",
-          "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
-          "native_routes": "Inspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
-          "fallback_search": "If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a miss that the item's brief cannot absorb inlines only that item and records the specific `capability_gap`.",
-          "availability": "The live Task catalog is authoritative; CLI profile reload requires a new process."
+          "native_routes": "Dispatch with `Task`; its `subagent_type` names a type from the live catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
+          "availability": "The live Task catalog is authoritative; CLI, App local, and App Cloud are separate hosts, and a CLI catalog reload requires a new process."
         }
       },
       "surfaces": {
@@ -620,11 +478,9 @@
               "global_discovery": "unsupported",
               "required_project_materialization": "yes",
               "remote_injection": "unsupported",
-              "named_catalog": "project_custom_when_present",
               "reload": "new_process_same_chat",
               "evidence": [
-                "cursor_instructions",
-                "cursor_cli_named_profile_20260827"
+                "cursor_instructions"
               ],
               "stamp": {
                 "runtime_build": "2026.08.25-3e8eec8",
@@ -642,11 +498,9 @@
               "global_discovery": "unknown",
               "required_project_materialization": "unknown",
               "remote_injection": "unsupported",
-              "named_catalog": "project_custom_when_present",
               "reload": "unknown",
               "evidence": [
-                "cursor_instructions",
-                "cursor_app_local_named_profile_20260827"
+                "cursor_instructions"
               ],
               "stamp": {
                 "runtime_build": "Cursor.app 3.17.21 (8f2a112cb2845a97b75fd932ea5c470579ca4060)",
@@ -659,7 +513,6 @@
               "global_discovery": "unsupported",
               "required_project_materialization": "yes",
               "remote_injection": "agent_confirmed_cloud_environment_setup_install_and_save",
-              "named_catalog": "project_custom_from_saved_environment_build",
               "reload": "new_same_repository_cloud_parent_after_environment_save",
               "evidence": [
                 "cursor_cloud_task_catalog",
@@ -678,14 +531,14 @@
         }
       },
       "compact_protocol": {
-        "events": ["machine-global alwaysApply rule"],
+        "events": [
+          "machine-global alwaysApply rule"
+        ],
         "pending": "none — Cursor recovery is one persistent Rule, not a hook state machine.",
         "session": "One V2 Rule contains the global contract, operation reload route, mandatory dispatch contract, and Cursor adapter; local installs use the user carrier while Cloud materializes the same bytes in the selected project.",
         "reload": "Cursor includes alwaysApply Rules in every model context. V2 therefore completely reloads Workflow Next or Finalization after compact on CLI, App local, and Cloud even though Cloud lacks sessionStart and preCompact cannot inject context.",
         "tool": "No preToolUse or postToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
-        "stop": "No stop prompt-lifecycle hook is installed.",
-        "fast": "Fast is prohibited for named Kaola dispatch and cannot override the profile's pinned model and effort.",
-        "Explore": "Built-in Explore is a truthful read-only route only when the live Cursor catalog exposes it; it cannot impersonate a missing Kaola role."
+        "stop": "No stop prompt-lifecycle hook is installed."
       }
     },
     "zcode": {
@@ -695,11 +548,7 @@
         "zcode_native_skill_20260919"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct_workspace_root",
-        "role_dispatch": "native_only",
         "hook_scope": "user_only",
         "delegation_guidance": {
           "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned, and optional call fields follow the live Agent schema — the live schema wins.",
@@ -707,7 +556,9 @@
         }
       },
       "compact_protocol": {
-        "events": ["machine-global AGENTS.md managed region"],
+        "events": [
+          "machine-global AGENTS.md managed region"
+        ],
         "pending": "none — Issue #1044 installs no ZCode prompt-lifecycle hooks, and #1079 adds none: recovery is one persistent managed instruction region plus native Skill re-invocation, not a hook state machine.",
         "session": "The user-global ~/.zcode/AGENTS.md managed region contains the global contract, operation reload route, mandatory dispatch contract, and ZCode adapter.",
         "reload": "ZCode's AGENTS.md prefix survives compaction (KPR #75), so the managed region stays in context and routes recovery to a native `/kaola-workflow-next` or `/kaola-workflow-finalize` Skill invocation, which emits a fresh Skill tool call and reloads the full prompt after compact; never a manual `read`.",
@@ -725,15 +576,23 @@
     "devin": {
       "runtime": "devin",
       "evidence": [
-        "devin_f1", "devin_f2", "devin_f3", "devin_f4", "devin_f5", "devin_f6", "devin_f7",
-        "devin_f8", "devin_f9", "devin_f10", "devin_f11", "devin_f12", "devin_f13", "devin_f14"
+        "devin_f1",
+        "devin_f2",
+        "devin_f3",
+        "devin_f4",
+        "devin_f5",
+        "devin_f6",
+        "devin_f7",
+        "devin_f8",
+        "devin_f9",
+        "devin_f10",
+        "devin_f11",
+        "devin_f12",
+        "devin_f13",
+        "devin_f14"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "role_dispatch": "native_only",
         "hook_scope": "user_and_project",
         "nesting": 1,
         "hot_reload": false,
@@ -744,7 +603,9 @@
         }
       },
       "compact_protocol": {
-        "events": ["UserPromptSubmit"],
+        "events": [
+          "UserPromptSubmit"
+        ],
         "pending": "none — one hook reloads the static global carrier after rules drop during compaction.",
         "session": "The global ~/.config/devin/AGENTS.md carrier contains the workflow contract and host-guarded Devin adapter.",
         "reload": "Exactly one UserPromptSubmit hook in ~/.config/devin/config.json reloads the global carrier for routing and compact recovery.",
@@ -752,24 +613,29 @@
         "stop": "No Kaola stop hook is installed.",
         "rules_survive_compaction": false
       },
-      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
+      }
     },
     "droid": {
       "runtime": "droid",
       "evidence": [
-        "droid_agents_md", "droid_skills", "droid_commands", "droid_subagents", "droid_hooks",
+        "droid_agents_md",
+        "droid_skills",
+        "droid_commands",
+        "droid_subagents",
+        "droid_hooks",
         "droid_live_probe_20260916"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "role_dispatch": "native_only",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
           "native_routes": "Native routes follow the live Task schema: the built-in `worker` (general-purpose, all tools) and read-only `explorer` routes run in their own context window, plus any user-defined custom droids from ~/.factory/droids/; background execution and resume remain runtime-owned options — the live schema wins.",
-          "availability": "Sibling Task calls run in parallel with their own context windows; a spawned route resolves its model from the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and it cannot spawn further descendants. On a runtime that deliberately installs no role profiles, the absence of a named role is design, not a capability gap."
+          "availability": "Sibling Task calls run in parallel with their own context windows; a spawned route resolves its model from the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and it cannot spawn further descendants."
         }
       },
       "compact_protocol": {
@@ -780,24 +646,29 @@
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
         "stop": "No Kaola Stop hook is installed."
       },
-      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
+      }
     },
     "dsh": {
       "runtime": "dsh",
       "evidence": [
-        "dsh_cli", "dsh_home", "dsh_instructions", "dsh_skills", "dsh_subagents",
+        "dsh_cli",
+        "dsh_home",
+        "dsh_instructions",
+        "dsh_skills",
+        "dsh_subagents",
         "dsh_live_probe_20260919"
       ],
       "capabilities": {
-        "named_roles": false,
-        "deterministic_profiles": false,
-        "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "role_dispatch": "native_only",
         "hook_scope": "none",
         "delegation_guidance": {
           "native_routes": "Native routes follow the live schema: shipped profiles expose `subagent` and `subagent_fork`; background execution, depth, and child model fields remain runtime-owned options — the live schema wins.",
-          "availability": "A child does not see the parent conversation unless the fork provider is used. On a runtime that deliberately installs no role profiles, the absence of a named role is design, not a capability gap."
+          "availability": "A child does not see the parent conversation unless the fork provider is used."
         }
       },
       "compact_protocol": {
@@ -808,7 +679,12 @@
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
         "stop": "No Kaola Stop hook is installed."
       },
-      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
+      }
     }
   }
 }

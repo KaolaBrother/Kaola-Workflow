@@ -6,18 +6,12 @@
 //
 // Cursor is a coding-agent RUNTIME (like Codex/opencode/Kimi/Grok), not a git forge,
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
-// Cursor-native way: named agents under `.cursor/agents/<role>.md` (Task
-// types), flat slash commands under `.cursor/commands/<name>.md`, and an empty hook mapping.
+// Cursor-native way: flat slash commands under `.cursor/commands/<name>.md` and an empty hook
+// mapping. Kaola-Workflow ships no Cursor agents (#1101): subagents are Cursor's own Task types.
 // The global-contract transaction owns the one alwaysApply Rule; this generator prunes its retired
 // project-level predecessor.
 // Deterministic, idempotent, and parity-checked
 // by test-cursor-edition.js.
-//
-// Every generated agent renders the adapter's single subagent binding:
-// `model: grok-4.7[effort=medium]`. Named-profile Task cards omit per-dispatch model overrides so
-// the profile carries its binding. A built-in-only catalog-miss path uses live members as
-// themselves and may use only a resolver-listed live model slug as an effort lever; the
-// one-family allowlist applies to generated profile pins, not that live-schema fallback.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.cursor/`;
 // a forge writes `.cursor-<forge>/`. Command sources come from the routing-surface
@@ -25,13 +19,13 @@
 // `edition-sync.js`, `install.sh`, and the routing-surface --check contract.
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/agents + commands + empty hook mapping from canonical.
+//   --write   regenerate <tree>/commands + empty hook mapping and prune retired agents.
 //   --check   assert the generated tree is in byte-parity with a fresh render.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
-const agentGen = require('./generate-agent-profiles');
+const adapterFacts = require('./runtime-adapter-facts');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -44,14 +38,11 @@ const TREE_ROOT = (() => {
 let ACTIVE_TREE_ROOT = TREE_ROOT;
 
 const DEFAULT_FORGE = 'github';
-const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 
 function treeLabel(forge) {
   return '.cursor' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
-
-const MANAGED_ROLES = new Set(agentGen.ROLES);
 
 // No runtime-neutral hook scripts are active in the Cursor edition. The generator retains ownership
 // of the hooks directory so --write can prune stale dispatch artifacts.
@@ -62,17 +53,7 @@ const RECOVERY_END = '<!-- KW-COMPACT-RECOVERY-END -->';
 const DISPATCH_START = '<!-- KW-RUNTIME-DISPATCH-START -->';
 const DISPATCH_END = '<!-- KW-RUNTIME-DISPATCH-END -->';
 
-const { parseFrontmatter, parseTools, yamlScalar, listCanonAgents } = forgeLayout;
-
-function copyListCanonAgents(srcDir, destDir) {
-  fs.mkdirSync(destDir, { recursive: true });
-  const names = new Set(listCanonAgents());
-  for (const name of names) {
-    const src = path.join(srcDir, name + '.md');
-    if (!fs.existsSync(src)) continue;
-    fs.copyFileSync(src, path.join(destDir, name + '.md'));
-  }
-}
+const { parseFrontmatter, parseTools, yamlScalar } = forgeLayout;
 
 function listCanonCommands(forge) {
   return forgeLayout.listCanonCommands(forge || DEFAULT_FORGE);
@@ -81,21 +62,6 @@ function listCanonCommands(forge) {
 function canonCommandPath(basename, forge) {
   return forgeLayout.canonCommandPath(basename, forge || DEFAULT_FORGE);
 }
-
-function isReadOnlyRole(toolSet) {
-  return !(toolSet.has('write') || toolSet.has('edit'));
-}
-
-function renderAgent(canonContent, agentName, forge) {
-  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-cursor-edition: unknown role ' + agentName);
-  return agentGen.renderRuntimeRole('cursor', agentName).content;
-}
-
-const CURSOR_MODEL_DISPATCH_GUIDANCE =
-  'Inspect the live Task enum first. Named Cursor agents carry generated frontmatter that pins '
-  + 'the single subagent binding grok-4.7[effort=medium] when that name is in the enum; omit '
-  + 'per-call model then. A built-in-only enum uses those members as themselves. Do not claim '
-  + 'IDE children display distinct effort.';
 
 const CURSOR_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${CURSOR_HOME:-$HOME/.cursor}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
@@ -110,30 +76,19 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + cursorKaolaScript(forge));
 }
 
-function cursorNativeDispatchProse(card) {
-  const role = card.includes('doc-updater') ? 'doc-updater' : 'implementer';
-  const call = card.trimEnd().replace('Agent(', 'Task(');
-  return call + '\n\n'
-    + 'Use the exact name only when the live Task catalog lists it and omit `model` so the named '
-    + 'profile carries its binding; if the enum is built-in-only, do not impersonate `' + role
-    + '` — inline the item and record `capability_gap`, or dispatch a live built-in only as '
-    + 'itself.\n';
-}
-
 function cursorCliStartupResumePrepProse() {
   return [
-    '## Cursor standalone CLI startup and resume Repo role prep',
+    '## Cursor standalone CLI startup and resume Repo prep',
     '',
     'Apply only when the product is the standalone Cursor CLI on the local host; sibling binary is',
     'not evidence. Cursor App local IDE Agent and App-started Cloud are separate hosts:',
     'inspect their live Task catalog and',
     'do not apply or infer this CLI materialization rule for either App host.',
     '',
-    'Startup and resume run Repo role prep through the installed',
+    'Startup and resume run Repo prep through the installed',
     '`${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`',
     '`--ensure-target` transaction. Explicit locator `--cursor-workspace`; resume falls back to',
     'recorded `main_root`.',
-    'Missing named or project roles are not a capability_gap for omitting this prep.',
     '`status: current` is a byte-level no-write. The claim or resume output reports `cursor_prep` with',
     'the transaction `status`; `status: materialized` carries restart_boundary',
     '`new_process_same_chat`: start a new Cursor CLI process with the same chat.',
@@ -155,33 +110,10 @@ function cursorCliResumeRecoveryFence(forge) {
   ].join('\n');
 }
 
-function cursorCliMaterializationProse(forge) {
-  return [
-    '## Cursor standalone CLI pre-dispatch materialization',
-    '',
-    "Standalone Cursor CLI on the local host only; the Next command's Repo role prep section",
-    'carries the host boundary and the fail-closed conditions, and App hosts do not apply this',
-    'rule. Immediately before the first named Kaola child dispatch, run the installed transaction on',
-    'this workspace:',
-    '',
-    '```sh',
-    'CURSOR_MATERIALIZER="${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js"',
-    '[ -f "$CURSOR_MATERIALIZER" ] || { echo "capability_gap: Cursor global authority/helper missing; run ./install-cursor.sh --global --yes"; exit 1; }',
-    'node "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=' + forge + ' --json',
-    '```',
-    '',
-    '`status: current` is a no-op; inspect the live Task enum. `status: materialized` means bytes',
-    'or receipt changed: stop named dispatch, start a new Cursor CLI process with the same',
-    "chat at this workspace, and re-run before dispatch. Any other result fails closed; repair per",
-    "the Next section's diagnostic list.",
-  ].join('\n');
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  text = agentGen.deferRuntimeDispatchBlock(text);
-  text = text.replace(/^```text\nAgent\(\n[\s\S]*?^\)\n```\n?/gm, cursorNativeDispatchProse);
+  text = adapterFacts.deferRuntimeDispatchBlock(text);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
@@ -196,8 +128,6 @@ function transformCommandBody(body, forge, label) {
         + '\n\nOn resume, read the mission ledger'
     );
     text = text.trimEnd() + '\n\n' + cursorCliStartupResumePrepProse() + '\n';
-  } else if (basename === 'kaola-workflow-finalize.md') {
-    text = text.trimEnd() + '\n\n' + cursorCliMaterializationProse(forge) + '\n';
   }
   return text;
 }
@@ -312,9 +242,6 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function agentRel(name, forge) {
-  return treeLabel(forge) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return forgeLayout.commandRel(treeLabel, name, forge);
 }
@@ -323,9 +250,6 @@ function mappingRel(forge) {
   return treeLabel(forge) + '/hooks.json';
 }
 
-function expectedAgentFiles(forge) {
-  return listCanonAgents();
-}
 function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
@@ -333,12 +257,13 @@ function expectedHookFiles() {
   return [];
 }
 
+// The generated tree's agents/ directory held the retired Kaola role profiles; the tree is
+// generator-owned, so every Markdown file left there is a retired render to prune.
 function retiredAgentFiles(forge) {
   const dir = treePath(path.join(treeLabel(forge), 'agents'));
   if (!fs.existsSync(dir)) return [];
-  const expected = new Set(expectedAgentFiles(forge).map(n => n + '.md'));
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.md') && !expected.has(e.name))
+    .filter(e => e.isFile() && e.name.endsWith('.md'))
     .map(e => e.name)
     .sort();
 }
@@ -373,9 +298,10 @@ function pruneTree(forge) {
   let removed = 0;
   for (const f of retiredAgentFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'agents', f)), { force: true });
-    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired surface)');
+    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired role profile)');
     removed++;
   }
+  try { fs.rmdirSync(treePath(path.join(treeLabel(forge), 'agents'))); } catch (_) {}
   for (const f of retiredCommandFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'commands', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/commands/' + f + ' (retired surface)');
@@ -392,23 +318,6 @@ function pruneTree(forge) {
     removed++;
   }
   return removed;
-}
-
-function writeAgents(forge) {
-  let wrote = 0;
-  for (const name of listCanonAgents()) {
-    const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name, forge);
-    const rel = agentRel(name, forge);
-    const dest = treePath(rel);
-    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
-      ensureDir(path.dirname(dest));
-      fs.writeFileSync(dest, out);
-      console.log('generated  ' + rel);
-      wrote++;
-    }
-  }
-  return wrote;
 }
 
 function writeCommands(forge) {
@@ -459,11 +368,10 @@ function runWrite(forge, outputRoot) {
   const previousRoot = ACTIVE_TREE_ROOT;
   if (outputRoot) ACTIVE_TREE_ROOT = path.resolve(outputRoot);
   try {
-    const a = writeAgents(forge);
     const c = writeCommands(forge);
     const h = writeHooks(forge);
     const p = pruneTree(forge);
-    const total = a + c + h + p;
+    const total = c + h + p;
     console.log('sync-cursor-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
       + (total === 0 ? ' — tree already in sync' : '') + ').');
   } finally {
@@ -476,7 +384,6 @@ function runRefreshPresent() {
   let changed = 0;
   for (const forge of forgeLayout.FORGES) {
     if (!fs.existsSync(treePath(treeLabel(forge)))) continue;
-    changed += writeAgents(forge);
     changed += writeCommands(forge);
     changed += writeHooks(forge);
     changed += pruneTree(forge);
@@ -500,15 +407,6 @@ function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
   const mismatches = [];
-  for (const name of listCanonAgents()) {
-    const canon = read('agents/' + name + '.md');
-    const rel = agentRel(name, forge);
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated agent' });
-      continue;
-    }
-    if (readTree(rel) !== renderAgent(canon, name, forge)) mismatches.push({ rel, reason: 'stale — regenerate' });
-  }
   for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
@@ -538,7 +436,7 @@ function runCheck(forge) {
     }
   }
   for (const f of retiredAgentFiles(forge)) {
-    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired role profile — prune (--write removes it)' });
   }
   for (const f of retiredCommandFiles(forge)) {
     mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
@@ -556,9 +454,8 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
-  console.log('sync-cursor-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + '
+  console.log('sync-cursor-edition[' + forge + ']: ' + nc + ' command(s) + '
     + expectedHookFiles().length + ' hook file(s) in parity with canonical.');
 }
 
@@ -568,7 +465,7 @@ function usage() {
     + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .cursor/;\n'
     + '               gitlab/gitea write .cursor-<forge>/\n'
-    + '  --write   regenerate the forge tree agents + commands + hooks from canonical\n'
+    + '  --write   regenerate the forge tree commands + hooks from canonical and prune retired agents\n'
     + '  --tree-root=PATH  with --write, render under an explicit staging root\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
@@ -642,20 +539,18 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, transformCommandBody,
+  renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, CURSOR_KAOLA_SCRIPT, cursorKaolaScript,
-  CURSOR_MODEL_DISPATCH_GUIDANCE,
-  cursorCliMaterializationProse,
   cursorCliStartupResumePrepProse,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks, mappingRel,
   RECOVERY_RULE, RECOVERY_START, RECOVERY_END, DISPATCH_START, DISPATCH_END,
-  treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
+  treeLabel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForCursor, HOOK_ADAPTATIONS,
   expectedHookFiles, retiredHookFiles, retiredRuleFiles, retiredAgentFiles, retiredCommandFiles,
-  parseFrontmatter, parseTools, isReadOnlyRole, yamlScalar,
-  listCanonAgents, copyListCanonAgents, listCanonCommands,
-  CANON_AGENTS_DIR, CANON_HOOKS_DIR,
+  parseFrontmatter, parseTools, yamlScalar,
+  listCanonCommands,
+  CANON_HOOKS_DIR,
   REPO,
   HOOK_SCRIPTS,
 };

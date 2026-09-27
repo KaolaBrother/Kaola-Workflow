@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// test-issue-1101-native-only.js — Kaola-Workflow defines no subagent roles (#1101, ADR 0028).
+// test-issue-1101-native-only.js — Kaola-Workflow defines no subagent roles (#1101, ADR 0029).
 //
 // Subagent capability belongs to the running Agent Harness. Kaola ships no role catalog, no role
 // profiles, no profile generator or manifest, no role->model map, and no pinned subagent model or
@@ -104,7 +104,9 @@ function adapterViolations(source) {
       walk(child, `${where}.${key}`);
     }
   })(source, '$');
-  const text = JSON.stringify(source);
+  // Evidence claims are dated historical observations and may name what was measured then; every
+  // current fact outside them must not name a retired role.
+  const text = JSON.stringify(Object.assign({}, source, { evidence: undefined }));
   const role = text.match(ROLE_RE);
   if (role) out.push(`runtime adapter names retired role ${role[0]}`);
   return out;
@@ -203,7 +205,7 @@ for (const manifest of files.filter(f => /(?:^|\/)\.(?:claude|codex)-plugin\/plu
 // No executable source may still reach for the retired generator or role-model resolution.
 const CALLER_RE = /generate-agent-profiles|resolveAgentModel|DEFAULT_AGENT_MODELS|behavior-contracts\.json/;
 for (const file of files) {
-  if (file === SELF || !/\.(?:js|sh|json)$/.test(file)) continue;
+  if (file === SELF || file === 'templates/agents/provenance.json' || !/\.(?:js|sh|json)$/.test(file)) continue;
   if (/^kaola-workflow\/|^docs\/|(?:^|\/)fixtures\//.test(file)) continue;
   const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
   const m = text.match(CALLER_RE);
@@ -272,7 +274,8 @@ for (const runtime of Object.keys(editions)) {
 let dispatchBlocks = 0;
 for (const [label, text] of surfaces) {
   failures.push(...textViolations(label, text));
-  failures.push(...dispatchBlockViolations(label, text));
+  // A skeleton carries the dispatch contract as a SLOT; its renders are checked instead.
+  if (!/\.skeleton\.md$/.test(label)) failures.push(...dispatchBlockViolations(label, text));
   if (text.includes('<!-- KW-RUNTIME-DISPATCH-START -->')) dispatchBlocks++;
 }
 if (dispatchBlocks === 0) failures.push('no scanned surface carries a dispatch block');

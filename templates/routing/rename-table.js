@@ -18,7 +18,8 @@
 // mechanism stays mutation-provable while the shipped table is empty.
 //
 // DESIGN INVARIANTS (do not add these to RENAMES):
-//   - kaola-workflow-resolve-agent-model.js STAYS un-renamed on all editions.
+//   - kaola-workflow-resolve-agent-model.js (the Codex-session proof module) STAYS un-renamed on
+//     all editions.
 //   - claim.js / codex-preflight.js keep the same basename shape on every
 //     edition and are forge-keyed at source.
 

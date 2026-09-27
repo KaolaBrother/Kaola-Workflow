@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "Kaola-Workflow Gitea for Codex",
     "shortDescription": "Adaptive mission-ledger Kaola-Workflow for Gitea projects",
-    "longDescription": "Kaola-Workflow Gitea for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, and adaptive, resumable execution: the orchestrator writes a mission ledger of items, reads the frontier, dispatches subagents when useful, and closes items as their results land, through research, planning, TDD execution, review, documentation docking, and finalization against Gitea issues and pull requests.",
+    "longDescription": "Kaola-Workflow Gitea for Codex exposes repo-backed skills for project initialization, workflow-init, and adaptive, resumable execution: the orchestrator writes a mission ledger of items, reads the frontier, dispatches subagents when useful, and closes items as their results land, through research, planning, TDD execution, review, documentation docking, and finalization against Gitea issues and pull requests.",
     "developerName": "KaolaBrother",
     "category": "Coding",
     "capabilities": [

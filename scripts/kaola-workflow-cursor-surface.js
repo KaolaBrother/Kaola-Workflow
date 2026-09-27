@@ -322,10 +322,9 @@ function buildGlobalDesired(opts) {
   const sync = require('./sync-cursor-edition.js');
   const manifest = require('./kaola-workflow-install-manifest.js');
   const desired = {};
-  for (const name of sync.listCanonAgents()) {
-    const rel = 'agents/' + name + '.md';
-    desired[rel] = desiredRecord(sourceRegular(path.join(opts.sourceTree, rel), 'agent authority'), 0o644);
-  }
+  // Kaola-Workflow ships no Cursor agents (#1101). A receipt that still records agents/*.md from an
+  // earlier release loses them through removeRetiredManaged(): an unchanged receipt-owned file is
+  // removed, and a modified one is left in place.
   for (const file of sync.listCanonCommands(opts.forge)) {
     const rel = 'commands/' + file;
     desired[rel] = desiredRecord(sourceRegular(path.join(opts.sourceTree, rel), 'command authority'), 0o644);
@@ -542,8 +541,7 @@ function projectDesiredFromAuthority(authorityReceipt, noScripts) {
   const desired = {};
   for (const [rel, record] of Object.entries(authorityReceipt.files)) {
     let projectRel = null;
-    if (rel.startsWith('agents/')) projectRel = rel;
-    else if (rel.startsWith('commands/')) projectRel = rel;
+    if (rel.startsWith('commands/')) projectRel = rel;
     else if (rel.startsWith('rules/')) projectRel = rel;
     else if (!noScripts && rel.startsWith('kaola-workflow/hooks/')) projectRel = 'hooks/' + path.posix.basename(rel);
     if (!projectRel) continue;
@@ -553,8 +551,8 @@ function projectDesiredFromAuthority(authorityReceipt, noScripts) {
     }
     desired[projectRel] = desiredRecord(state.bytes, record.mode);
   }
-  if (!Object.prototype.hasOwnProperty.call(desired, 'agents/implementer.md')) {
-    fail('installed global authority has no managed implementer profile');
+  if (!Object.keys(desired).some(rel => rel.startsWith('commands/'))) {
+    fail('installed global authority has no managed command');
   }
   return desired;
 }
@@ -765,15 +763,14 @@ function report(opts) {
     global_root: authority.result.root,
     global_discovery: selected ? selected.global_discovery : 'unknown',
     required_project_materialization: selected ? selected.required_project_materialization : 'unknown',
-    named_catalog: 'unknown', reload: selected ? selected.reload : 'unknown',
+    reload: selected ? selected.reload : 'unknown',
     restart_boundary: selected ? selected.reload : 'unknown', effective_profile_scope: effectiveScope,
     freshness: project ? project.freshness : authority.result.freshness,
     collisions: project ? project.collisions : [], authority: authority.result,
     materialization_receipt: project, evidence_stamp: selected && selected.stamp ? selected.stamp : null,
     capability_gap: null,
-    dispatch_contract: adapter.capabilities.dispatch_conformance,
     surfaces, selected_host: selected,
-    note: 'Product and host are explicit inputs. Current runtime_build and named_catalog stay unknown without live observation; selected_host and evidence_stamp are historical adapter evidence. Sibling surfaces are never inferred.',
+    note: 'Product and host are explicit inputs. Current runtime_build stays unknown without live observation; selected_host and evidence_stamp are historical adapter evidence. Sibling surfaces are never inferred.',
   };
 }
 

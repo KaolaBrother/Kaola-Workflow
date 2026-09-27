@@ -30,7 +30,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const agentProfiles = require('../../scripts/generate-agent-profiles.js');
+const adapterFacts = require('../../scripts/runtime-adapter-facts.js');
 const GLOBAL_WORKFLOW_CONTRACT_SOURCE = path.join(
   __dirname, '..', 'global', 'kaola-workflow-global.md');
 
@@ -48,11 +48,11 @@ const SLOTS = {
 };
 
 SLOTS['runtime-delegation'] = {
-  command: agentProfiles.renderRuntimeDelegationGuidanceForRuntime('claude'),
+  command: adapterFacts.renderRuntimeDelegationGuidanceForRuntime('claude'),
   skill: {
-    github: agentProfiles.renderRuntimeDelegationGuidanceForRuntime('codex', 'github'),
-    gitlab: agentProfiles.renderRuntimeDelegationGuidanceForRuntime('codex', 'gitlab'),
-    gitea: agentProfiles.renderRuntimeDelegationGuidanceForRuntime('codex', 'gitea'),
+    github: adapterFacts.renderRuntimeDelegationGuidanceForRuntime('codex', 'github'),
+    gitlab: adapterFacts.renderRuntimeDelegationGuidanceForRuntime('codex', 'gitlab'),
+    gitea: adapterFacts.renderRuntimeDelegationGuidanceForRuntime('codex', 'gitea'),
   },
 };
 

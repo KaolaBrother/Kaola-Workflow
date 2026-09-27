@@ -21,9 +21,16 @@ only when every mission is done.
 
 **Runtime dispatch contract (always loaded).**
 
+Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.
+Subagent capability belongs to the running Agent Harness: dispatch through its native tool and
+schema, choose from the type catalog it actually exposes, and let its own defaults, limits, and
+permissions — and the user's explicit instructions — decide model, effort, tools, nesting,
+concurrency, isolation, and resume. Where the native schema requires a type, pass one the host
+reports, under its real meaning.
+Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.
+
 Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's
-choice never establishes a run-wide default. The absence of an exact named role is not proof that
-all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+choice never establishes a run-wide default. Keep one owner for the current cohesive production
 surface when handoff and integration cost exceed the benefit, but that scope does not absorb
 independent research, test authorship, documentation, or review items. Dispatch when it materially
 reduces main-context residue, lets a clean context check what your own cannot, or enables genuinely
@@ -31,22 +38,13 @@ independent parallel work. Both modes are first-class; width follows the true wo
 dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the
 judgment.
 
-A subagent is an executor in a clean context, not a judge; where Kaola installs profiles it runs the
-subagent default binding. Its handback is evidence. You hold the verdict, and you reach it by reading
-the candidate — the diff, the findings, the command output — never the `result` prose alone. Ask for
-small, structured handbacks rather than fanning out and reading everything. Fan out where breadth
-pays and every handback stays small: exploring, measuring, refuting one stated claim, reviewing the
-same frozen diff along different cuts (correctness, test custody, trust boundary), or producing
-candidates you then choose between. When the cheaper child keeps failing an item, take it over and
-finish it inline.
-
-Use named, built-in, and generic routes only under their real identities. The subagent default
-binding guides selection but never disables a task-sensitive override the host actually exposes. If
-an exact role is absent, inspect adequate native routes; use one only when it satisfies custody,
-evidence, and stop boundaries. Otherwise work inline, record the specific `capability_gap`, and
-re-evaluate the next item. Never let a generic route claim a named role's identity. On a runtime
-that installs no Kaola role profiles, the absence of a named role is design, not a capability gap;
-choose a native route or work inline per item.
+A subagent is an executor in a clean context, not a judge. Its handback is evidence. You hold the
+verdict, and you reach it by reading the candidate — the diff, the findings, the command output —
+never the `result` prose alone. Ask for small, structured handbacks rather than fanning out and
+reading everything. Fan out where breadth pays and every handback stays small: exploring,
+measuring, refuting one stated claim, reviewing the same frozen diff along different cuts
+(correctness, test custody, trust boundary), or producing candidates you then choose between. When
+a child keeps failing an item, take it over and finish it inline.
 
 Send a bounded, self-sufficient brief naming the outcome, evidence, worktree or commit, custody, and
 stop condition.
@@ -54,17 +52,10 @@ stop condition.
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime adapter facts
 
-Host: Claude. If the running host is not Claude, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
+Host: Claude. If the running host is not Claude, ignore this adapter section and follow the running host's own native subagent schema and catalog.
 
-Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.
-Dispatch with `Agent` and `subagent_type: "<role>"`; installed Kaola profiles pin `model: sonnet`, so omit the per-call model unless the item needs a stronger child.
-
-**Subagent default:** every installed Kaola profile pins `model: sonnet`; effort is not pinned and follows the runtime default; omit the per-call model unless the item needs a stronger child.
-**Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
-
-The named profile's native `tools` allowlist carries the role tool boundary.
-Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.
-Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name.
+Dispatch with the native `Agent` tool; `subagent_type` names a type from the current catalog — built-in `general-purpose`, read-only `Explore` and `Plan`, catch-all `claude`, and any agent the user, project, or another plugin defines. Background or isolated children and optional agent teams remain Claude-owned options.
+Inspect the current Agent type catalog and its effective precedence; Claude Code owns child model and effort defaults and permits recursive subagents to its native depth limit, which the host can configure.
 <!-- KW-RUNTIME-DELEGATION-END -->
 
 <!-- KW-RUNTIME-DISPATCH-END -->
@@ -185,10 +176,11 @@ reading of acceptance meaning, the final verdict on a candidate it has read, and
 Custody answers who may decide meaning. Failure frontier, then freeze: focused acceptance, affected
 inventory, causal repair, exact-candidate review; any mutation invalidates prior PASS evidence for
 changed bytes.
-When a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or
-reinterpret them to pass; when you wrote the tests yourself, you hold that meaning. Writing the
-tests, implementing, and reviewing yourself are all legitimate paths; an independent review is an
-optional clean-context check on a frozen candidate whose findings come back to you for the verdict.
+When someone other than the implementing context holds the acceptance tests, the implementation
+does not delete, weaken, or reinterpret them to pass; when you wrote the tests yourself, you hold
+that meaning. Writing the tests, implementing, and reviewing yourself are all legitimate paths; an
+independent review is an optional clean-context check on a frozen candidate whose findings come
+back to you for the verdict.
 Decide how much to explain by what communication needs, and how much to verify by behavioral impact
 and the existing requirements; a short explanation or a small change never lowers acceptance, and
 sufficient existing evidence may be cited rather than reproduced.

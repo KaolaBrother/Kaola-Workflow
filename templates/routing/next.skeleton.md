@@ -134,10 +134,11 @@ reading of acceptance meaning, the final verdict on a candidate it has read, and
 Custody answers who may decide meaning. Failure frontier, then freeze: focused acceptance, affected
 inventory, causal repair, exact-candidate review; any mutation invalidates prior PASS evidence for
 changed bytes.
-When a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or
-reinterpret them to pass; when you wrote the tests yourself, you hold that meaning. Writing the
-tests, implementing, and reviewing yourself are all legitimate paths; an independent review is an
-optional clean-context check on a frozen candidate whose findings come back to you for the verdict.
+When someone other than the implementing context holds the acceptance tests, the implementation
+does not delete, weaken, or reinterpret them to pass; when you wrote the tests yourself, you hold
+that meaning. Writing the tests, implementing, and reviewing yourself are all legitimate paths; an
+independent review is an optional clean-context check on a frozen candidate whose findings come
+back to you for the verdict.
 Decide how much to explain by what communication needs, and how much to verify by behavioral impact
 and the existing requirements; a short explanation or a small change never lowers acceptance, and
 sufficient existing evidence may be cited rather than reproduced.

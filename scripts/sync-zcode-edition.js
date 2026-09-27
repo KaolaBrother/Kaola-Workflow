@@ -32,7 +32,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const agentGen = require('./generate-agent-profiles');
+const adapterFacts = require('./runtime-adapter-facts');
 const forgeLayout = require('./runtime-edition-forge');
 const routing = require('./generate-routing-surfaces.js');
 
@@ -45,7 +45,6 @@ const TREE_ROOT = (() => {
 })();
 
 const DEFAULT_FORGE = 'github';
-const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 
 function treeLabel(forge) {
@@ -90,29 +89,15 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + zcodeKaolaScript(forge));
 }
 
-// ZCode installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
-// native-route instruction, naming no Kaola role as dispatchable.
-function zcodeNativeDispatchProse(card) {
-  if (card.includes('doc-updater')) {
-    return 'Use a native route or work inline for documentation work — full `general-purpose` or '
-      + 'read-only `Explore` as the item\'s boundary requires. Put the changed files, checklist, '
-      + 'working directory, and custody boundary in the brief.\n';
-  }
-  return 'Use a native route or work inline for this routed fix — full `general-purpose` or '
-    + 'read-only `Explore` as the item\'s boundary requires. Put the failure command, evidence '
-    + 'path, working directory, and custody boundary in the brief.\n';
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
   // zcode is an always-loaded-carrier runtime (#1079): the ~/.zcode/AGENTS.md managed
   // region survives compaction, so the generated skill carries only the pointer to it.
-  text = agentGen.deferRuntimeDispatchBlock(text);
-  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
-    text = agentGen.replaceRuntimeDelegationGuidance(text, 'zcode', forge);
+  text = adapterFacts.deferRuntimeDispatchBlock(text);
+  if (text.includes(adapterFacts.DELEGATION_GUIDANCE_START)) {
+    text = adapterFacts.replaceRuntimeDelegationGuidance(text, 'zcode', forge);
   }
-  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, zcodeNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime zcode');
   // ZCode invokes skills, not commands: the two asymmetric command routes rename to
@@ -863,7 +848,7 @@ module.exports = {
   expectedHookFiles, expectedSkillDirs, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles, retiredSkillDirs,
   parseFrontmatter, yamlScalar,
   listCanonCommands,
-  CANON_AGENTS_DIR, CANON_HOOKS_DIR,
+  CANON_HOOKS_DIR,
   REPO,
   HOOK_SHELLS,
 };

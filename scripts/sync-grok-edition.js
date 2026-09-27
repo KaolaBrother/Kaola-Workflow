@@ -6,15 +6,10 @@
 //
 // Grok CLI is a coding-agent RUNTIME (like Codex/opencode/Kimi), not a git forge,
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
-// Grok-native way: named agents under `.grok/agents/<role>.md` (spawn_subagent
-// types), flat slash commands under `.grok/commands/<name>.md`, with no duplicate Rule or hook.
-// The global-contract transaction owns the complete compact-safe Rule. Deterministic,
+// Grok-native way: flat slash commands under `.grok/commands/<name>.md`, with no duplicate Rule
+// or hook. Kaola-Workflow ships no Grok agents (#1101): subagents are Grok's own `spawn_subagent`
+// types. The global-contract transaction owns the complete compact-safe Rule. Deterministic,
 // idempotent, and parity-checked by test-grok-edition.js.
-//
-// Every generated agent carries the adapter's single subagent binding:
-// `model: grok-4.7` with `effort: medium`. The spawn tool accepts an optional `model` and no
-// per-call effort; generated command surfaces omit the model override because the profile pins
-// both.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.grok/`;
 // a forge writes `.grok-<forge>/`. Command sources come from the routing-surface
@@ -22,13 +17,13 @@
 // `edition-sync.js`, `install.sh`, and the routing-surface --check contract.
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/agents + commands and prune retired duplicate Rules.
+//   --write   regenerate <tree>/commands and prune retired agents and duplicate Rules.
 //   --check   assert the generated tree is in byte-parity with a fresh render.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
-const agentGen = require('./generate-agent-profiles');
+const adapterFacts = require('./runtime-adapter-facts');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -40,20 +35,18 @@ const TREE_ROOT = (() => {
 })();
 
 const DEFAULT_FORGE = 'github';
-const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 
 function treeLabel(forge) {
   return '.grok' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-const MANAGED_ROLES = new Set(agentGen.ROLES);
 
 // No runtime-neutral hook scripts are active in the Grok edition. The generator retains ownership
 // of the hooks directory so --write can prune stale dispatch artifacts.
 const HOOK_SCRIPTS = [];
 
-const { parseFrontmatter, parseTools, yamlScalar, listCanonAgents } = forgeLayout;
+const { parseFrontmatter, parseTools, yamlScalar } = forgeLayout;
 
 function listCanonCommands(forge) {
   return forgeLayout.listCanonCommands(forge || DEFAULT_FORGE);
@@ -62,24 +55,6 @@ function listCanonCommands(forge) {
 function canonCommandPath(basename, forge) {
   return forgeLayout.canonCommandPath(basename, forge || DEFAULT_FORGE);
 }
-
-function renderAgent(canonContent, agentName, forge) {
-  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-grok-edition: unknown role ' + agentName);
-  return agentGen.renderRuntimeRole('grok', agentName).content;
-}
-
-const GROK_MODEL_DISPATCH_GUIDANCE =
-  'Omit per-call model and effort overrides; the named profile pins grok-4.7 at medium.';
-
-const GROK_MODEL_DISPATCH_BLOCK = [
-  '## The named profile pins model and effort',
-  '',
-  'Every generated agent pins `model: grok-4.7` with `effort: medium`. Omit `model` on',
-  '`spawn_subagent`; choose the named role and its pinned binding.',
-  '',
-  'Dispatch a role with `spawn_subagent` using `subagent_type: "<role>"`.',
-  '',
-].join('\n');
 
 const GROK_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${GROK_HOME:-$HOME/.grok}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
@@ -97,9 +72,7 @@ function rewriteClaudeScriptPaths(text, forge) {
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  text = agentGen.deferRuntimeDispatchBlock(text);
-  text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
-  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
+  text = adapterFacts.deferRuntimeDispatchBlock(text);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');
   text = rewriteClaudeScriptPaths(text, forge);
@@ -155,16 +128,10 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function agentRel(name, forge) {
-  return treeLabel(forge) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return forgeLayout.commandRel(treeLabel, name, forge);
 }
 
-function expectedAgentFiles(forge) {
-  return listCanonAgents();
-}
 function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
@@ -175,12 +142,13 @@ function expectedRuleFiles() {
   return [];
 }
 
+// The generated tree's agents/ directory held the retired Kaola role profiles; the tree is
+// generator-owned, so every Markdown file left there is a retired render to prune.
 function retiredAgentFiles(forge) {
   const dir = treePath(path.join(treeLabel(forge), 'agents'));
   if (!fs.existsSync(dir)) return [];
-  const expected = new Set(expectedAgentFiles(forge).map(n => n + '.md'));
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.md') && !expected.has(e.name))
+    .filter(e => e.isFile() && e.name.endsWith('.md'))
     .map(e => e.name)
     .sort();
 }
@@ -220,9 +188,10 @@ function pruneTree(forge) {
   let removed = 0;
   for (const f of retiredAgentFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'agents', f)), { force: true });
-    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired surface)');
+    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired role profile)');
     removed++;
   }
+  try { fs.rmdirSync(treePath(path.join(treeLabel(forge), 'agents'))); } catch (_) {}
   for (const f of retiredCommandFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'commands', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/commands/' + f + ' (retired surface)');
@@ -239,23 +208,6 @@ function pruneTree(forge) {
     removed++;
   }
   return removed;
-}
-
-function writeAgents(forge) {
-  let wrote = 0;
-  for (const name of listCanonAgents()) {
-    const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name, forge);
-    const rel = agentRel(name, forge);
-    const dest = treePath(rel);
-    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
-      ensureDir(path.dirname(dest));
-      fs.writeFileSync(dest, out);
-      console.log('generated  ' + rel);
-      wrote++;
-    }
-  }
-  return wrote;
 }
 
 function writeCommands(forge) {
@@ -295,11 +247,10 @@ function writeRuntimeCarrier(forge) {
 
 function runWrite(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const a = writeAgents(forge);
   const c = writeCommands(forge);
   const h = writeRuntimeCarrier(forge);
   const p = pruneTree(forge);
-  const total = a + c + h + p;
+  const total = c + h + p;
   console.log('sync-grok-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -309,7 +260,6 @@ function runRefreshPresent() {
   let changed = 0;
   for (const forge of forgeLayout.FORGES) {
     if (!fs.existsSync(treePath(treeLabel(forge)))) continue;
-    changed += writeAgents(forge);
     changed += writeCommands(forge);
     changed += writeRuntimeCarrier(forge);
     changed += pruneTree(forge);
@@ -333,15 +283,6 @@ function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
   const mismatches = [];
-  for (const name of listCanonAgents()) {
-    const canon = read('agents/' + name + '.md');
-    const rel = agentRel(name, forge);
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated agent' });
-      continue;
-    }
-    if (readTree(rel) !== renderAgent(canon, name, forge)) mismatches.push({ rel, reason: 'stale — regenerate' });
-  }
   for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
@@ -363,7 +304,7 @@ function runCheck(forge) {
     }
   }
   for (const f of retiredAgentFiles(forge)) {
-    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired role profile — prune (--write removes it)' });
   }
   for (const f of retiredCommandFiles(forge)) {
     mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
@@ -381,9 +322,8 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
-  console.log('sync-grok-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + '
+  console.log('sync-grok-edition[' + forge + ']: ' + nc + ' command(s) + '
     + expectedHookFiles().length + ' hook file(s) + ' + expectedRuleFiles().length
     + ' rule file(s) in parity with canonical.');
 }
@@ -394,7 +334,7 @@ function usage() {
     + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .grok/;\n'
     + '               gitlab/gitea write .grok-<forge>/\n'
-    + '  --write   regenerate the forge tree agents + commands + native Rule from canonical\n'
+    + '  --write   regenerate the forge tree commands from canonical and prune retired agents\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
@@ -423,17 +363,16 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, transformCommandBody,
+  renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, GROK_KAOLA_SCRIPT, grokKaolaScript,
-  GROK_MODEL_DISPATCH_GUIDANCE, GROK_MODEL_DISPATCH_BLOCK,
-  treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
+  treeLabel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForGrok, HOOK_ADAPTATIONS,
   expectedHookFiles, expectedRuleFiles, retiredHookFiles, retiredRuleFiles,
   retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, parseTools, yamlScalar,
-  listCanonAgents, listCanonCommands,
-  CANON_AGENTS_DIR, CANON_HOOKS_DIR,
+  listCanonCommands,
+  CANON_HOOKS_DIR,
   REPO,
   HOOK_SCRIPTS,
 };

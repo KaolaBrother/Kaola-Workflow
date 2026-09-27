@@ -47,20 +47,11 @@ Pass the verdict you observed. The recorder writes `.cache/final-validation.md` 
 `verdict:`, the exact command, and `validated_candidate_hash`; the finalize gate accepts only
 `verdict: pass`. Run it from the candidate worktree the finalize transaction reads.
 
-On failure, repair a trivial correction inline, or dispatch a suggested route: `tdd-guide` or
-yourself for acceptance meaning; `implementer` or yourself for a build, type, lint, or tooling
-failure; after your own verdict on a review finding, `implementer` or yourself for the fix.
+On failure, repair a trivial correction inline, or dispatch the repair through the host's native
+route with a brief naming the exact failure, evidence path, working directory, custody, and stop
+boundary. A repair may change acceptance meaning only where you hold that meaning; a fix that
+follows a review finding waits for your own verdict on the finding.
 
-<!-- REGION:command — additive runtimes render this through their native dispatch carrier -->
-```text
-Agent(
-  subagent_type="implementer",
-  description="Routed fix: {the failing command}",
-  prompt="the exact failure, evidence path, working directory, custody, and stop boundary"
-)
-```
-
-<!-- /REGION -->
 The runner **measures** the receipt and **reports** what it found; you own the verdict. The finalize
 transaction writes its typed validation finding under `## Validation` in `finalization-summary.md`;
 leave that heading's body empty. Preserve `chain-receipt.json` and `final-validation.md`. Fix
@@ -75,8 +66,8 @@ answers, but there is no mechanical match; a part you cannot satisfy is a blocke
 
 Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
 architecture, environment, validation, README, API docs, architecture docs, changelog, and
-examples. Dispatch `doc-updater` when useful; it must transcribe real signatures, JSON/help/schema
-or return BLOCK, never invent fields. Write one docking evidence file, `.cache/doc-docking.md`,
+examples. Documentation work, inline or dispatched, transcribes real signatures, JSON/help/schema
+or returns BLOCK, never invents fields. Write one docking evidence file, `.cache/doc-docking.md`,
 with checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
 
 The finalize transaction measures `validation` and `changed_paths` (every path the branch changed
