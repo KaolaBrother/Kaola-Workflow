@@ -1726,4 +1726,102 @@ try {
   }
 }
 
+// Custody restored in #1101's review round (N6): behaviour that still ships and had lost its tests.
+// Installs no longer create profiles, so the scopes below start from the frozen pre-#1101 install
+// (scripts/fixtures/issue-1101/v12.2.6-46fbe12d), i.e. real retired-role residue.
+{
+  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
+  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+  const frozenCodex = path.join(root, 'scripts', 'fixtures', 'issue-1101', 'v12.2.6-46fbe12d', 'home', 'dot-codex');
+  const plantFrozenCodex = dest => {
+    const walk = (src, dst) => {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        const name = entry.name.startsWith('dot-') ? '.' + entry.name.slice(4) : entry.name;
+        if (entry.isDirectory()) walk(path.join(src, entry.name), path.join(dst, name));
+        else fs.copyFileSync(path.join(src, entry.name), path.join(dst, name));
+      }
+    };
+    walk(frozenCodex, dest);
+  };
+
+  // A redirected Codex scope authority is refused before anything is read through it: normal
+  // preflight with a typed status and no stack, and the doctor naming the unsafe scope.
+  const cases = [
+    ['Codex scope directory symlink', '.codex', 'config_layer_unsafe'],
+    ['agents parent directory symlink', path.join('.codex', 'agents'), 'scope_authority_unsafe'],
+    ['managed agent directory symlink', path.join('.codex', 'agents', 'kaola-workflow'), 'scope_authority_unsafe'],
+  ];
+  for (const [label, rel, expectedStatus] of cases) {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-project-'));
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-home-'));
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-outside-'));
+    try {
+      plantFrozenCodex(path.join(homeRoot, '.codex'));
+      const source = path.join(homeRoot, rel);
+      const target = path.join(outsideRoot, 'redirected');
+      fs.renameSync(source, target);
+      fs.symlinkSync(target, source);
+      // spawn-class: environment
+      const normal = spawnSync(process.execPath,
+        [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
+        { cwd: pluginRoot, encoding: 'utf8', env: { ...process.env, HOME: homeRoot } });
+      assert.notStrictEqual(normal.status, 0, label + ': normal preflight must reject redirected authority');
+      assert.strictEqual(JSON.parse(normal.stdout).status, expectedStatus, label + ': normal typed authority refusal');
+      assert(!/\n\s+at /.test(normal.stderr), label + ': normal refusal has no Node stack');
+      // spawn-class: environment
+      const doctor = spawnSync(process.execPath,
+        [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
+        { cwd: pluginRoot, encoding: 'utf8', env: { ...process.env, HOME: homeRoot } });
+      assert.notStrictEqual(doctor.status, 0, label + ': doctor must reject the same redirected authority');
+      const doctorJson = JSON.parse(doctor.stdout);
+      assert.strictEqual(doctorJson.status, 'stale', label + ': doctor typed stale result');
+      assert((doctorJson.scopes || []).some(scope =>
+        scope.config_layer_unsafe === true || scope.scope_authority_unsafe === true),
+      label + ': doctor identifies the unsafe authority scope');
+      assert(!/\n\s+at /.test(doctor.stderr), label + ': doctor refusal has no Node stack');
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  }
+
+  // An explicit --home is the complete global authority for both inspection and autofix: the
+  // child installer retires the residue beneath the selected home and never falls back to the
+  // preflight process HOME.
+  {
+    const selectedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-'));
+    const inheritedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-inherited-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-project-'));
+    const originalHome = process.env.HOME;
+    try {
+      plantFrozenCodex(path.join(selectedHome, '.codex'));
+      const selectedProfile = path.join(selectedHome, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
+      assert(fs.existsSync(selectedProfile), 'selected-home fixture carries retired-role residue');
+      process.env.HOME = inheritedHome;
+      const result = codexPreflight.runPreflight({
+        projectRoot,
+        home: selectedHome,
+        scriptDir: path.join(pluginRoot, 'scripts'),
+        noAutofix: false,
+      });
+      assert.strictEqual(result.exitCode, 0,
+        'global autofix honors the explicitly selected home: ' + JSON.stringify(result.result));
+      assert.strictEqual(result.result.autofixed, true,
+        'selected-home repair reports autofixed after persisted re-verification');
+      assert(!fs.existsSync(selectedProfile),
+        'global autofix retires the residue beneath the selected home');
+      assert(!fs.existsSync(path.join(inheritedHome, '.codex')),
+        'global autofix must not create or mutate the inherited process home');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(selectedHome, { recursive: true, force: true });
+      fs.rmSync(inheritedHome, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  }
+}
+
 console.log('Install model rendering tests passed');
