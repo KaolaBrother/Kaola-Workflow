@@ -25,22 +25,25 @@
 
 ### Fixed
 
-- **The stale-worktree sweep's resumability pin resolves the project that OWNS the worktree instead
+- **The stale-worktree sweep's resumability pin resolves the run that OWNS a lane worktree instead
   of deriving `issue-<N>` (#1102).** #1100's pin composed its receipt path from the issue number the
   BRANCH spells, so it could only ever find a run whose folder is named `issue-<N>`. A bundle or
   custom-named run (`bundle-<set>`, `branch-issue-merge-sink`, …) files its receipt under a folder of
   another name, so both reads missed and the pin was silently inert for exactly the runs the sweep
-  could then treat as stale. The lane arm now resolves the owning run from the MAIN checkout's live
-  and archive `workflow-state.md` records whose `branch` is the worktree's branch, and reads the
-  receipt from that one folder — never from every folder sharing the resolved name, so an old run's
-  leftover receipt cannot pin a new run. Which record is current follows the sink's own
-  `currentArchiveDir` rule rather than a second policy: a live record's `claim_ts` names the current
-  claim and only a folder carrying it counts; with no live record the match must name exactly one
-  project, and timestamps do not authorize choosing the later of two claimed histories. When no
-  record names the worktree the derived `issue-<N>` behavior is kept verbatim, so the #1100 pin is
-  unchanged for ordinary runs. The integration arm already holds the true project as its directory
-  name and passes it straight through. All-done and missing-receipt behavior is unchanged, and all
-  four claim copies (root, Codex, GitLab, Gitea) carry the same change.
+  could then treat as stale. The lane arm now looks for the MAIN checkout's live and archive
+  `workflow-state.md` records (suffixed `.archived-<ts>` archives included) whose `branch` is the
+  worktree's branch, and has three outcomes. **One owning folder:** a single live record is the
+  current run, and only folders carrying its `claim_ts` belong to it (if several do, the one whose
+  receipt names its own project); with no live record, the record with the strictly newest
+  `claim_ts` is the current run, the sink's own `readCurrentClaimTs` rule. The receipt is read from
+  that one folder only, so an old run's leftover receipt cannot pin a newer run. **Ambiguous** (two
+  live records on the branch, a `claim_ts` tie, or an unstamped record among several): the worktree
+  is left unpinned. **No record names the branch:** the base's derived read is unchanged — live
+  `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/`. This is not
+  the sink's `currentArchiveDir`: a folder without a readable `workflow-state.md` is skipped rather
+  than failing closed, and the tie-break checks only `receipt.project`. The integration arm is
+  unchanged (its directory name is already the project). All-done and missing-receipt behavior is
+  unchanged, and all four claim copies (root, Codex, GitLab, Gitea) carry the same change.
 
 ### Changed
 
