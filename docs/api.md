@@ -1420,6 +1420,16 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   `PR URL:` lines. GitLab and Gitea additionally return `already_merged: true` from
   `ensureMergeRequest` / `ensurePullRequest` on the merged lane. The lane line is additive; existing
   consumers match by `includes`, so the extra line breaks nothing.
+- **Auto-merge disclosure and the merge queue (#1099)**: when `pr_auto_merge` is true the GitHub sink
+  writes one `pr_auto_merge: merge_queue | direct | failed` line **before** the final `sink_pr:` line,
+  which stays last and unchanged; when auto-merge is not requested no such line is written at all.
+  `merge_queue` means the base branch requires a merge queue (probed once via `gh api graphql` on
+  `PullRequest.isMergeQueueEnabled`) and the PR was queued with `gh pr merge <url> --auto`; `direct`
+  means the original `--auto --squash --delete-branch` argv ran — used both when the probe answered
+  false and when the probe itself failed or could not be parsed; `failed` means the merge call threw
+  (still warning-only on stderr, still exit 0). Before #1099 the direct argv ran unconditionally, and
+  on a queue-required branch gh ≥2.64.0 rejects `--delete-branch` outright, so the sink warned and
+  exited 0 while the PR stayed open and never entered the queue.
 - **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
   the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
@@ -2033,7 +2043,16 @@ User-owned: no installer creates or edits this file. A key left behind by an old
 retired `parallel_mode`) is ignored, never rewritten.
 
 - `pr_auto_merge` — auto-merge after PR creation (GitHub + Gitea; squash merge with source branch
-  deletion; non-fatal if the merge fails).
+  deletion; non-fatal if the merge fails). On GitHub, a base branch that **requires a merge queue**
+  is honored: the sink probes `PullRequest.isMergeQueueEnabled` once and, when the branch requires a
+  queue, adds the PR to it with `gh pr merge <url> --auto` — no merge method (the queue
+  configuration decides it) and no `--delete-branch` (gh ≥2.64.0 rejects it there, because deleting
+  the branch would close the queued PR; head-branch deletion follows the repository's
+  "automatically delete head branches" setting). A `false` or unreadable probe keeps the original
+  `--auto --squash --delete-branch` call verbatim. No new config key: queueing is a property of the
+  branch rule, not a separate opt-in. GitLab and Gitea are unchanged (`mr_auto_merge` routes through
+  GitLab's own auto-merge, which is the merge-train entry point on tiers that have it; Gitea has no
+  native merge queue).
 - `mr_auto_merge` — the GitLab equivalent (`glab mr merge --auto-merge`).
 
 ### Project-local config

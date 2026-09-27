@@ -32,7 +32,11 @@ claimed issue once the change merges: the merge sink closes the set itself, and 
 `Closes #n` line per claimed issue. The PR/MR route is a request sink, not a merge: it publishes the
 request (reusing an open one on the same head and base rather than opening a second) and carries the
 run's archive with it, and once that request merges `watch-pr`/`watch-mr` reconcile the archived run
-— reporting publication and closeout separately, never re-merging or pushing the mainline. The merge
+— reporting publication and closeout separately, never re-merging or pushing the mainline. On GitHub,
+when auto-merge is opted in, the PR sink honors a base branch that requires a merge queue: it probes
+once and, on a queue branch, hands the PR to the queue with `gh pr merge <url> --auto` (the queue
+picks the merge method, and the branch is not deleted) instead of the direct squash call, which the
+forge rejects there; every other branch, forge, and config keeps the previous behavior. The merge
 sink also reports what it found: every envelope names
 whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private
 integration worktree rather than the shared checkout, so it never switches or rebases your working

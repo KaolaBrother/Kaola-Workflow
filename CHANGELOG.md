@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The GitHub request sink honors a base branch that requires a merge queue (#1099).** When
+  `pr_auto_merge` is true the sink now probes `PullRequest.isMergeQueueEnabled` **once** per run via
+  `gh api graphql`, and only then merges: on a queue-required branch it calls
+  `gh pr merge <url> --auto` (no merge method — the queue configuration decides it — and no
+  `-d/--delete-branch`), while a `false` or unreadable probe runs the original
+  `--auto --squash --delete-branch` argv verbatim. One additive
+  `pr_auto_merge: merge_queue | direct | failed` line is written before the final, unchanged
+  `sink_pr:` line, and only when auto-merge was attempted. No new config key. GitLab and Gitea are
+  unchanged. **Correction to the D-mq1 finding recorded in #1098 §4:** the pre-#1099 call did not
+  merely warn on a queue-required branch — gh ≥2.64.0 refuses `--delete-branch` there outright
+  (deleting the branch would close the queued PR), so the sink's warning-only, exit-0 handling left
+  the PR open and never queued. A queue branch also ignores `--squash`; `--auto` is what the sink
+  passes, though gh sets auto-merge unconditionally on the queue path.
+
 ### Removed
 
 - **Kaola-Workflow defines no subagent roles on any runtime (#1101, ADR 0029).** The seven Kaola
