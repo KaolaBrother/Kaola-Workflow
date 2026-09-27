@@ -13,6 +13,11 @@
 //   update-ref otherwise), then pushed — never the default branch, never a force. The main
 //   checkout's index and HEAD are never touched. The final stdout line is machine-readable:
 //   `sink_pr: created | reused | already_merged`. Keep-open stays merge-sink-only (#336, D4=(a)).
+//   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
+//   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
+//   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
+//   original `--auto --squash --delete-branch` call (a false or unreadable probe), `failed` when
+//   the call itself failed (still warning-only, still exit 0).
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -468,12 +473,52 @@ function main() {
 
   // Step 9 — optional auto-merge. Only an OPEN PR ever reaches here: a merged or closed PR was
   // routed above (#1098 §2.1-5).
+  //
+  // #1099 — the optional forge-native merge queue. A base branch may REQUIRE a GitHub merge queue
+  // (branch protection / ruleset). On such a branch the pre-#1099 call
+  // `gh pr merge <url> --auto --squash --delete-branch` ALWAYS fails: gh >=2.64.0 rejects
+  // `-d/--delete-branch` outright on a queue branch ("Cannot use `-d` or `--delete-branch` when
+  // merge queue enabled") because deleting the branch closes the queued PR. The sink only warned
+  // and exited 0, so the PR silently stayed open and never entered the queue — the D-mq1
+  // correction. The queue also owns the merge method, so no `--squash` may be passed there.
+  //
+  // So: probe ONCE, and only when auto-merge is requested, for `PullRequest.isMergeQueueEnabled`
+  // (GraphQL; `gh pr view --json` exposes no such field). Probe true → `gh pr merge <url> --auto`
+  // (the queue decides the method; deletion is left to the repository's "automatically delete head
+  // branches" setting). Probe false OR probe failure/unparseable → the ORIGINAL argv, verbatim, so
+  // a forge we cannot probe behaves exactly as before. The probe never throws: any gh error, JSON
+  // error, or unexpected envelope is a `false`.
   if (config.pr_auto_merge === true) {
+    let queueEnabled = false;
     try {
-      ghExec(['pr', 'merge', prUrl, '--auto', '--squash', '--delete-branch']);
+      const probe = JSON.parse(ghExec([
+        'api', 'graphql',
+        '-f', 'query=query($u:URI!){resource(url:$u){...on PullRequest{isMergeQueueEnabled}}}',
+        '-F', 'u=' + prUrl,
+      ]));
+      queueEnabled = !!(probe && probe.data && probe.data.resource &&
+        probe.data.resource.isMergeQueueEnabled === true);
+    } catch (_) {
+      queueEnabled = false; // probe failure/unparseable → the pre-#1099 behavior, unchanged.
+    }
+    // The lane is emitted BEFORE the final `sink_pr:` line, which stays last and unchanged; it is
+    // written only when auto-merge was actually attempted.
+    let lane;
+    try {
+      if (queueEnabled) {
+        ghExec(['pr', 'merge', prUrl, '--auto']);
+        lane = 'merge_queue';
+      } else {
+        ghExec(['pr', 'merge', prUrl, '--auto', '--squash', '--delete-branch']);
+        lane = 'direct';
+      }
     } catch (mergeErr) {
+      // Warning-only, exactly as today: a failed auto-merge never fails the sink (#1098 T3 relies
+      // on a run that merged this way reconciling to `already_merged`).
+      lane = 'failed';
       process.stderr.write('Warning: pr auto-merge failed: ' + mergeErr.message + '\n');
     }
+    process.stdout.write('pr_auto_merge: ' + lane + '\n');
   }
 
   // #1098 §2.1-6: the machine-readable result line — additive; this sink had no stdout contract.

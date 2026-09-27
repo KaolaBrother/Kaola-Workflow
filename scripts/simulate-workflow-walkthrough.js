@@ -8042,7 +8042,15 @@ function writeSinkPrStubGh(binDir, opts) {
     "if (argv[0] === 'pr' && argv[1] === 'list') { process.stdout.write(" + JSON.stringify(String(o.list == null ? '[]' : o.list)) + " + '\\n'); process.exit(0); }",
     "if (argv[0] === 'pr' && argv[1] === 'view') { process.stdout.write(" + JSON.stringify(String(o.view == null ? '' : o.view)) + " + '\\n'); process.exit(0); }",
     "if (argv[0] === 'pr' && argv[1] === 'create') { process.stdout.write(" + JSON.stringify(String(o.create == null ? 'https://github.com/test/repo/pull/41' : o.create)) + " + '\\n'); process.exit(0); }",
-    "if (argv[0] === 'pr' && argv[1] === 'merge') { process.exit(0); }",
+    // #1099: the merge-queue probe rides `gh api graphql`; `mergeQueueProbe` selects the answer.
+    //   absent            → the probe fails (non-zero exit), the fall-back lane.
+    //   true / false      → the GraphQL envelope carries isMergeQueueEnabled.
+    // `mergeExit` lets a test make the merge call itself fail (the `failed` lane).
+    "if (argv[0] === 'api' && argv[1] === 'graphql') {",
+    "  if (" + JSON.stringify(o.mergeQueueProbe === undefined) + ") { process.stderr.write('probe failed\\n'); process.exit(1); }",
+    "  process.stdout.write(" + JSON.stringify(JSON.stringify({ data: { resource: { isMergeQueueEnabled: !!o.mergeQueueProbe } } })) + " + '\\n'); process.exit(0); }",
+    "if (argv[0] === 'pr' && argv[1] === 'merge') { const code = " + JSON.stringify(o.mergeExit == null ? 0 : o.mergeExit) + ";",
+    "  if (code !== 0) process.stderr.write('merge refused\\n'); process.exit(code); }",
     "process.stdout.write('\\n'); process.exit(0);"
   ];
   fs.writeFileSync(path.join(binDir, 'gh'), lines.join('\n'));
@@ -8512,6 +8520,226 @@ function testSinkPrLinkedPosturePublishesArchive() {
     fs.rmSync(wtRoot, { recursive: true, force: true });
     fs.rmSync(remotePath, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// #1099 — the optional forge-native merge queue on the GitHub sink-pr auto-merge step. Written
+// first, per the issue's test plan: G1/G3 are the RED cases (the pre-change argv always carries
+// `--delete-branch`, which gh >=2.64.0 refuses on a queue-required branch, so a queued PR stayed
+// open while the sink only warned and exited 0 — the D-mq1 correction); G2/G4 are regression
+// guardrails that must stay green. GitLab and Gitea are untouched and are pinned by their own
+// suites. No real network: `gh` is the argv-logging stub above, whose `api graphql` answer and
+// `pr merge` exit code are per-test inputs.
+// ---------------------------------------------------------------------------
+
+// #1099: one isolated HOME per sink-pr merge-queue run. The sink's `readConfig` reads (and, on a
+// missing file, WRITES) `os.homedir()/.config/kaola-workflow/config.json`; the walkthrough's shared
+// sandbox HOME is deliberately config-less, so a test that needs `pr_auto_merge: true` seeds its own
+// HOME and never touches the developer's real one.
+function writeSinkPrConfigHome(homeDir, config) {
+  const dir = path.join(homeDir, '.config', 'kaola-workflow');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
+  return homeDir;
+}
+
+// #1099: plant a linked-posture archived PR run whose sink reaches Step 9 on the CREATE path (no
+// durable record, `pr list` empty), then run sink-pr online with a per-test `gh` stub. Returns the
+// argv log, the child result and the PR URL the stub minted.
+function runSinkPrMergeQueueScenario(tag, opts) {
+  const o = opts || {};
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-mq-' + tag + '-')));
+  const remotePath = tmp + '-remote';
+  const wtRoot = tmp + '-wt';
+  const homeDir = tmp + '-home';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const issueNo = o.issueNo || 61;
+  const project = 'issue-' + issueNo;
+  const branch = 'workflow/' + project;
+  const prUrl = 'https://github.com/test/repo/pull/' + issueNo;
+  const wt = path.join(wtRoot, project);
+  try {
+    initGitRepoWithBareRemote(tmp);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), 'f\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', 'feat'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: ' + issueNo + '\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n');
+    if (o.config) writeSinkPrConfigHome(homeDir, o.config);
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = writeSinkPrStubGh(binDir, {
+      list: '[]', create: prUrl,
+      mergeQueueProbe: o.mergeQueueProbe,
+      mergeExit: o.mergeExit
+    });
+    // spawn-class: cli-contract
+    const result = spawnSync(process.execPath, [
+      sinkPrScript, '--project', project, '--branch', branch, '--issue', String(issueNo)
+    ], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: { ...sinkPrOnlineEnv(binDir, env), HOME: homeDir, USERPROFILE: homeDir }
+    });
+    return { tmp, remotePath, wtRoot, wt, env, result, argvLog, calls: readGhArgvLog(argvLog), prUrl, project, branch };
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function cleanupSinkPrMergeQueueScenario(s) {
+  try { G.git(s.tmp, ['worktree', 'remove', '--force', s.wt], { env: s.env }); } catch (_) {}
+  fs.rmSync(s.tmp, { recursive: true, force: true });
+  fs.rmSync(s.remotePath, { recursive: true, force: true });
+  fs.rmSync(s.wtRoot, { recursive: true, force: true });
+}
+
+// #1099 G1 — a queue-required branch: the one-shot probe answers true, so the merge call must be
+// EXACTLY `gh pr merge <url> --auto` (no merge method — the queue decides it — and no
+// `--delete-branch`, which gh >=2.64.0 rejects outright on such a branch), and stdout must carry
+// `pr_auto_merge: merge_queue` BEFORE the final `sink_pr:` line, which stays last.
+function testSinkPrMergeQueueEnabledUsesQueueArgv() {
+  const s = runSinkPrMergeQueueScenario('g1', {
+    issueNo: 61, mergeQueueProbe: true, config: { pr_auto_merge: true }
+  });
+  try {
+    assert(s.result.status === 0,
+      '#1099 G1: only the merge call, not the sink, may fail; expected exit 0\nexit: ' + s.result.status +
+      '\nstdout: ' + s.result.stdout + '\nstderr: ' + s.result.stderr);
+    const probes = s.calls.filter(c => c[0] === 'api' && c[1] === 'graphql');
+    assert(probes.length === 1,
+      '#1099 G1: exactly one probe per run, got ' + probes.length + ': ' + JSON.stringify(s.calls));
+    const probe = probes[0];
+    assert(probe.some(a => String(a).includes('isMergeQueueEnabled')),
+      '#1099 G1: the probe must ask for PullRequest.isMergeQueueEnabled, got: ' + JSON.stringify(probe));
+    assert(probe.some(a => String(a).includes(s.prUrl)),
+      '#1099 G1: the probe must address this PR URL, got: ' + JSON.stringify(probe));
+    const merges = s.calls.filter(c => c[0] === 'pr' && c[1] === 'merge');
+    assert(merges.length === 1,
+      '#1099 G1: exactly one merge call, got: ' + JSON.stringify(s.calls));
+    assert(JSON.stringify(merges[0]) === JSON.stringify(['pr', 'merge', s.prUrl, '--auto']),
+      '#1099 G1: a queued branch must merge with `pr merge <url> --auto` only ' +
+      '(no merge method, no --delete-branch), got: ' + JSON.stringify(merges[0]));
+    const lines = s.result.stdout.trim().split('\n');
+    const mq = lines.filter(l => l.startsWith('pr_auto_merge:'));
+    assert(mq.length === 1 && mq[0] === 'pr_auto_merge: merge_queue',
+      '#1099 G1: stdout must carry exactly one `pr_auto_merge: merge_queue` line, got: ' + JSON.stringify(lines));
+    assert(lines[lines.length - 1] === 'sink_pr: created',
+      '#1099 G1: the final line must stay the unchanged sink_pr line, got: ' + JSON.stringify(lines));
+    assert(lines.indexOf(mq[0]) < lines.length - 1,
+      '#1099 G1: the pr_auto_merge line must precede the final sink_pr line, got: ' + JSON.stringify(lines));
+    console.log('testSinkPrMergeQueueEnabledUsesQueueArgv: PASSED');
+  } finally {
+    cleanupSinkPrMergeQueueScenario(s);
+  }
+}
+
+// #1099 G2 — a non-queue branch: the probe answers false, so the ORIGINAL argv runs unchanged and
+// stdout carries `pr_auto_merge: direct`. Regression guardrail for the pre-existing behavior.
+function testSinkPrMergeQueueDisabledKeepsOriginalArgv() {
+  const s = runSinkPrMergeQueueScenario('g2', {
+    issueNo: 62, mergeQueueProbe: false, config: { pr_auto_merge: true }
+  });
+  try {
+    assert(s.result.status === 0,
+      '#1099 G2: expected exit 0\nexit: ' + s.result.status + '\nstderr: ' + s.result.stderr);
+    assert(s.calls.filter(c => c[0] === 'api' && c[1] === 'graphql').length === 1,
+      '#1099 G2: the probe still runs once on a non-queue branch, got: ' + JSON.stringify(s.calls));
+    const merges = s.calls.filter(c => c[0] === 'pr' && c[1] === 'merge');
+    assert(merges.length === 1 &&
+      JSON.stringify(merges[0]) === JSON.stringify(['pr', 'merge', s.prUrl, '--auto', '--squash', '--delete-branch']),
+      '#1099 G2: a non-queue branch must keep the original argv verbatim, got: ' + JSON.stringify(merges));
+    const lines = s.result.stdout.trim().split('\n');
+    assert(lines.filter(l => l === 'pr_auto_merge: direct').length === 1,
+      '#1099 G2: stdout must carry `pr_auto_merge: direct`, got: ' + JSON.stringify(lines));
+    assert(lines[lines.length - 1] === 'sink_pr: created',
+      '#1099 G2: the final line must stay the unchanged sink_pr line, got: ' + JSON.stringify(lines));
+    console.log('testSinkPrMergeQueueDisabledKeepsOriginalArgv: PASSED');
+  } finally {
+    cleanupSinkPrMergeQueueScenario(s);
+  }
+}
+
+// #1099 G3 — the probe itself fails (non-zero `gh api graphql`): the sink must fall back to the
+// ORIGINAL argv, must not crash, and must not change the exit code. The documented lane here is
+// `direct`: the fall-back IS the direct call, and only a failed MERGE flips the line to `failed`
+// (G3b pins that).
+function testSinkPrMergeQueueProbeFailureFallsBack() {
+  const s = runSinkPrMergeQueueScenario('g3', {
+    issueNo: 63, mergeQueueProbe: undefined, config: { pr_auto_merge: true }
+  });
+  try {
+    assert(s.result.status === 0,
+      '#1099 G3: a failed probe must not change the sink exit code\nexit: ' + s.result.status +
+      '\nstderr: ' + s.result.stderr);
+    assert(s.calls.filter(c => c[0] === 'api' && c[1] === 'graphql').length === 1,
+      '#1099 G3: the probe is still attempted exactly once, got: ' + JSON.stringify(s.calls));
+    const merges = s.calls.filter(c => c[0] === 'pr' && c[1] === 'merge');
+    assert(merges.length === 1 &&
+      JSON.stringify(merges[0]) === JSON.stringify(['pr', 'merge', s.prUrl, '--auto', '--squash', '--delete-branch']),
+      '#1099 G3: a failed probe must run the original argv verbatim, got: ' + JSON.stringify(merges));
+    const lines = s.result.stdout.trim().split('\n');
+    assert(lines.filter(l => l === 'pr_auto_merge: direct').length === 1,
+      '#1099 G3: a failed probe reports `direct` (the fall-back it ran), got: ' + JSON.stringify(lines));
+    assert(lines[lines.length - 1] === 'sink_pr: created',
+      '#1099 G3: the final line must stay the unchanged sink_pr line, got: ' + JSON.stringify(lines));
+    console.log('testSinkPrMergeQueueProbeFailureFallsBack: PASSED');
+  } finally {
+    cleanupSinkPrMergeQueueScenario(s);
+  }
+}
+
+// #1099 G3b — the probe says queue, but the merge call itself fails: the sink keeps today's
+// warning-only, exit-0 behavior (#1098 T3 depends on a run that merged this way reaching
+// `sink_pr: already_merged`), and the lane line is `failed`.
+function testSinkPrMergeQueueMergeFailureReportsFailed() {
+  const s = runSinkPrMergeQueueScenario('g3b', {
+    issueNo: 64, mergeQueueProbe: true, mergeExit: 1, config: { pr_auto_merge: true }
+  });
+  try {
+    assert(s.result.status === 0,
+      '#1099 G3b: a failed auto-merge stays non-fatal (exit 0)\nexit: ' + s.result.status +
+      '\nstderr: ' + s.result.stderr);
+    assert(/Warning: pr auto-merge failed/.test(s.result.stderr),
+      '#1099 G3b: the failure must keep warning on stderr, got: ' + s.result.stderr);
+    const lines = s.result.stdout.trim().split('\n');
+    assert(lines.filter(l => l === 'pr_auto_merge: failed').length === 1,
+      '#1099 G3b: a failed merge reports `pr_auto_merge: failed`, got: ' + JSON.stringify(lines));
+    assert(lines[lines.length - 1] === 'sink_pr: created',
+      '#1099 G3b: the final line must stay the unchanged sink_pr line, got: ' + JSON.stringify(lines));
+    console.log('testSinkPrMergeQueueMergeFailureReportsFailed: PASSED');
+  } finally {
+    cleanupSinkPrMergeQueueScenario(s);
+  }
+}
+
+// #1099 G4 — `pr_auto_merge` false and (separately) absent: no probe, no merge call, and stdout
+// byte-identical to the pre-#1099 output (no new line at all).
+function testSinkPrMergeQueueInactiveSkipsProbeAndMerge() {
+  for (const [tag, config] of [['false', { pr_auto_merge: false }], ['absent', {}]]) {
+    const s = runSinkPrMergeQueueScenario('g4-' + tag, { issueNo: 65, config });
+    try {
+      assert(s.result.status === 0,
+        '#1099 G4 ' + tag + ': expected exit 0\nstderr: ' + s.result.stderr);
+      assert(!s.calls.some(c => c[0] === 'api' && c[1] === 'graphql'),
+        '#1099 G4 ' + tag + ': no config ⇒ no probe, got: ' + JSON.stringify(s.calls));
+      assert(!s.calls.some(c => c[0] === 'pr' && c[1] === 'merge'),
+        '#1099 G4 ' + tag + ': no config ⇒ no merge call, got: ' + JSON.stringify(s.calls));
+      assert(!/pr_auto_merge:/.test(s.result.stdout),
+        '#1099 G4 ' + tag + ': no new line when auto-merge is off, got: ' + JSON.stringify(s.result.stdout));
+      assert(s.result.stdout === 'sink_pr: created\n',
+        '#1099 G4 ' + tag + ': stdout must be the unchanged single line, got: ' + JSON.stringify(s.result.stdout));
+    } finally {
+      cleanupSinkPrMergeQueueScenario(s);
+    }
+  }
+  console.log('testSinkPrMergeQueueInactiveSkipsProbeAndMerge: PASSED');
 }
 
 // #1098 B1 (review round 2) — the linked posture publishes the ARCHIVE ONLY, never a LIVE run
@@ -12749,6 +12977,12 @@ function buildRegistry() {
   add('testSinkPrReuseRefusesMissingCloses',              testSinkPrReuseRefusesMissingCloses);
   add('testSinkPrReuseRefusesBaseMismatch',               testSinkPrReuseRefusesBaseMismatch);
   add('testSinkPrLinkedPosturePublishesArchive',          testSinkPrLinkedPosturePublishesArchive);
+  // #1099 — optional forge-native merge queue on the GitHub auto-merge step (G1/G3 RED first).
+  add('testSinkPrMergeQueueEnabledUsesQueueArgv',         testSinkPrMergeQueueEnabledUsesQueueArgv);
+  add('testSinkPrMergeQueueDisabledKeepsOriginalArgv',    testSinkPrMergeQueueDisabledKeepsOriginalArgv);
+  add('testSinkPrMergeQueueProbeFailureFallsBack',        testSinkPrMergeQueueProbeFailureFallsBack);
+  add('testSinkPrMergeQueueMergeFailureReportsFailed',    testSinkPrMergeQueueMergeFailureReportsFailed);
+  add('testSinkPrMergeQueueInactiveSkipsProbeAndMerge',   testSinkPrMergeQueueInactiveSkipsProbeAndMerge);
   add('testSinkPrLiveFolderIsNeverPushed',                testSinkPrLiveFolderIsNeverPushed);
   add('testSinkPrRePushesArchiveAfterRefusedPush',        testSinkPrRePushesArchiveAfterRefusedPush);
   add('testSinkPrProbeFailureFailsClosed',                testSinkPrProbeFailureFailsClosed);
