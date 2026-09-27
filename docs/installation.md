@@ -102,7 +102,11 @@ but installs and registers no profile. It retires the role profiles, ownership r
 `# BEGIN/END kaola-workflow agents` registration block that earlier releases wrote in the target
 scope (see [Upgrading from earlier releases](#upgrading-from-releases-that-installed-kaola-role-profiles)).
 It then installs the global compact hook (`~/.codex/hooks.json`), its version-less hook home
-(`~/.codex/kaola-workflow/`), and the `~/.codex/AGENTS.md` global-contract carrier. It also reports
+(`~/.codex/kaola-workflow/`), and the `~/.codex/AGENTS.md` global-contract carrier. A reinstall
+updates each `kaola-workflow:` hook entry where it already stands, appends only a new one, and
+leaves every other entry at its index (only removing a retired `kaola-workflow:` entry shifts the
+entries after it), because Codex records hook trust by position. An unchanged reinstall reports
+`unchanged` and leaves `hooks.json` byte-identical. It also reports
 the dispatch posture and `multi_agent_v2` state it reads from `config.toml` but never writes them.
 While it replaces an existing `hooks.json`, it keeps the prior file as
 `~/.codex/hooks.json.kaola-backup-<pid>-<hex>` and removes that backup once the update succeeds.

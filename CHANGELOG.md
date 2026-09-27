@@ -15,6 +15,18 @@
   and every rollback path still restores from it. Backups that earlier installs left are not
   deleted automatically; [docs/installation.md](docs/installation.md) explains how to remove them.
 
+- **A Codex reinstall no longer reorders `~/.codex/hooks.json` (#1109).** `mergeHooks()` in
+  `install-codex-agent-profiles.js` used to strip every `kaola-workflow:` entry and append the
+  managed entries at the end of each event, so a reinstall moved ours behind another tool's hook.
+  Codex keys hook trust by position (`hooks.state."<hooks.json>:<event>:<i>:<j>"`), so both hooks
+  lost their stored `trusted_hash` and the user had to re-approve a hook Kaola-Workflow does not
+  own. The merge now replaces each managed entry in place by `id`, appends only a managed entry that
+  is new, and still drops a `kaola-workflow:` entry the template no longer carries; entries without
+  an `id` and every foreign entry keep their index (only removing a retired managed entry shifts the
+  entries after it). An unchanged reinstall leaves `hooks.json` byte-identical and reports
+  `unchanged` instead of `updated`. The `hooks.state` tables in `config.toml` are not touched.
+  Codex, GitLab, and Gitea plugin copies synchronized.
+
 ## [12.3.0] - 2026-09-27
 
 ### Added

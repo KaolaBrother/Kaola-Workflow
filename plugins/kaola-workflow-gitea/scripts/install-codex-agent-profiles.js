@@ -730,21 +730,38 @@ function copyHookScripts(stableDir, relPaths, sourceRoot = pluginRoot) {
 //   `description`. Preserve that user-owned description while continuing to drop editor-only
 //   or unknown top-level keys such as `$schema`, which the strict parser rejects. Claude is
 //   unaffected: its hooks merge into settings.json, which accepts $schema.
-//   R3 — sweep EVERY event for kaola-workflow:-prefixed entries before re-adding, so an orphaned
-//        managed entry under a now-unmanaged event is cleaned too (not just the currently-managed
-//        set). Non-managed entries and unrelated events are preserved untouched.
+//   R3 — sweep EVERY event for kaola-workflow:-prefixed entries the template no longer carries, so
+//        an orphaned managed entry under a now-unmanaged event is cleaned too (not just the
+//        currently-managed set). Non-managed entries and unrelated events are preserved untouched.
+//   #1109 — Codex keys hook trust by position (hooks.state."<hooks.json>:<event>:<i>:<j>"), so a
+//        managed entry is replaced in place by id and only a new one is appended; no entry moves.
 // Pure + exported for unit tests.
 function mergeHooks(existing, managed) {
   const ex = (existing && typeof existing === 'object') ? existing : { hooks: {} };
   const exHooks = (ex.hooks && typeof ex.hooks === 'object') ? ex.hooks : {};
+  const managedHooks = (managed && managed.hooks) || {};
   const hooks = Object.assign({}, exHooks);
-  // R3: strip managed-prefixed entries under ALL events (guard entries with no id).
+  const isManaged = e => e && e.id && e.id.startsWith(MANAGED_HOOK_ID_PREFIX);
+  const placed = new Map();
+  // R3 + #1109: under ALL events, replace each managed-prefixed entry at its index with the
+  // template entry of the same id, and drop it when the template no longer carries that id (or it
+  // is a later duplicate). Entries with no id are guarded and kept.
   for (const event of Object.keys(hooks)) {
-    hooks[event] = (hooks[event] || []).filter(e => !(e && e.id && e.id.startsWith(MANAGED_HOOK_ID_PREFIX)));
+    const incoming = new Map(Object.prototype.hasOwnProperty.call(managedHooks, event)
+      ? managedHooks[event].map(e => [e && e.id, e]) : []);
+    const done = new Set();
+    placed.set(event, done);
+    hooks[event] = (hooks[event] || []).flatMap((e) => {
+      if (!isManaged(e)) return [e];
+      if (!incoming.has(e.id) || done.has(e.id)) return [];
+      done.add(e.id);
+      return [incoming.get(e.id)];
+    });
   }
-  // Re-add the managed entries per managed event.
-  for (const [event, managedEntries] of Object.entries((managed && managed.hooks) || {})) {
-    hooks[event] = [...(hooks[event] || []), ...managedEntries];
+  // Append only the managed entries not already replaced in place.
+  for (const [event, managedEntries] of Object.entries(managedHooks)) {
+    const done = placed.get(event) || new Set();
+    hooks[event] = [...(hooks[event] || []), ...managedEntries.filter(e => !(e && done.has(e.id)))];
   }
   const result = { hooks };
   if (Object.prototype.hasOwnProperty.call(ex, 'description')) {
