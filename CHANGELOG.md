@@ -226,14 +226,16 @@
   `kaola-workflow/archive/<project>.archived-<ts>/`. For a run whose closure had already moved the
   folder, that half found nothing and, with the live folder gone, the pin returned false and the
   sweep fell back to `(closed || archived) && !active` — removing a resumable sink's own worktree.
-  Both arms now resolve the archive folders through one helper: the exact
-  `archive/<project>/.cache/` first, then every `archive/<project>.archived-<ts>/.cache/` sibling,
-  newest suffix first, the same scan discipline as the sink's own `resolveSinkReceiptPath` and the
-  same `startsWith(project + '.archived-')` convention the file already used. The set is widened,
-  never the identity: the lane arm's #1102 owner resolution still decides first (it already read
-  suffixed archives as records), so this default set is reached only when no record names the
-  branch; an ambiguous owner still reads nothing from its set, and an older run's receipt still
-  cannot pin a newer run. A project name that is not a safe name reads the exact path only.
+  Both arms now read the live `.cache`, the exact `archive/<project>/.cache/`, and **the one archive
+  the sink's own current-archive rule resolves**: exactly one archive carrying the run's `claim_ts`,
+  or — when several do — the unique receipt-anchored one whose `claim_ts` and `archive_dest` name
+  that same folder, the shape the finalize step writes. **When that resolution is ambiguous the pin
+  reads no archive receipt at all**, because the sink itself refuses the same tree with
+  `archive_authority_ambiguous` and would never resume from it; that is #1102's "undeterminable ⇒ no
+  pin" applied to the archive set. Reading every `archive/<project>.archived-<ts>/` sibling instead
+  would let an older abandoned run's not-all-done receipt pin a newer run's leftover worktree
+  forever. The lane arm's #1102 owner resolution still decides first, so this archive read is reached
+  only when no record names the branch. A project name that is not a safe name resolves nothing.
   All-done and missing-receipt behavior is unchanged, and all four claim copies (root, Codex,
   GitLab, Gitea) carry the same change.
 
