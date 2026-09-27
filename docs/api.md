@@ -2014,7 +2014,9 @@ pass kaola-workflow-run-chains.js --release-check
 ```
 
 The `--release-check` step is the gate documented above. `--prepare` bumps the versioned files;
-`--tag` creates the annotated tag at the verified commit — the same route `--tag` and
+`--tag` creates a lightweight tag ref at the verified commit — an atomic zero-old
+`git update-ref refs/tags/<tag> <candidate> 0000…`, which writes no tag object, so there is no
+tagger and no tag message (see [Release cutting](conventions.md)) — the same route `--tag` and
 `--release-check` now share — and `--push` publishes.
 
 ## Installation and edition sync

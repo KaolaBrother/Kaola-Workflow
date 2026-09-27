@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`docs/api.md` claimed `--tag` creates an annotated tag (#1107).** `kaola-workflow-release.js` creates a lightweight tag ref — an atomic zero-old `git update-ref refs/tags/<tag> <candidate> 0000…` with no tag object, no tagger, and no tag message — and `docs/conventions.md` already said so. The `docs/api.md` release sentence now states the actual behavior, so an operator or reviewer no longer expects a tagger identity and rejects a correctly cut release. Tool behavior is unchanged and no published tag is rewritten.
+
 ## [12.3.0] - 2026-09-27
 
 ### Added
