@@ -232,9 +232,10 @@ fi
 
 # Kaola-Workflow ships no Claude Code subagent profiles (#1101). Earlier releases installed role
 # profiles into $AGENTS_DIR — shared with user-authored agents — and recorded them in
-# $AGENT_MANIFEST_FILE. Retire them with that proof: a file the record lists, still carrying the
-# managed marker and still hashing to the recorded digest, is removed; every other file with a Kaola
-# role name is preserved and reported (edited, unrecorded, or not a regular file), and names that
+# $AGENT_MANIFEST_FILE. Retire them with that proof — a file the record lists, still carrying the
+# managed marker and still hashing to the recorded digest — or with the released-render proof (its
+# bytes are a Claude profile some release tracked or installed, CATALOG.claude); every other file
+# with a Kaola role name is preserved and reported (edited, unrecorded, or not a regular file), and names that
 # were never Kaola's are not touched. The record itself is retired once read. A symlinked or
 # non-directory carrier is reported, never followed, and does not block the rest of the install.
 retire_claude_agents() {

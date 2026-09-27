@@ -300,18 +300,25 @@ try {
   });
 
   // C9 — no ownership record: marker-bearing files are preserved; hostile manifest rows are inert.
-  section('C9 without a manifest nothing is deleted; unsafe manifest rows never escape the dir', () => {
+  // C9 — without a manifest a file is removed only when its bytes are a released Claude profile
+  // (the frozen catalog, as for every other runtime); anything else is kept and reported. Before
+  // the Claude catalog existed (review round B2) nothing at all was provable without a manifest.
+  section('C9 without a manifest only released bytes go; unsafe manifest rows never escape the dir', () => {
     const home = makeHome('no-record');
     plantFixture(CURRENT, '.claude', home);
     fs.rmSync(path.join(agentsOf(home), '.kaola-workflow-agent-manifest'));
-    const before = snapshot(agentsOf(home));
+    const edited = path.join(agentsOf(home), 'implementer.md');
+    fs.appendFileSync(edited, '\nmy local note\n');
+    const editedBytes = fs.readFileSync(edited, 'utf8');
     const r = install(home, 'github');
     check(r.status === 0, `install exits 0\n${r.out}`);
-    check(JSON.stringify(snapshot(agentsOf(home))) === JSON.stringify(before), 'no file changed without a record');
-    for (const role of CURRENT_ROLES) {
-      check(hasLine(r.out, PRESERVED('no_ownership_record') + path.join(agentsOf(home), role + '.md')),
-        `${role}.md reported as unrecorded`);
+    for (const role of CURRENT_ROLES.filter(role => role !== 'implementer')) {
+      const file = path.join(agentsOf(home), role + '.md');
+      check(!fs.existsSync(file) && hasLine(r.out, REMOVED + file), `${role}.md (released bytes) removed and reported`);
     }
+    check(fs.existsSync(edited) && fs.readFileSync(edited, 'utf8') === editedBytes,
+      'the edited profile, not a released render, is kept byte-for-byte');
+    check(hasLine(r.out, PRESERVED('no_ownership_record') + edited), 'and reported as unrecorded');
 
     const home2 = makeHome('hostile-manifest');
     plantFixture(CURRENT, '.claude', home2);
@@ -324,6 +331,29 @@ try {
     check(fs.existsSync(victim), 'a ../ or absolute manifest row never deletes outside the agents dir');
     check(!fs.existsSync(path.join(agentsOf(home2), 'implementer.md')), 'the legitimate rows are still honoured');
     check(/not a plain file name/.test(r2.out), 'the unsafe manifest rows are reported');
+  });
+
+  // C14 (review round B2) — a released profile that no manifest row lists: docs-lookup.md from an
+  // install between its retirement (2026-06-09) and the installer's retired-agent sweep
+  // (299adb02, 2026-07-25) kept the managed marker and had no row. The base uninstall removed it
+  // by marker; the Claude catalog now proves it, for install and for uninstall.
+  section('C14 a released docs-lookup.md with no manifest row is retired by install and uninstall', () => {
+    const orphan = fs.readFileSync(path.join(FIXTURES, 'orphan-80244600', 'docs-lookup.md'), 'utf8');
+    for (const [label, runIt] of [['install', home => install(home, 'github')], ['uninstall', home => uninstall(home)]]) {
+      const home = makeHome('orphan-' + label);
+      fs.mkdirSync(agentsOf(home), { recursive: true });
+      fs.writeFileSync(path.join(agentsOf(home), 'docs-lookup.md'), orphan);
+      fs.writeFileSync(path.join(agentsOf(home), '.kaola-workflow-agent-manifest'), '');
+      const edited = path.join(agentsOf(home), 'knowledge-lookup.md');
+      fs.writeFileSync(edited, orphan.replace('docs-lookup', 'knowledge-lookup') + '\nmine\n');
+      const r = runIt(home);
+      check(r.status === 0, `${label} exits 0\n${r.out}`);
+      const file = path.join(agentsOf(home), 'docs-lookup.md');
+      check(!fs.existsSync(file), `${label}: the released docs-lookup.md is removed`);
+      check(hasLine(r.out, REMOVED + file), `${label}: its removal is reported`);
+      check(fs.existsSync(edited) && hasLine(r.out, PRESERVED('no_ownership_record') + edited),
+        `${label}: a marker-bearing file that is not a released render is kept and reported`);
+    }
   });
 
   // C11 — custom agent dir (KAOLA_AGENT_DIR): only the configured dir is migrated.

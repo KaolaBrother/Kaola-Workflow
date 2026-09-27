@@ -52,6 +52,7 @@ the baseline `46fbe12d`, not only tags, because `install.sh` bootstraps from `ma
 |---|---|---|---|
 | Codex profiles | `RELEASED_PROFILE_SHA256` in `plugins/*/scripts/install-codex-agent-profiles.js` | 347 (24 names) | every git blob ever at `plugins/kaola-workflow{,-gitlab,-gitea}/agents/*.toml`. Pre-rename `plugins/codex-workflow` blobs are excluded (#1101 H6: report only) |
 | Codex block bodies | `RELEASED_BLOCK_BODY_SHA256`, same file | 41 | every blob of `config/agents.toml`, trimmed, plus the variant with its top-level `[features]` table removed. The pre-#775 installer wrote that variant when the user already had a `[features]` table |
+| Claude | `CATALOG.claude` in `scripts/kaola-workflow-retired-agents.js` | 539 (18 names) | every blob tracked at `agents/*.md` reachable from `46fbe12d` (the earliest installers copied it verbatim), plus every file each commit's own `install.sh` wrote into an empty sandbox `~/.claude/agents` (commits touching `agents/`, `install.sh`, or the profile generator and its sources; later installers rewrote frontmatter while copying) |
 | Grok | `CATALOG.grok` in `scripts/kaola-workflow-retired-agents.js` | 89 | render loop over `ac7a90b7^..46fbe12d` (347 commits) |
 | Cursor | `CATALOG.cursor` | 89 | render loop over `966d3138^..46fbe12d` (344 commits) |
 | ZCode | `CATALOG.zcode` | 49 | render loop over `42ce7de6^..46fbe12d` |
@@ -63,6 +64,8 @@ the baseline `46fbe12d`, not only tags, because `install.sh` bootstraps from `ma
 The generators are kept beside this file and are not run by any suite:
 
 - `tools/codex-catalog.js <repo>` rebuilds the two Codex lists.
+- `tools/claude-catalog.sh <repo>` rebuilds the Claude list (sandbox `HOME`, cut `PATH`; 0 commits
+  failed to install agents, 22 were skipped for having no `install.sh` or `agents/`).
 - `tools/render-edition-catalog.sh <repo> <runtime> <first-commit>` rebuilds one runtime's rows.
 
 The render loop, per commit:
@@ -85,3 +88,10 @@ Cross-checks run when the catalogs were frozen:
   were read only; the files were not modified.
 - Rendering is deterministic: the agent renders read no clock, HOME, cwd or environment, and two
   renders of the same commit are byte-identical.
+
+## Orphan fixture (`orphan-80244600/`)
+
+`docs-lookup.md` is `git show 80244600:agents/docs-lookup.md`, the released bytes an install between
+`docs-lookup`'s retirement (2026-06-09) and the installer's retired-agent sweep (`299adb02`,
+2026-07-25) left with the managed marker and no manifest row. Case C14 of the Claude suite retires
+it through `CATALOG.claude`.
