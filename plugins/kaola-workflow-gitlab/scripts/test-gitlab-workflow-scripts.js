@@ -2189,6 +2189,100 @@ function testStaleWorktreeCleanup() {
           'sc2g N8: two live records on one branch are ambiguous and must leave the worktree UNPINNED, got: ' + JSON.stringify(out));
       } finally { cleanup2g(fx); }
     }
+
+    // --- M-cases (repair round 3): a stateless derived folder keeps its pin, the same claim reads
+    // every copy, and the undetermined no-live shapes unpin.
+    const mCase = (label, build, wantPinned, why) => {
+      const fx = mkRepo();
+      try {
+        build(fx);
+        const out = cls2g(fx);
+        const pinned = out.active_worktrees.some(w => w.path === fx.wtPath);
+        const stale = out.stale_worktrees.some(w => w.path === fx.wtPath);
+        assert(wantPinned ? (pinned && !stale) : (stale && !pinned), 'sc2g ' + label + ': ' + why + ', got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    };
+    const AR2G = ['kaola-workflow', 'archive'];
+    const olderBundle = (fx) => state2g(path.join(fx.tmp, ...AR2G, 'bundle-400-402'), 'bundle-400-402',
+      ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+
+    // M5 — #1100 receipt-only live issue-<N> (mid-flight) next to an OLDER bundle record on the branch.
+    mCase('M5', (fx) => {
+      receipt2g(path.join(fx.tmp, 'kaola-workflow', 'issue-400'), { project: 'issue-400', steps: PENDING2G });
+      olderBundle(fx);
+    }, true, 'a receipt-only live issue-<N> folder must keep its #1100 pin even when another record names the branch');
+
+    // M6 — the sink's #832 archive/issue-<N>/.cache skeleton next to an OLDER bundle record.
+    mCase('M6', (fx) => {
+      receipt2g(path.join(fx.tmp, ...AR2G, 'issue-400'), { project: 'issue-400', branch: 'workflow/gitlab-issue-400', steps: PENDING2G });
+      olderBundle(fx);
+    }, true, 'the sink\'s own archive/issue-<N>/.cache skeleton must keep its pin even when another record names the branch');
+
+    // M7 — the current live state file is empty (corrupted), its live receipt is mid-flight.
+    mCase('M7', (fx) => {
+      const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+      fs.mkdirSync(cur, { recursive: true });
+      fs.writeFileSync(path.join(cur, 'workflow-state.md'), '');
+      receipt2g(cur, { project: 'issue-400', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400.archived-2026-09-02T00-00-00-000Z'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+    }, true, 'a live issue-<N> folder whose state is unreadable must keep its receipt\'s pin');
+
+    // M11 — the SAME run live and as a plain archive copy (same claim_ts), both receipts own-project,
+    // the live one mid-flight.
+    mCase('M11', (fx) => {
+      const st = ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z'];
+      const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+      state2g(cur, 'issue-400', st);
+      receipt2g(cur, { project: 'issue-400', steps: PENDING2G });
+      const arch = path.join(fx.tmp, ...AR2G, 'issue-400');
+      state2g(arch, 'issue-400', st);
+      receipt2g(arch, { project: 'issue-400', steps: PENDING2G });
+    }, true, 'every folder carrying the live claim_ts is the same run, so its mid-flight live receipt must pin');
+
+    // M9 — a claim_ts tie between two archives, no live record: unpinned.
+    mCase('M9', (fx) => {
+      const a = path.join(fx.tmp, ...AR2G, 'issue-400');
+      state2g(a, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receipt2g(a, { project: 'issue-400', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'bundle-400-402'), 'bundle-400-402',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+    }, false, 'a claim_ts tie with no live record must leave the worktree UNPINNED');
+
+    // An unstamped record among several, no live record: unpinned.
+    mCase('unstamped-among-several', (fx) => {
+      state2g(path.join(fx.tmp, ...AR2G, 'bundle-400-402'), 'bundle-400-402', ['branch: workflow/gitlab-issue-400']);
+      const b = path.join(fx.tmp, ...AR2G, 'issue-400');
+      state2g(b, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receipt2g(b, { project: 'issue-400', branch: 'workflow/gitlab-issue-400', steps: PENDING2G });
+    }, false, 'an unstamped record among several with no live record must leave the worktree UNPINNED');
+
+    // A newest-claim tie that leaves more than one candidate (plus an older archive): unpinned.
+    mCase('newest-tie-several', (fx) => {
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400.archived-2026-09-02T00-00-00-000Z'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+      const a = path.join(fx.tmp, ...AR2G, 'issue-400');
+      state2g(a, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receipt2g(a, { project: 'issue-400', steps: PENDING2G });
+      state2g(path.join(fx.tmp, ...AR2G, 'bundle-400-402'), 'bundle-400-402',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+    }, false, 'a newest-claim tie that leaves more than one candidate must leave the worktree UNPINNED');
+
+    // M1 — no live record; the NEWER claim was abandoned mid-sink, the older completed: pinned.
+    mCase('M1', (fx) => {
+      state2g(path.join(fx.tmp, ...AR2G, 'issue-400'), 'issue-400',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      const b = path.join(fx.tmp, ...AR2G, 'issue-400.archived-2026-09-27T00-00-00-000Z');
+      state2g(b, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      receipt2g(b, { project: 'issue-400', steps: PENDING2G });
+    }, true, 'the newest archived claim\'s own mid-flight receipt must pin');
+
+    // N7 — a bundle run archived in main, mid-flight, no live record: pinned.
+    mCase('N7', (fx) => {
+      const arch = path.join(fx.tmp, ...AR2G, 'bundle-400-402');
+      state2g(arch, 'bundle-400-402', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+      receipt2g(arch, { project: 'bundle-400-402', steps: PENDING2G });
+    }, true, 'an archived bundle run\'s mid-flight receipt must pin its lane worktree');
   }
 
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)

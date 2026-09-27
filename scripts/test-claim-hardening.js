@@ -6087,6 +6087,104 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
           '#1102 N8: two live records on one branch are ambiguous and must leave the worktree UNPINNED, not pick the first in directory order, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
       } finally { cleanupR(fx); }
     }
+
+    // --- M-cases (repair round 3): a stateless derived folder keeps its pin, the same claim reads
+    // every copy, and the undetermined no-live shapes unpin. Each builds, classifies, and checks.
+    const mCase = (label, build, wantPinned, why) => {
+      const fx = mkRepo();
+      try {
+        build(fx);
+        const c = clsR(fx.root, fx.wtPath);
+        assert(wantPinned ? (c.active && !c.stalled) : (c.stalled && !c.active),
+          '#1102 ' + label + ': ' + why + ', got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    };
+    const olderBundle = (fx) => stateR(path.join(fx.root, ...AR, 'bundle-96401-96402'), 'bundle-96401-96402',
+      ['branch: workflow/issue-96401', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+
+    // M5 — the #1100 receipt-only live issue-<N> folder (mid-flight) next to an OLDER completed bundle
+    // record on the same branch (a bundle's branch is named after its first member).
+    mCase('M5', (fx) => {
+      receiptR(path.join(fx.root, 'kaola-workflow', 'issue-96401'), { project: 'issue-96401', steps: PENDING_N });
+      olderBundle(fx);
+    }, true, 'a receipt-only live issue-<N> folder must keep its #1100 pin even when another record names the branch');
+
+    // M6 — the sink's own #832 skeleton archive/issue-<N>/.cache (mid-flight, no state) next to an
+    // OLDER completed bundle record on the same branch.
+    mCase('M6', (fx) => {
+      receiptR(path.join(fx.root, ...AR, 'issue-96401'), { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_N });
+      olderBundle(fx);
+    }, true, 'the sink\'s own archive/issue-<N>/.cache skeleton must keep its pin even when another record names the branch');
+
+    // M7 — the current live state file is corrupted (empty) while its live receipt is mid-flight, and
+    // an older archived run of the issue is readable.
+    mCase('M7', (fx) => {
+      const cur = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+      fs.mkdirSync(cur, { recursive: true });
+      fs.writeFileSync(path.join(cur, 'workflow-state.md'), '');
+      receiptR(cur, { project: 'issue-96401', steps: PENDING_N });
+      stateR(path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-02T00-00-00-000Z'), 'issue-96401',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+    }, true, 'a live issue-<N> folder whose state is unreadable must keep its receipt\'s pin');
+
+    // M11 — the SAME run live and as a plain archive copy (same claim_ts), both receipts naming their
+    // own project, the live one mid-flight. The sink resumes from the live receipt first.
+    mCase('M11', (fx) => {
+      const st = ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z'];
+      const cur = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+      stateR(cur, 'issue-96401', st);
+      receiptR(cur, { project: 'issue-96401', steps: PENDING_N });
+      const arch = path.join(fx.root, ...AR, 'issue-96401');
+      stateR(arch, 'issue-96401', st);
+      receiptR(arch, { project: 'issue-96401', steps: PENDING_N });
+    }, true, 'every folder carrying the live claim_ts is the same run, so its mid-flight live receipt must pin');
+
+    // M9 — a claim_ts tie between two archives, no live record: undetermined, so unpinned.
+    mCase('M9', (fx) => {
+      const a = path.join(fx.root, ...AR, 'issue-96401');
+      stateR(a, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receiptR(a, { project: 'issue-96401', steps: PENDING_N });
+      stateR(path.join(fx.root, ...AR, 'bundle-96401-96402'), 'bundle-96401-96402',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+    }, false, 'a claim_ts tie with no live record is undetermined and must leave the worktree UNPINNED');
+
+    // Unstamped among several, no live record: the unstamped one cannot be ordered, so even the
+    // stamped record's mid-flight receipt must not decide.
+    mCase('unstamped-among-several', (fx) => {
+      stateR(path.join(fx.root, ...AR, 'bundle-96401-96402'), 'bundle-96401-96402', ['branch: workflow/issue-96401']);
+      const b = path.join(fx.root, ...AR, 'issue-96401');
+      stateR(b, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receiptR(b, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_N });
+    }, false, 'an unstamped record among several with no live record is undetermined and must leave the worktree UNPINNED');
+
+    // Tie with more than one candidate left: an older archive plus two archives tied at the newest
+    // claim_ts, one of them mid-flight. The newest claim does not name one run, so unpinned.
+    mCase('newest-tie-several', (fx) => {
+      stateR(path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-02T00-00-00-000Z'), 'issue-96401',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+      const a = path.join(fx.root, ...AR, 'issue-96401');
+      stateR(a, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receiptR(a, { project: 'issue-96401', steps: PENDING_N });
+      stateR(path.join(fx.root, ...AR, 'bundle-96401-96402'), 'bundle-96401-96402',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+    }, false, 'a newest-claim tie that leaves more than one candidate must leave the worktree UNPINNED');
+
+    // M1 — no live record; the NEWER claim was abandoned mid-sink, the older completed. The newest
+    // claim on a branch is the last run that owned it, so its receipt pins.
+    mCase('M1', (fx) => {
+      stateR(path.join(fx.root, ...AR, 'issue-96401'), 'issue-96401',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      const b = path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-27T00-00-00-000Z');
+      stateR(b, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-26T00:00:00.000Z']);
+      receiptR(b, { project: 'issue-96401', steps: PENDING_N });
+    }, true, 'the newest archived claim\'s own mid-flight receipt must pin even when an older run completed');
+
+    // N7 — a bundle run archived in main (closure moved it), mid-flight, no live record.
+    mCase('N7', (fx) => {
+      const arch = path.join(fx.root, ...AR, 'bundle-96401-96402');
+      stateR(arch, 'bundle-96401-96402', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+      receiptR(arch, { project: 'bundle-96401-96402', steps: PENDING_N });
+    }, true, 'an archived bundle run\'s mid-flight receipt must pin its lane worktree');
   }
 
   fs.rmSync(binDir1102, { recursive: true, force: true });
