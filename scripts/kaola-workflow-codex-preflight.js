@@ -38,7 +38,8 @@
 // Unknown arguments (including the retired --codex-version) are ignored.
 //
 // Exit 0 = fresh (or autofixed-then-fresh); non-zero = typed refusal:
-//   1 retired_role_residue (--doctor: stale), 2 plugin_identity_invalid (--doctor),
+//   1 retired_role_residue (--doctor: stale; after autofix: autofix_attempted, the files the
+//     installer preserved), 2 plugin_identity_invalid (--doctor),
 //   4 config_layer_unsafe / scope_authority_unsafe / project_root_markers_invalid / autofix_unsafe,
 //   5 installer_failed.
 // ---------------------------------------------------------------------------
@@ -1373,8 +1374,8 @@ function residueScopeRepair(installerPath, scope, homeDir) {
   }
   return 'Kaola-Workflow no longer installs Codex role profiles. Re-run the Kaola Codex installer for '
     + `this scope; it removes the Kaola-owned retired role profiles and managed config block: ${command}. `
-    + 'A file the installer preserves (modified since install, or with no ownership record) is reported '
-    + 'as "Retired KW agent preserved"; review it and delete it by hand.';
+    + 'A file the installer cannot prove Kaola-owned (modified since install, or with no ownership '
+    + 'record) is preserved and reported by the installer; review it and delete it by hand.';
 }
 
 function residueScopeReport(installerPath, scope, homeDir) {
@@ -1789,6 +1790,21 @@ function runPreflight(opts) {
     ...opts,
     noAutofix: true,
   });
+  if (verified.exitCode === 1 && verified.result.status === RETIRED_ROLE_RESIDUE_STATUS) {
+    // The installer succeeded but preserved what it could not prove Kaola installed (an edited
+    // profile, an unrecorded file, a changed block). That is residue for the user, not an
+    // installer failure.
+    return {
+      exitCode: 1,
+      result: {
+        ...verified.result,
+        autofix_attempted: true,
+        repair: 'The Kaola Codex installer ran and preserved these files because it cannot prove '
+          + 'Kaola installed them unchanged; review each one and delete it by hand, then re-run this '
+          + 'preflight.',
+      },
+    };
+  }
   if (verified.exitCode !== 0) {
     return {
       exitCode: 5,
