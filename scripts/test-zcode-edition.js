@@ -1762,7 +1762,7 @@ function generatedTreeRelFiles(label) {
     assertReal(/native_only|installs no Kaola role profiles|no `?\.zcode\/agents/i.test(doc),
       'D2: docs/zcode-edition.md states the native_only posture (no Kaola role profiles)');
     assertReal(/managed[\s-]?marker/i.test(doc),
-      'D2: docs/zcode-edition.md records that the retired-agent sweep requires the managed marker');
+      'D2: docs/zcode-edition.md records the managed marker\'s role in the retired-agent sweep (since #1101 the marker alone is not proof)');
     assertReal(/3\.10\.1/.test(doc),
       'D2: docs/zcode-edition.md mentions the ZCode 3.10.1 measurement');
     assertReal(/(?:1[,.]?000[,.]?000|1\s*million|1M)\b/i.test(doc),

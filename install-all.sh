@@ -13,8 +13,8 @@
 # failure mode that repeatedly lost Kimi on "reinstall the runtimes" passes).
 #
 # PASS MEANS CONVERGED, NOT "EXITED 0". Codex is the one runtime whose install is
-# genuinely two-part: agent profiles (install-codex-agent-profiles.js) PLUS the
-# marketplace plugin that carries the skill packs. That plugin cache is
+# genuinely two-part: the Codex installer (install-codex-agent-profiles.js: retired-profile
+# migration, hooks, global contract) PLUS the marketplace plugin that carries the skill packs. That plugin cache is
 # VERSION-KEYED, so it keeps serving what was last added until the plugin is
 # re-added — after a tree bump, and equally after prose moves at an UNCHANGED
 # version — so an installer exit 0 is not evidence the runtime is at HEAD.
@@ -142,9 +142,9 @@ not forwarded to it; Codex picks its forge by which marketplace plugin entry
 you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtime failed
 (continue-through by default; --strict aborts at the first failure).
 
-Codex is installed in two parts: the agent profiles (the installer above) and the
-marketplace plugin that carries the skill packs. The plugin cache is version-keyed, so
-after the profiles land this wrapper checks both the version the plugin reports and —
+Codex is installed in two parts: the Codex installer above (retired-profile migration,
+hooks, and the global contract) and the marketplace plugin that carries the skill packs.
+The plugin cache is version-keyed, so after the installer runs this wrapper checks both the version the plugin reports and —
 for a marketplace that is a local directory — the content it actually serves, since
 prose can move at an unchanged version. Both are measured against the directory the
 plugin is installed from (its .codex-plugin/plugin.json and its files), which is the
@@ -333,14 +333,14 @@ run_one() {
 # ---------------------------------------------------------------------------
 # Codex marketplace-plugin convergence.
 #
-# install-codex-agent-profiles.js deploys AGENT PROFILES only. The skill packs
-# ship through the local marketplace plugin, whose cache is keyed by version
+# install-codex-agent-profiles.js never ships skill packs (and, since #1101, no profiles).
+# The skill packs ship through the local marketplace plugin, whose cache is keyed by version
 # (~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/), so it serves what was
 # last added forever: after a tree bump, and equally after prose moved at an
 # unchanged version, which no comparison of the two version strings can see. The
 # wrapper — not the profile installer — owns the "is this runtime at HEAD" question,
-# so the check lives here and install-codex-agent-profiles.js stays a pure
-# agent-profile installer. HEAD there means the checkout the marketplace is configured
+# so the check lives here and install-codex-agent-profiles.js stays out of plugin
+# convergence. HEAD there means the checkout the marketplace is configured
 # to install from: run from a linked worktree, this answers about that marketplace and
 # not about the worktree, because that is the only tree a refresh could ever deliver.
 # ---------------------------------------------------------------------------
@@ -505,7 +505,7 @@ codex_degrade() {
 # Record a NOT-APPLICABLE outcome — distinct from UNVERIFIED. Absent tooling is not
 # a detected mismatch: with no `codex` CLI on PATH there is no marketplace plugin to
 # converge, so there is nothing this wrapper could check and nothing degraded. The
-# row keeps its installer verdict (the agent profiles DID install) and carries the
+# row keeps its installer verdict (the Codex installer DID run) and carries the
 # reason so it is never a BARE pass, but the box is not reported as permanently
 # degraded the way a standing PARTIAL/UNVERIFIED did.
 codex_not_applicable() {
@@ -522,7 +522,7 @@ converge_codex_plugin() {
   idx="$(runtime_index codex)" || return 0
   if is_skipped codex; then return 0; fi
   if [[ "${R_STATUS[$idx]:-}" == "FAIL" ]]; then
-    R_NOTE[$idx]="plugin convergence not attempted (agent-profile installer failed)"
+    R_NOTE[$idx]="plugin convergence not attempted (Codex installer failed)"
     return 0
   fi
 
