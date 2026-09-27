@@ -5447,138 +5447,56 @@ function cmdWorktreeStatus() {
 
 // #1102: WHICH run owns a worktree is a fact about the run, not about its branch. The sweep is
 // worktree-driven, and the branch only gives back an ISSUE NUMBER: `buildBranchName` names the branch
-// after the FIRST member (`workflow/issue-<N>`) even when the run folder is `bundle-<set>` or a custom
-// name, and the forge ports add their own prefix. So the project name can never be recomputed from
-// the branch — it has to be READ from the run's own records. Two existing sources are consulted, each
-// of which sees what the other cannot:
+// after the FIRST member (`workflow/issue-<N>`) even when the run folder is `bundle-<set>` or a
+// custom name, and the forge ports add their own prefix. So the project name cannot be recomputed
+// from the branch — it has to be READ from the run's own records.
 //
-//   * the worktree's own checkout: `<worktree>/kaola-workflow/<project>/workflow-state.md`. This is
-//     how a LIVE run is reached when its folder has not been mirrored into the main checkout yet, and
-//     how an ARCHIVED run's folder is reached when the archive still lives in the worktree.
-//   * the main checkout's live and archive run records, kept only when the recorded `branch` is this
-//     worktree's branch AND the recorded `worktree_path` is this worktree.
+// The register is the MAIN checkout's live and archive `workflow-state.md` files. A record belongs to
+// this worktree when its recorded `branch` is this worktree's branch. A branch is REUSED across runs
+// of one issue, so more than one record can match: exactly as the sink's own `currentArchiveDir`
+// already resolves it, a live record's `claim_ts` names the current claim and only a folder carrying
+// that claim is the current one; with no live record the match must be unambiguous, and timestamps do
+// NOT authorize choosing the later of two claimed histories.
 //
-// The corroboration is the whole point. A branch is REUSED across runs of one issue, so a leftover
-// record from an old run must never pin the new run's worktree. When the path is decisive it is
-// required to agree; when it cannot separate the runs (both runs claimed the same path — the ordinary
-// case, since `worktreePathFor` is a pure function of the project name) the register is treated as a
-// time series and only the NEWEST claim whose folder still carries a receipt counts. Two sources that
-// name different projects, or a record a later claim has superseded, resolve to nothing.
-//
-// Returns '' when the owner cannot be established, which keeps the caller's existing behavior — an
-// unresolved worktree is swept exactly as it was before this resolver existed.
-function projectNameFromStateContent(content) {
-  const name = field(content, 'name');
-  return (name && isSafeName(name)) ? name : '';
-}
-
-// Two spellings of the same checkout: resolve symlinks when both exist (the sweep's worktree and a
-// recorded one may reach the same directory by different roots), fall back to a lexical compare so a
-// path that no longer exists still answers.
-function sameWorktreePath(a, b) {
-  const real = (p) => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
-  return real(a) === real(b);
-}
-
-function worktreeStateProject(wtPath) {  try {
-    const projectDir = path.join(wtPath, 'kaola-workflow');
-    for (const entry of fs.readdirSync(projectDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !isSafeName(entry.name)) continue;
-      const stateFile = path.join(projectDir, entry.name, 'workflow-state.md');
-      if (!fs.existsSync(stateFile)) continue;
-      const project = projectNameFromStateContent(fs.readFileSync(stateFile, 'utf8'));
-      if (project) return project;
-    }
-  } catch (_) {}
-  return '';
-}
-
-function worktreeRegisterProject(root, wt, derivedProject) {
-  const shortBranch = String(wt.branch || '').replace(/^refs\/heads\//, '');
-  if (!shortBranch || !wt.worktree) return { project: '', foreign: false };
-  const rows = [];
+// Returns { project, dir } — the owning project AND the one folder to read its receipt from — or
+// null when no single record owns the worktree.
+function currentRunDir(root, branch) {
+  const records = [];
   for (const base of [path.join(root, 'kaola-workflow'), path.join(root, 'kaola-workflow', 'archive')]) {
     let entries = [];
     try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch (_) { continue; }
     for (const entry of entries) {
       if (!entry.isDirectory() || !isSafeName(entry.name)) continue;
-      const stateFile = path.join(base, entry.name, 'workflow-state.md');
-      const receiptFile = path.join(base, entry.name, '.cache', 'sink-receipt.json');
-      const hasReceipt = fs.existsSync(receiptFile);
-      // A folder that carries only a sink-receipt is still a run record: the receipt names its own
-      // project and branch, and #1100's own fixture (a receipt with no state file) is that shape.
-      // Reading it keeps the receipt-driven pin working for the folders the state reader cannot see.
-      let receiptBranch = '';
-      let receiptProject = '';
-      if (hasReceipt) {
-        try {
-          const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
-          receiptBranch = String((receipt && receipt.branch) || '');
-          receiptProject = (receipt && receipt.project) || '';
-        } catch (_) { /* a torn receipt names nothing; the state file below still can */ }
-      }
+      const projectDir = path.join(base, entry.name);
+      const stateFile = path.join(projectDir, 'workflow-state.md');
       let content = null;
-      if (fs.existsSync(stateFile)) {
-        try { content = fs.readFileSync(stateFile, 'utf8'); } catch (_) { content = null; }
-      }
-      if (!content && !hasReceipt) continue;
-      const project = (content && projectNameFromStateContent(content)) ||
-        (isSafeName(receiptProject) ? receiptProject : entry.name);
-      // The record is about THIS worktree when its branch matches, or — for a receipt-only folder
-      // whose receipt carries no branch — when its name is the project today's code would have
-      // derived from the branch. That keeps the legacy record readable WITHOUT letting it stand for
-      // a different project.
-      const branchMatches = shortBranch && ((content && field(content, 'branch') === shortBranch) ||
-        (!content && receiptBranch === shortBranch));
-      const derivedMatches = !content && !receiptBranch && !!derivedProject && project === derivedProject;
-      if (!branchMatches && !derivedMatches) continue;
-      rows.push({
-        project,
-        claimTs: content ? field(content, 'claim_ts') : '',
-        claimedPath: content ? field(content, 'worktree_path') : '',
-        hasReceipt
-      });
+      try { content = fs.readFileSync(stateFile, 'utf8'); } catch (_) { continue; }
+      if (field(content, 'branch') !== branch) continue;
+      const project = field(content, 'name');
+      if (!project || !isSafeName(project)) continue;
+      records.push({ projectDir, project, claimTs: field(content, 'claim_ts'), live: base === path.join(root, 'kaola-workflow') });
     }
   }
-  if (rows.length === 0) return { project: '', foreign: false };
-  // A record that names a DIFFERENT checkout is about a different worktree. It is real evidence, but
-  // weaker: an old run archived against a moved/renamed root would otherwise veto the worktree's own
-  // claim. A receipt-only record names no path at all, so it is neither agreeing nor foreign — it is
-  // simply weaker than a dated claim and is resolved by the time-series rule below.
-  const agreeing = rows.filter(r => r.claimedPath && sameWorktreePath(r.claimedPath, wt.worktree));
-  const foreign = rows.filter(r => r.claimedPath && !sameWorktreePath(r.claimedPath, wt.worktree));
-  const candidates = agreeing.length ? agreeing : rows;
-  if (!agreeing.length && foreign.length === rows.length) return { project: '', foreign: true };
-  if (!candidates.some(r => r.hasReceipt)) return { project: '', foreign: false };
-  // A branch is REUSED across runs of one issue, so the register is a time series: only the NEWEST
-  // claim can be the live run, and it must be the one that still carries a receipt. A receipt-only
-  // record has no claim_ts to order by, so it never outranks a dated claim — it stands in only when
-  // the register holds no dated claim at all (that is #1100's shape: a receipt and nothing else).
-  const dated = candidates.filter(r => r.claimTs);
-  const live = dated.length
-    ? candidates.filter(r => r.claimTs === dated.reduce((max, r) => (r.claimTs > max ? r.claimTs : max), ''))
-    : candidates;
-  if (!live.some(r => r.hasReceipt)) return { project: '', foreign: false };
-  const owners = new Set(live.map(r => r.project));
-  return { project: owners.size === 1 ? live[0].project : '', foreign: false };
-}
-
-// Returns the project name that owns the checkout, or '' when no record resolves it. The worktree's
-// own run record is authoritative when it exists — it is the run standing in this checkout — and a
-// weaker register match (an old run archived against another path) never overrides it. Two sources
-// that genuinely disagree, with only the weaker one available, resolve to nothing rather than to a
-// guess.
-//
-// `derivedProject` is today's answer, `issue-<N>` from the branch. It is used ONLY to keep a
-// receipt-only record readable: a folder holding a receipt but no workflow-state.md (legacy and test
-// fixtures both have that shape) has nothing but its own name and its receipt's `project` to match
-// with, so it resolves only when that name is the one the old code would have derived — never to a
-// different, guessed project.
-function worktreeOwningProject(root, wtPath, wt, derivedProject) {
-  const fromWorktree = worktreeStateProject(wtPath);
-  const register = worktreeRegisterProject(root, wt || { branch: '', worktree: wtPath }, derivedProject);
-  if (fromWorktree) return fromWorktree;
-  return register.foreign ? '' : register.project;
+  if (records.length === 0) return null;
+  const liveClaim = (records.find(r => r.live && r.claimTs) || {}).claimTs || '';
+  let candidates = records;
+  if (liveClaim) candidates = records.filter(r => r.claimTs === liveClaim);
+  const owners = new Set(candidates.map(r => r.project));
+  if (owners.size !== 1) return null;
+  // One project, but two runs of it can both carry this claim_ts (a re-run of the same folder). Prefer
+  // the candidate whose receipt is its own — the sink writes `project`/`branch` into it — and refuse
+  // when that still leaves the choice open.
+  if (candidates.length > 1) {
+    const anchored = candidates.filter(r => {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(r.projectDir, '.cache', 'sink-receipt.json'), 'utf8'));
+        return receipt.project === r.project;
+      } catch (_) { return false; }
+    });
+    if (anchored.length !== 1) return null;
+    candidates = anchored;
+  }
+  return { project: candidates[0].project, dir: candidates[0].projectDir };
 }
 
 // #1097/#1100/#1102: the one resumability source of truth both stale-sweep worktree arms share. The
@@ -5589,40 +5507,19 @@ function worktreeOwningProject(root, wtPath, wt, derivedProject) {
 // this is a receipt-driven pin, never a blanket exemption. (Called from the integration arm since
 // 57fc4c67 and from the lane arm since #1100.)
 //
-// The project is passed in, never derived from the branch: a run folder may be `bundle-<set>` or a
-// custom name, and deriving `issue-<N>` made both reads miss so the pin was silently inert.
-//
-// `roots` names every checkout this receipt may live in. The main checkout is always one; the lane
-// arm adds the worktree ITSELF, because a live run's folder (and so its receipt) is written inside
-// its own checkout before the finalize mirror puts a copy on main.
-function sinkReceiptResumable(root, projectName, extraRoots) {
-  if (!projectName) return false;
-  const roots = [root].concat(Array.isArray(extraRoots) ? extraRoots : []);
-  const dirs = [];
-  for (const base of roots) {
-    if (!base) continue;
-    dirs.push(path.join(base, 'kaola-workflow', projectName));
-    dirs.push(path.join(base, 'kaola-workflow', 'archive', projectName));
-    // Archive renames a colliding destination to `<project>.archived-<ts>` — the same convention
-    // findArchiveAuthorities already matches — so the archived copy is found by prefix, not by the
-    // exact name alone.
-    const archiveBase = path.join(base, 'kaola-workflow', 'archive');
-    try {
-      for (const entry of fs.readdirSync(archiveBase)) {
-        if (!entry.startsWith(projectName + '.archived-')) continue;
-        if (entry.slice(projectName.length + '.archived-'.length).includes('/')) continue;
-        dirs.push(path.join(archiveBase, entry));
-      }
-    } catch (_) {}
-  }
-  for (const dir of dirs) {
-    let receipt = null;
-    try { receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8')); }
-    catch (_) { receipt = null; }
-    if (!receipt || !receipt.steps || typeof receipt.steps !== 'object') continue;
-    if (Object.values(receipt.steps).some((v) => v !== 'done')) return true;
-  }
-  return false;
+// The receipt is read from the ONE folder the owning run resolved to, never from every folder that
+// shares its name: an old run's leftover receipt must not pin a new run's worktree. `dir` null means
+// the owning folder is the project itself under the main checkout (the integration arm, and a run
+// whose own folder is absent).
+function sinkReceiptResumable(root, project, dir) {
+  if (!project) return false;
+  const receiptPath = dir
+    ? path.join(dir, '.cache', 'sink-receipt.json')
+    : path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json');
+  let receipt = null;
+  try { receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); } catch (_) { return false; }
+  if (!receipt || !receipt.steps || typeof receipt.steps !== 'object') return false;
+  return Object.values(receipt.steps).some((v) => v !== 'done');
 }
 
 function collectStale(root) {
@@ -5655,7 +5552,14 @@ function collectStale(root) {
     // #1102: the receipt lives in the run's OWN folder, which need not be named `issue-<N>` — a
     // bundle or custom-named run reaches it only through the owning project resolved from the run
     // records. An unresolved owner passes '' and the pin stays inert, exactly as before.
-    const sinkResumable = sinkReceiptResumable(root, worktreeOwningProject(root, wt.worktree, wt, projectName), [wt.worktree]);
+    // #1102: the receipt lives in the run's OWN folder, which need not be named `issue-<N>` — a
+    // bundle or custom-named run reaches it only through the owning run resolved from the main
+    // checkout's records. A worktree no record claims keeps the DERIVED `issue-<N>` behavior
+    // verbatim (never an unpinning), so the #1100 pin is unchanged for ordinary runs.
+    const owner = currentRunDir(root, shortBranch);
+    const sinkResumable = owner
+      ? sinkReceiptResumable(root, owner.project, owner.dir)
+      : sinkReceiptResumable(root, projectName, null);
 
     if ((isClosed || isArchived) && !inActiveSet && !sinkResumable) {
       stale_worktrees.push({
@@ -5703,7 +5607,7 @@ function collectStale(root) {
         // legacy leftover, or a completed sink's garbage) sweeps exactly as before.
         // #1102: this arm already HOLDS the true project — the directory name — so it needs no
         // resolution; only the receipt lookup must stop assuming the project is `issue-<N>`.
-        const sinkResumableW = sinkReceiptResumable(root, projectName);
+        const sinkResumableW = sinkReceiptResumable(root, projectName, null);
         if ((isArchivedW || isClosedW) && !inActiveSetW && !sinkResumableW) {
           stale_integration_worktrees.push({
             path: wtPath,
