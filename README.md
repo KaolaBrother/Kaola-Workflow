@@ -197,20 +197,21 @@ See [Workflow State Contract](docs/workflow-state-contract.md) for resume and ar
 
 ## Token usage at a glance
 
-Approximate **static prompt footprint for v12.0.1**, using the generated GitHub edition:
+Approximate **static prompt footprint for the #1101 candidate** (after 12.2.6), using the generated
+GitHub edition:
 
 | Runtime | Workflow Next | Finalize | Global rule | Combined, one copy each |
 |---|---:|---:|---:|---:|
-| Claude Code | 2,760 | 3,140 | 490 | 6,390 |
-| Codex | 2,710 | 3,000 | 490 | 6,200 |
-| Cursor | 2,280 | 2,560 | 1,550 | 6,390 |
-| Grok CLI | 1,900 | 2,290 | 1,370 | 5,560 |
-| Devin CLI | 1,930 | 2,350 | 1,340 | 5,620 |
-| Droid CLI | 1,930 | 2,360 | 1,390 | 5,680 |
-| DSH | 1,920 | 2,340 | 1,330 | 5,590 |
-| Kimi Code | 2,610 | 3,030 | 490 | 6,130 |
-| OpenCode | 2,610 | 3,030 | 490 | 6,130 |
-| ZCode | 2,630 | 3,030 | 490 | 6,150 |
+| Claude Code | 2,690 | 3,200 | 610 | 6,500 |
+| Codex | 2,620 | 3,070 | 610 | 6,300 |
+| Cursor | 2,410 | 2,580 | 1,360 | 6,350 |
+| Grok CLI | 2,060 | 2,570 | 1,310 | 5,940 |
+| Devin CLI | 2,090 | 2,600 | 1,340 | 6,030 |
+| Droid CLI | 2,090 | 2,600 | 1,360 | 6,050 |
+| DSH | 2,080 | 2,590 | 1,300 | 5,970 |
+| Kimi Code | 2,640 | 3,150 | 610 | 6,400 |
+| OpenCode | 2,640 | 3,150 | 610 | 6,400 |
+| ZCode | 2,060 | 2,570 | 1,370 | 6,000 |
 
 Each component is estimated as whitespace-separated words × 1.5, rounded to the nearest 10 tokens;
 the total sums one copy of each displayed component. **These are not tokenizer measurements or

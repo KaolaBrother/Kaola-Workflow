@@ -1,9 +1,9 @@
 # Prompt size measurement
 
 The [README token table](../README.md#token-usage-at-a-glance) is a static planning estimate, not a
-runtime quota, billed-token report, or promised task cost. Baseline: release
-`kaola-workflow--v12.0.1` (2026-09-13), which carries the `#1076` deduplication on top of
-`kaola-workflow--v12.0.0` at publication commit `9dbec6724735f9da64f01c767451d19e5e36c6dc`.
+runtime quota, billed-token report, or promised task cost. Baseline: the unreleased #1101 candidate
+(no Kaola subagent roles), measured on 2026-09-27 at commit `f1291212cfd36dad5f911bea9606522eff8180e6`
+on top of `main` `04866c50`. The previous baseline was release `kaola-workflow--v12.0.1`.
 
 ## Raw word counts
 
@@ -14,26 +14,26 @@ components. This heuristic has not been calibrated against every supported model
 
 | Runtime | Next words | Finalize words | Global words | Total words |
 |---|---:|---:|---:|---:|
-| Claude Code | 1838 | 2095 | 324 | 4257 |
-| Codex | 1804 | 2002 | 324 | 4130 |
-| Cursor | 1517 | 1706 | 1034 | 4257 |
-| Grok CLI | 1267 | 1528 | 915 | 3710 |
-| Devin CLI | 1286 | 1567 | 892 | 3745 |
-| Droid CLI | 1286 | 1570 | 928 | 3784 |
-| DSH | 1281 | 1558 | 889 | 3728 |
-| Kimi Code | 1739 | 2018 | 324 | 4081 |
-| OpenCode | 1741 | 2022 | 324 | 4087 |
-| ZCode | 1751 | 2023 | 324 | 4098 |
+| Claude Code | 1794 | 2131 | 407 | 4332 |
+| Codex | 1747 | 2046 | 407 | 4200 |
+| Cursor | 1608 | 1717 | 904 | 4229 |
+| Grok CLI | 1373 | 1714 | 876 | 3963 |
+| Devin CLI | 1392 | 1733 | 891 | 4016 |
+| Droid CLI | 1392 | 1733 | 906 | 4031 |
+| DSH | 1387 | 1728 | 867 | 3982 |
+| Kimi Code | 1761 | 2100 | 407 | 4268 |
+| OpenCode | 1759 | 2100 | 407 | 4266 |
+| ZCode | 1373 | 1714 | 914 | 4001 |
 
 No Init, separate compact recovery, project rules, vendor prompts, history,
 tool traffic, reasoning, or model output is counted. The three components need not be freshly
-injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin/Droid/DSH is counted in
+injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin/Droid/DSH/ZCode is counted in
 its global carrier; it is not added again to their command columns. GitLab and Gitea copies are
 excluded. Tokenizer differences and runtime caching require actual usage reports for cost analysis.
 
 ## Reproduce
 
-Use a disposable independent clone at the baseline tag, because rendering writes generated files.
+Use a disposable independent clone at the baseline revision, because rendering writes generated files.
 Run these existing generators from that clone's root:
 
 ```bash
@@ -66,7 +66,7 @@ const carriers = {
   dsh: ['.dsh/skills/workflow-next/SKILL.md', '.dsh/skills/kaola-workflow-finalize/SKILL.md'],
   kimi: ['.kimi/skills/workflow-next/SKILL.md', '.kimi/skills/kaola-workflow-finalize/SKILL.md'],
   opencode: ['.opencode/commands/workflow-next.md', '.opencode/commands/kaola-workflow-finalize.md'],
-  zcode: ['.zcode/commands/workflow-next.md', '.zcode/commands/kaola-workflow-finalize.md'],
+  zcode: ['.zcode/skills/kaola-workflow-next/SKILL.md', '.zcode/skills/kaola-workflow-finalize/SKILL.md'],
 };
 const words = text => String(text).trim().split(/\s+/u).filter(Boolean).length;
 for (const [runtime, files] of Object.entries(carriers)) {
