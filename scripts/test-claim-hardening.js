@@ -5672,21 +5672,23 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   // Case A — a bundle/custom-named run is pinned. The owning folder `bundle-96401-96402` holds a
   // mid-flight receipt; NO `issue-96401` folder exists anywhere (the old derived name), so the
   // pre-fix pin read two absent paths and swept the live run's own lane worktree.
+  //
+  // (repair round) The run record lives in the MAIN checkout, matching production: the sink writes
+  // the receipt under the main root (sink-merge.js), and the lane worktree stays CLEAN so the
+  // classification — not `skipped_dirty` — is what this case reads.
   {
     const fx = makeRepo1102();
     try {
-      // The run's state also travels WITH the worktree, which is how a live run's folder is reached.
-      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+      writeState1102(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
         '## Sink', 'branch: workflow/issue-96401', 'issue_number: 96401', 'sink: merge',
         'run_posture: worktree', 'main_root: ' + fx.root, 'session_marker: s-1102-test',
         'claim_ts: 2026-09-27T00:00:00.000Z',
         'worktree_path: ' + fx.wtPath,
         'issue_numbers: 96401,96402', 'bundle_id: bundle-96401-96402', ''
       ]);
-      writeReceipt1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), midFlightReceipt('bundle-96401-96402'));
-      // The worktree is DIRTY (its run folder is untracked) and a dirty worktree survives on its own,
-      // which would mask the pin. So the pin is read from the CLASSIFICATION instead: `stale-worktree-
-      // check` must report the worktree ACTIVE, not merely unremoved.
+      writeReceipt1102(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), midFlightReceipt('bundle-96401-96402'));
+      // The pin is read from the CLASSIFICATION, not from survival: `stale-worktree-check` names the
+      // worktree ACTIVE only when the owning run's receipt was actually found.
       const { out, stderr } = sweep1102(fx.root);
       assert(out.dry_run === false, '#1102 bundle pin: dry_run must be false, got ' + JSON.stringify(out) + '\nstderr: ' + stderr);
       const cls = classify1102(fx.root, fx.wtPath);
@@ -5797,7 +5799,8 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       });
       const r1 = sweep1102(fx.root);
       assert(!fs.existsSync(fx.wtPath),
-        '#1102 all-done: a COMPLETED custom-named run\'s leftover lane worktree sweeps exactly as before');      assert(Array.isArray(r1.out.removed) && r1.out.removed.some(p => p === fx.wtPath),
+        '#1102 all-done: a COMPLETED custom-named run\'s leftover lane worktree sweeps exactly as before');
+      assert(Array.isArray(r1.out.removed) && r1.out.removed.some(p => p === fx.wtPath),
         '#1102 all-done: removed must contain the completed run\'s worktree, got ' + JSON.stringify(r1.out.removed) + '\nstderr: ' + r1.stderr);
     } finally { cleanup1102(fx); }
   }
@@ -5854,6 +5857,146 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         '#1102 no-owner floor: removed must contain the W, got ' + JSON.stringify(out.removed));
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // --- R1–R5 (repair round): the resolution must be identity-safe in BOTH directions -----------
+  // The first candidate read receipts from every folder sharing the resolved name, which let an OLD
+  // run's leftover receipt pin a NEW run (R1, R2), and dropped the derived-name fallback, which
+  // unpinned ordinary `issue-<N>` runs that #1100 protected (R3, R4). R5 covers two records that
+  // disagree. Every expectation below is the behavior of base 04866c50.
+  {
+    const mkRepo = () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102r-')));
+      const kwRoot = root + '.kw';
+      g1102(root, ['init', '-b', 'main']);
+      g1102(root, ['config', 'user.email', 't@t.com']);
+      g1102(root, ['config', 'user.name', 'Test']);
+      g1102(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1102(root, ['add', 'README.md']);
+      g1102(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(kwRoot, { recursive: true });
+      const wtPath = path.join(kwRoot, 'issue-96401');
+      g1102(root, ['worktree', 'add', '-b', 'workflow/issue-96401', '--', wtPath, 'HEAD']);
+      return { root, kwRoot, wtPath };
+    };
+    const cleanupR = (fx) => {
+      try { fs.rmSync(fx.root, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(fx.kwRoot, { recursive: true, force: true }); } catch (_) {}
+    };
+    const stateR = (dir, name, lines) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: ' + name, 'status: active', '', '## Sink']
+          .concat(lines).join('\n') + '\n');
+    };
+    const receiptR = (dir, obj) => {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj));
+    };
+    const clsR = (root, wtPath) => {
+      // spawn-class: cli-contract
+      const r = spawnS1102(process.execPath, [CLAIM1102, 'stale-worktree-check'], {
+        cwd: root, encoding: 'utf8',
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '0',
+          KAOLA_GH_MOCK_SCRIPT: path.join(binDir1102, 'gh.js')
+        })
+      });
+      let o = {};
+      try { o = JSON.parse(r.stdout); } catch (_) {}
+      return {
+        stalled: Array.isArray(o.stale_worktrees) && o.stale_worktrees.some(w => w.path === wtPath),
+        active: Array.isArray(o.active_worktrees) && o.active_worktrees.some(w => w.path === wtPath),
+        out: o, stderr: r.stderr
+      };
+    };
+    const AR = ['kaola-workflow', 'archive'];
+
+    // R1 — the old same-name archived run must not pin the new run, even when the new run's state
+    // has also been mirrored into the worktree (finalize Step 8a does main → worktree).
+    {
+      const fx = mkRepo();
+      try {
+        const cur = ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z'];
+        stateR(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', cur);
+        stateR(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', cur);
+        const old = path.join(fx.root, ...AR, 'bundle-96401-96402');
+        stateR(old, 'bundle-96401-96402', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T03:00:00.000Z']);
+        receiptR(old, { project: 'bundle-96401-96402', steps: { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' } });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.stalled && !c.active,
+          '#1102 R1: the OLD same-name archived run\'s mid-flight receipt must NOT pin the NEW run\'s worktree, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // R2 — several archives of one issue: an OLD suffixed archive holds an abandoned mid-flight
+    // receipt while the CURRENT run's receipt is all-done. Only the current run counts.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+        stateR(cur, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receiptR(cur, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: { preflight: 'done', merge: 'done', push_main: 'done', closure: 'done' } });
+        const plain = path.join(fx.root, ...AR, 'issue-96401');
+        stateR(plain, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T03:00:00.000Z']);
+        const old = path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-25T00-00-00-000Z');
+        stateR(old, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-24T03:00:00.000Z']);
+        receiptR(old, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' } });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.stalled && !c.active,
+          '#1102 R2: an older suffixed archive\'s abandoned mid-flight receipt must NOT pin the current run whose own receipt is all-done, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // R3 — an ordinary issue-<N> run, mid-sink, whose recorded worktree_path no longer spells this
+    // worktree (repo moved / `git worktree move`). #1100 pinned it; the resolver must not unpin it.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+        stateR(cur, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: /old/location/issue-96401', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receiptR(cur, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' } });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.active && !c.stalled,
+          '#1102 R3: a mid-sink issue-<N> run whose recorded worktree_path no longer matches must stay PINNED — dropping to unpinned makes a live worktree sweepable (#1100 regression), got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // R4 — the current run's state has no claim_ts (legacy/partial), an older archive of the same
+    // issue carries one. The live run's own receipt must still pin it.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+        stateR(cur, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath]);
+        receiptR(cur, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' } });
+        const old = path.join(fx.root, ...AR, 'issue-96401');
+        stateR(old, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T03:00:00.000Z']);
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.active && !c.stalled,
+          '#1102 R4: a mid-sink issue-<N> run whose state carries no claim_ts must stay PINNED, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // R5 — a leftover folder in the worktree names an OLD run whose archived receipt is mid-flight,
+    // while main's live register names the current run, which has no receipt. The worktree-side
+    // leftover must not decide it: this worktree is the current run's and is stale.
+    {
+      const fx = mkRepo();
+      try {
+        stateR(path.join(fx.root, 'kaola-workflow', 'issue-96401'), 'issue-96401',
+          ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        stateR(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402',
+          ['branch: workflow/issue-96401', 'worktree_path: /elsewhere', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+        const old = path.join(fx.root, ...AR, 'bundle-96401-96402');
+        stateR(old, 'bundle-96401-96402', ['branch: workflow/issue-96401', 'worktree_path: /elsewhere', 'claim_ts: 2026-09-01T00:00:00.000Z']);
+        receiptR(old, { project: 'bundle-96401-96402', steps: { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' } });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.stalled && !c.active,
+          '#1102 R5: a worktree-side leftover of an OLD run must not pin the worktree that main\'s live register names as the current run, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
     }
   }
 

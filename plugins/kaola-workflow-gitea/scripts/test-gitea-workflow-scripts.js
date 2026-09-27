@@ -1848,6 +1848,105 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 2g (#1102 repair round): identity safety in BOTH directions. The first candidate read
+  // receipts from every folder sharing the resolved project name, which let an OLD run's leftover
+  // receipt pin a NEW run, and it dropped the derived-name fallback, which unpinned ordinary
+  // `issue-<N>` runs that #1100 protected. Every expectation here is the behavior of base 04866c50.
+  {
+    const mkRepo = () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-2g-')));
+      const kwRoot = tmp + '.kw';
+      const binDir = path.join(tmp, 'bin');
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-400');
+      addWorktree(tmp, 'workflow/gitea-issue-400', wtPath);
+      return { tmp, kwRoot, binDir, wtPath };
+    };
+    const cleanup2g = (fx) => {
+      fs.rmSync(fx.tmp, { recursive: true, force: true });
+      try { fs.rmSync(fx.kwRoot, { recursive: true, force: true }); } catch (_) {}
+    };
+    const state2g = (dir, name, lines) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: ' + name, 'status: active', '', '## Sink']
+          .concat(lines).join('\n') + '\n');
+    };
+    const receipt2g = (dir, obj) => {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj));
+    };
+    const cls2g = (fx) => runClaimOnline(['stale-worktree-check'], fx.tmp, fx.binDir);
+    const PENDING2G = { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' };
+    const DONE2G = { preflight: 'done', merge: 'done', push_main: 'done', closure: 'done' };
+
+    // R1 — the old same-name archived run must not pin the new run, even when the new run's state has
+    // also been mirrored into the worktree (finalize Step 8a does main → worktree).
+    {
+      const fx = mkRepo();
+      try {
+        const cur = ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z'];
+        state2g(path.join(fx.tmp, 'kaola-workflow', 'bundle-400-402'), 'bundle-400-402', cur);
+        state2g(path.join(fx.wtPath, 'kaola-workflow', 'bundle-400-402'), 'bundle-400-402', cur);
+        const old = path.join(fx.tmp, 'kaola-workflow', 'archive', 'bundle-400-402');
+        state2g(old, 'bundle-400-402', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T03:00:00.000Z']);
+        receipt2g(old, { project: 'bundle-400-402', steps: PENDING2G });
+        const out = cls2g(fx);
+        assert(out.stale_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g R1: an OLD same-name archived run\'s mid-flight receipt must NOT pin the NEW run\'s worktree, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // R2 — several archives of one issue: an OLD suffixed archive holds an abandoned mid-flight
+    // receipt while the CURRENT run's receipt is all-done. Only the current run counts.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+        state2g(cur, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receipt2g(cur, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: DONE2G });
+        const plain = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400');
+        state2g(plain, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T03:00:00.000Z']);
+        const old = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400.archived-2026-09-25T00-00-00-000Z');
+        state2g(old, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-24T03:00:00.000Z']);
+        receipt2g(old, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2G });
+        const out = cls2g(fx);
+        assert(out.stale_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g R2: an older suffixed archive\'s abandoned mid-flight receipt must NOT pin the current run whose own receipt is all-done, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // R3 — an ordinary issue-<N> run, mid-sink, whose recorded worktree_path no longer spells this
+    // worktree. #1100 pinned it; the resolver must not unpin it.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+        state2g(cur, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: /old/location/issue-400', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receipt2g(cur, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2G });
+        const out = cls2g(fx);
+        assert(out.active_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g R3: a mid-sink issue-<N> run whose recorded worktree_path no longer matches must stay PINNED, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // R4 — the current run's state has no claim_ts; an older archive of the same issue carries one.
+    {
+      const fx = mkRepo();
+      try {
+        const cur = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+        state2g(cur, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath]);
+        receipt2g(cur, { project: 'issue-400', branch: 'workflow/gitea-issue-400', steps: PENDING2G });
+        const old = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400');
+        state2g(old, 'issue-400', ['branch: workflow/gitea-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T03:00:00.000Z']);
+        const out = cls2g(fx);
+        assert(out.active_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g R4: a mid-sink issue-<N> run whose state carries no claim_ts must stay PINNED, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+  }
+
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc3-')));
