@@ -118,6 +118,10 @@ function normalizeMergeRequest(raw) {
     mr_iid: mrIid,
     id: firstNumber(data.id),
     title: data.title || '',
+    // #1098: the reuse identity check reads the description (every member's `Closes #n`) and the
+    // target branch, so both are part of the normalized view — not just the create-path fields.
+    description: data.description || data.body || '',
+    body: data.description || data.body || '',
     state: normalizeState(data.state),
     web_url: webUrl,
     mr_url: webUrl,

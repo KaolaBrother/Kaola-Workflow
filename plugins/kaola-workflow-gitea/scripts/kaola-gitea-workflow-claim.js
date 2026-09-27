@@ -5735,6 +5735,7 @@ function watchMergeRequests(root, args) {
   const cleanups = [];
   const probeErrors = []; // #396.6: visible probe errors (a viewPullRequest failure was swallowed)
   const archiveRefusals = [];
+  const liveProcessed = new Set(); // #1098 §2.2: folders this run's live lane already handled
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     // #396.6: bundle-aware --issue filter (match primary OR any bundle member, not the primary only).
     if (args.issue && folder.issue_iid !== args.issue &&
@@ -5750,6 +5751,7 @@ function watchMergeRequests(root, args) {
       continue;
     }
     watched++;
+    liveProcessed.add(folder.project); // #1098 §2.2: exclude from this run's reconciliation face
     if (state === 'merged') {
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
       if (!closureContract.archiveSucceeded(archiveResult)) {
@@ -5905,19 +5907,182 @@ function watchMergeRequests(root, args) {
       cleanups.push(cleanupEntry2);
     }
   }
-  return { watched, warnings, cleanups, probeErrors, archiveRefusals };
+  return { watched, warnings, cleanups, probeErrors, archiveRefusals, reconciled: reconcileArchivedPrRuns(root, args, liveProcessed) };
+}
+
+// #1098 §2.2 — post-merge reconciliation of ARCHIVED `sink: pr` runs. The standard PR path archives
+// BEFORE the sink runs, so the live-folder loop above never sees it; this face scans the MAIN
+// checkout's archive band instead. Bounded and stateless by construction: a run leaves the scan the
+// moment its archive becomes tracked at HEAD, no marker file is written, and main's branch
+// protection leaves nowhere to commit one. Publication and closeout are reported SEPARATELY: a
+// MERGED run is never re-merged, the mainline is never pushed, members are never manually closed
+// (#617 — the orchestrator closes the remainder by hand only after the merge is verified), and the
+// archive is never moved or deleted. OPEN stays pending; CLOSED-unmerged is the orchestrator's
+// decision and nothing is modified.
+function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed) {
+  const root = resolveMainRoot(cwdRoot) || cwdRoot;
+  const archiveBand = path.join(root, 'kaola-workflow', 'archive');
+  if (!fs.existsSync(archiveBand)) return [];
+  const names = [];
+  try {
+    for (const entry of fs.readdirSync(archiveBand, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !isSafeName(entry.name)) continue;
+      if (liveProcessed && liveProcessed.has(entry.name)) continue; // archived by THIS run's live lane
+      names.push(entry.name);
+    }
+  } catch (_) { return []; }
+  names.sort();
+  const out = [];
+  for (const name of names) {
+    const stateFile = path.join(archiveBand, name, 'workflow-state.md');
+    let content = '';
+    try { content = fs.readFileSync(stateFile, 'utf8'); } catch (_) { continue; }
+    const prUrl = field(content, 'pr_url');
+    // The discovery face: an archived `sink: pr` run with a durable PR identity. The status filter
+    // keeps `.discarded-` (abandoned) sweeps and OFFLINE placeholders out of this face.
+    if (field(content, 'sink') !== 'pr' || !prUrl || prUrl === 'OFFLINE_PLACEHOLDER') continue;
+    if (field(content, 'status') !== 'closed') continue;
+    const issueNumber = parseInt(field(content, 'issue_number'), 10);
+    if (!(Number.isFinite(issueNumber) && issueNumber > 0)) continue;
+    const members = Array.from(new Set(
+      (field(content, 'issue_numbers') || '')
+        .split(',').map(s => parseInt(s.trim(), 10))
+        .filter(n => Number.isFinite(n) && n > 0)
+        .concat([issueNumber])
+    )).sort((a, b) => a - b);
+    // #396.6: bundle-aware --issue filter — the primary OR any bundle member.
+    if (args.issue && issueNumber !== args.issue && !members.includes(args.issue)) continue;
+    const archiveRel = 'kaola-workflow/archive/' + name + '/';
+    const stateRel = archiveRel + 'workflow-state.md';
+    let trackedAtHead = false;
+    try {
+      execFileSync('git', ['-C', root, 'cat-file', '-e', 'HEAD:' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+      trackedAtHead = true;
+    } catch (_) { trackedAtHead = false; }
+    // Bounded: only runs not yet reconciled into main — unless the operator explicitly asks for
+    // this issue by number.
+    if (trackedAtHead && !args.issue) continue;
+
+    const prNumber = prNumberFromFolder({ pr_number: field(content, 'pr_number'), pr_url: prUrl });
+    if (!prNumber) continue;
+    // Normalize through the forge's own state router so a raw view and a pre-normalized one agree.
+    let state = '';
+    try {
+      state = forge.normalizeState(forge.viewPullRequest(prNumber).state);
+    } catch (_) { continue; }
+
+    if (state === 'open') {
+      out.push({ folder: name, pr_url: prUrl, publication: 'pending' });
+      continue;
+    }
+    if (state === 'closed') {
+      // Closed without merging: the archive is the only run record — report, modify nothing.
+      out.push({ folder: name, pr_url: prUrl, publication: 'not_published', reason: 'pr_closed_unmerged' });
+      continue;
+    }
+    if (state !== 'merged') continue;
+
+    // MERGED — reconcile against actual forge state.
+    // 1. Publication evidence: the archive on origin's default branch (a merged PR whose archive
+    //    never reached origin is the pre-#1098 legacy shape — reported local_only, not repaired).
+    const defBranch = defaultBranch(root) || 'main';
+    try { execFileSync('git', ['-C', root, 'fetch', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (_) {}
+    let archiveOnOrigin = false;
+    try {
+      execFileSync('git', ['-C', root, 'cat-file', '-e', 'origin/' + defBranch + ':' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+      archiveOnOrigin = true;
+    } catch (_) { archiveOnOrigin = false; }
+    // 2. Advance the main checkout to the merge point — report-only, inside the publish lock; the
+    //    kernel moves only this run's own byte-identical untracked archive aside first, and a
+    //    refusal (foreign tracked modifications) is the honest `behind`, never auto-resolved.
+    let mainCheckout = 'behind: origin/' + defBranch + ' unresolved';
+    let originDefSha = '';
+    try {
+      originDefSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'origin/' + defBranch],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (_) { originDefSha = ''; }
+    if (originDefSha) {
+      const lock = adaptiveSchema.acquirePublishLock(root, { project: name });
+      if (lock.acquired) {
+        try {
+          const adv = adaptiveSchema.advanceCheckedOutDefault(root, defBranch, originDefSha,
+            { pathspec: archiveRel });
+          mainCheckout = adv.advanced ? 'advanced' : ('behind: ' + (adv.detail || adv.reason || 'fast-forward refused'));
+        } finally {
+          try { adaptiveSchema.releasePublishLock(lock); } catch (_) {}
+        }
+      } else {
+        mainCheckout = 'behind: publish lock busy (' + (lock.reason || 'publish_busy') + ')';
+      }
+    }
+    // 3. Closeout per member — observed, never performed.
+    const mClosed = [], mFailed = [], mOpen = [];
+    for (const n of members) {
+      const p = probeIssueState(n);
+      if (p.state === 'closed') mClosed.push(n);
+      else if (p.state === 'unavailable') mFailed.push(n);
+      else mOpen.push(n);
+    }
+    const closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
+    // 4. Idempotent cleanup: the advisory claim per member, the run's worktree.
+    let claimLabelStatus;
+    const projectInfo = { full_name: field(content, 'full_name'), html_url: field(content, 'project_html_url') };
+    for (const n of members) {
+      const s = clearAdvisoryClaim(n, 'pr merged', projectInfo, name);
+      if (n === issueNumber) claimLabelStatus = s;
+    }
+    if (claimLabelStatus == null) claimLabelStatus = 'failed';
+    let worktreeRemoved = 'failed';
+    try {
+      const wtResult = removeWorktree(root, name, {
+        project: name,
+        worktree_path: field(content, 'worktree_path') || '',
+        branch: field(content, 'branch') || ''
+      });
+      if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+      else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
+      else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
+    } catch (_) { worktreeRemoved = 'failed'; }
+    // 5. Receipt + invariants — reported, never blocking. The run is ALREADY archived: no
+    //    archiveProjectDirSafely, no merge, no mainline push.
+    const receipt = buildClosureReceipt(name, issueNumber, {
+      archive: 'closed',
+      remote_issue_closed: closeout === 'closed' ? 'already_closed' : 'partial',
+      claim_label_removed: claimLabelStatus,
+      worktree_removed: worktreeRemoved,
+      branch_removed: 'kept'
+    });
+    receipt.issue_numbers = members;
+    receipt.closed_issues = mClosed.slice().sort((a, b) => a - b);
+    receipt.failed_issue_closures = mFailed.slice().sort((a, b) => a - b);
+    receipt.open_issues = mOpen.slice().sort((a, b) => a - b);
+    const archiveDir = path.join(root, archiveRel);
+    const folderInvariants = checkClosureInvariants(root, receipt, fs.existsSync(archiveDir) ? archiveDir : undefined);
+    out.push({
+      folder: name,
+      pr_url: prUrl,
+      publication: 'published',
+      archive: archiveOnOrigin ? 'published' : 'local_only',
+      closeout: closeout,
+      main_checkout: mainCheckout,
+      receipt: receipt,
+      closure_invariants: folderInvariants
+    });
+  }
+  return out;
 }
 
 function cmdWatchPr() {
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
-  const { watched, warnings, cleanups, probeErrors, archiveRefusals } = watchMergeRequests(root, args);
+  const { watched, warnings, cleanups, probeErrors, archiveRefusals, reconciled } = watchMergeRequests(root, args);
   const emit = { watched };
   if (warnings && warnings.length > 0) emit.warnings = warnings;
   if (cleanups && cleanups.length > 0) emit.cleanups = cleanups;
   if (probeErrors && probeErrors.length > 0) emit.probe_errors = probeErrors; // #396.6
   if (archiveRefusals && archiveRefusals.length > 0) emit.archive_refusals = archiveRefusals;
+  if (reconciled && reconciled.length > 0) emit.reconciled = reconciled; // #1098 §2.2
   output(emit, archiveRefusals && archiveRefusals.length > 0 ? 1 : 0);
 }
 

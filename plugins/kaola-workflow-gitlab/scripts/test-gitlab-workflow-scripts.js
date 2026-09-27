@@ -4153,4 +4153,157 @@ function testGitlabActiveFoldersSessionMarker579() {
 
 testGitlabActiveFoldersSessionMarker579();
 
+// ── #1098 §2.2 — post-merge reconciliation of ARCHIVED sink: mr runs ─────────────────────────
+// The standard MR path archives BEFORE the sink runs, so the live-folder loop never sees the run
+// again. `reconciled[]` is the second face: it scans the MAIN checkout's archive band for archived
+// `sink: mr` runs, reports each against actual forge state, and NEVER re-merges / re-creates / pushes
+// the mainline / closes members by hand. Every block below FAILS on the pre-#1098 watcher because
+// `reconciled` did not exist at all.
+function gl1098WriteArchivedRun(root, project, issueNumber, opts) {
+  const o = opts || {};
+  const archDir = path.join(root, 'kaola-workflow', 'archive', project);
+  fs.mkdirSync(archDir, { recursive: true });
+  fs.writeFileSync(path.join(archDir, 'workflow-state.md'), [
+    '# Kaola-Workflow State',
+    '',
+    '## Project',
+    'name: ' + project,
+    'status: closed',
+    '',
+    '## GitLab',
+    'issue_iid: ' + issueNumber,
+    'project_id: 77',
+    'path_with_namespace: group/project',
+    'project_web_url: https://gitlab.example/group/project',
+    '',
+    '## Sink',
+    'branch: workflow/gitlab-issue-' + issueNumber,
+    'issue_number: ' + issueNumber,
+    'sink: ' + (o.sink || 'mr'),
+    'mr_url: ' + (o.mrUrl || ('https://gitlab.example/group/project/-/merge_requests/' + issueNumber)),
+    'mr_iid: ' + issueNumber,
+    'worktree_path: ' + (o.worktreePath || ''),
+    o.extra || ''
+  ].join('\n') + '\n');
+  fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n');
+  return archDir;
+}
+
+function gl1098Stubs(extra) {
+  return Object.assign({
+    viewMergeRequest(mrIid) { return { mr_iid: mrIid, state: 'merged' }; },
+    listMergeRequests() { return []; },
+    discoverProject() { return { project_id: 77, path_with_namespace: 'group/project' }; },
+    listIssueNotes() { return []; },
+    updateIssue() { return null; },
+    createIssueNote() { return { id: 1 }; }
+  }, extra || {});
+}
+
+function testWatchMrReconcilesMergedArchivedRun() {
+  const root = tempRoot('kw-gl-1098-recon-merged-');
+  try {
+    initGitRepo(root);
+    gl1098WriteArchivedRun(root, 'issue-1098r1', 10981);
+    const result = withForge(gl1098Stubs(), () => claim.watchMergeRequests(root, {}));
+    assert(Array.isArray(result.reconciled),
+      '#1098: watchMergeRequests must emit reconciled[], got: ' + JSON.stringify(Object.keys(result)));
+    assert.strictEqual(result.reconciled.length, 1,
+      '#1098: the archived merged run must appear exactly once, got: ' + JSON.stringify(result.reconciled));
+    const entry = result.reconciled[0];
+    assert.strictEqual(entry.folder, 'issue-1098r1');
+    assert(['published', 'local_only'].indexOf(entry.archive) !== -1,
+      '#1098: archive status must be published or local_only, got: ' + entry.archive);
+    assert.strictEqual(result.watched, 0,
+      '#1098: an archived run is not a live folder — watched must stay 0, got: ' + result.watched);
+    console.log('testWatchMrReconcilesMergedArchivedRun: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testWatchMrReconcilesOpenArchivedRunPending() {
+  const root = tempRoot('kw-gl-1098-recon-open-');
+  try {
+    initGitRepo(root);
+    gl1098WriteArchivedRun(root, 'issue-1098r2', 10982);
+    const result = withForge(gl1098Stubs({
+      viewMergeRequest(mrIid) { return { mr_iid: mrIid, state: 'opened' }; }
+    }), () => claim.watchMergeRequests(root, {}));
+    const entry = (result.reconciled || []).find(e => e.folder === 'issue-1098r2');
+    assert(entry, '#1098: an OPEN archived run must still be reported');
+    assert.strictEqual(entry.publication, 'pending',
+      '#1098: an OPEN MR is pending, not published, got: ' + entry.publication);
+    console.log('testWatchMrReconcilesOpenArchivedRunPending: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testWatchMrReconcilesClosedUnmergedArchivedRun() {
+  const root = tempRoot('kw-gl-1098-recon-closed-');
+  try {
+    initGitRepo(root);
+    gl1098WriteArchivedRun(root, 'issue-1098r3', 10983);
+    const result = withForge(gl1098Stubs({
+      viewMergeRequest(mrIid) { return { mr_iid: mrIid, state: 'closed' }; }
+    }), () => claim.watchMergeRequests(root, {}));
+    const entry = (result.reconciled || []).find(e => e.folder === 'issue-1098r3');
+    assert(entry, '#1098: a CLOSED-unmerged archived run must be reported');
+    assert.strictEqual(entry.publication, 'not_published',
+      '#1098: a CLOSED-unmerged MR is not published, got: ' + entry.publication);
+    assert.strictEqual(entry.reason, 'mr_closed_unmerged',
+      '#1098: the reason must name the closed-unmerged class, got: ' + entry.reason);
+    assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'issue-1098r3', 'workflow-state.md')),
+      '#1098: reconciliation must not touch the archive');
+    console.log('testWatchMrReconcilesClosedUnmergedArchivedRun: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testWatchMrReconcileSkipsMergedSinkAndPlaceholder() {
+  const root = tempRoot('kw-gl-1098-recon-skip-');
+  try {
+    initGitRepo(root);
+    // A merge-sink run and an OFFLINE placeholder are NOT this face's business.
+    gl1098WriteArchivedRun(root, 'issue-1098r4', 10984, { sink: 'merge' });
+    gl1098WriteArchivedRun(root, 'issue-1098r5', 10985, { mrUrl: 'OFFLINE_PLACEHOLDER' });
+    const result = withForge(gl1098Stubs(), () => claim.watchMergeRequests(root, {}));
+    assert.deepStrictEqual(result.reconciled || [], [],
+      '#1098: non-MR sinks and OFFLINE placeholders must not be reconciled, got: ' + JSON.stringify(result.reconciled));
+    console.log('testWatchMrReconcileSkipsMergedSinkAndPlaceholder: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testWatchMrReconcileIsBoundedByTrackedAtHead() {
+  const root = tempRoot('kw-gl-1098-recon-bounded-');
+  try {
+    initGitRepo(root);
+    // Commit the archive at HEAD: the run is already reconciled into main, so the bounded scan must
+    // skip it unless the operator names the issue explicitly.
+    gl1098WriteArchivedRun(root, 'issue-1098r6', 10986);
+    G.git(root, ['add', '-A'], { encoding: 'utf8' });
+    G.git(root, ['commit', '-m', 'archive the run'], { encoding: 'utf8' });
+    const bounded = withForge(gl1098Stubs(), () => claim.watchMergeRequests(root, {}));
+    assert.deepStrictEqual(bounded.reconciled || [], [],
+      '#1098: a run already tracked at HEAD must leave the bounded scan, got: ' + JSON.stringify(bounded.reconciled));
+    // An explicit --issue names it, so the operator can always force the report.
+    const named = withForge(gl1098Stubs(), () => claim.watchMergeRequests(root, { issue: 10986 }));
+    assert((named.reconciled || []).length === 1,
+      '#1098: an explicit --issue must reach an already-tracked run, got: ' + JSON.stringify(named.reconciled));
+    console.log('testWatchMrReconcileIsBoundedByTrackedAtHead: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+testWatchMrReconcilesMergedArchivedRun();
+testWatchMrReconcilesOpenArchivedRunPending();
+testWatchMrReconcilesClosedUnmergedArchivedRun();
+testWatchMrReconcileSkipsMergedSinkAndPlaceholder();
+testWatchMrReconcileIsBoundedByTrackedAtHead();
+
 console.log('GitLab workflow script tests passed');

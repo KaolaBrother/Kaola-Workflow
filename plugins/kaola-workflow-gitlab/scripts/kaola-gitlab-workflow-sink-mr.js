@@ -1,5 +1,18 @@
 #!/usr/bin/env node
 'use strict';
+// sink-mr — the GitLab request sink. #1098 contract, the GitLab port of the GitHub sink-pr rules:
+//   All project-directory reads/writes target the MAIN checkout (a linked dev worktree resolving
+//   its own toplevel lost the archive, re-created a live folder inside the worktree, and bypassed
+//   the keep-open guard). An existing MR is looked up BEFORE any push: the durable record
+//   (.cache/sink-pr-result.json, then the state's mr_url) identifies it, else an open-MR scan for
+//   this source branch. An OPEN MR is reused (its target branch and every member's `Closes #n`
+//   verified — a bundle closes all or none); a MERGED MR reports already-merged and touches nothing
+//   (watch-mr reconciles it); a CLOSED-unmerged MR is refused as mr_closed_unmerged. Writes are
+//   idempotent so a re-entry mints nothing new. The run's archive rides the MR itself: the archive
+//   commit is built from the main checkout's working tree through the kernel's private index onto
+//   the branch tip, the local branch is advanced (ff-only where checked out, CAS update-ref
+//   otherwise), then pushed — never the default branch, never a force. The main checkout's index
+//   and HEAD are never touched. Keep-open stays merge-sink-only (#336, D4=(a)).
 
 const fs = require('fs');
 const os = require('os');
@@ -13,6 +26,8 @@ const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 const { defaultBranch } = require('./kaola-gitlab-workflow-claim');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 
 // #394: resolve the project folder — LIVE first, then the ARCHIVE folder (standard exit-3 lane).
 function resolveProjectDir(root, project) {
@@ -24,17 +39,24 @@ function resolveProjectDir(root, project) {
 }
 
 // #394: record mr_url to a DURABLE location BEFORE any throwable step after MR creation.
+// #1098: idempotent — when {project, branch, mr_url, mr_iid} are unchanged the file is NOT
+// rewritten; a fresh timestamp would mint a new archive commit on every re-entry.
 function recordMrResult(projectDir, project, mrUrl, mrIid, branch) {
   try {
     const cacheDir = path.join(projectDir, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
+    const recordPath = path.join(cacheDir, 'sink-pr-result.json');
+    const next = { project, branch, mr_url: mrUrl, mr_iid: mrIid, timestamp: new Date().toISOString() };
+    try {
+      const prev = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+      if (prev && typeof prev === 'object' &&
+          prev.project === next.project && prev.branch === next.branch &&
+          prev.mr_url === next.mr_url && prev.mr_iid === next.mr_iid) return;
+    } catch (_) {}
     // Atomic (tmp + fsync + rename): the whole point of this record is to be DURABLE before any step
     // that can throw after MR creation. A bare write is neither fsynced nor all-or-nothing, so the
-    // very crash it guards against could leave watch-pr a truncated, unparseable mr_url.
-    adaptiveSchema.writeFileAtomicReplace(
-      path.join(cacheDir, 'sink-pr-result.json'),
-      JSON.stringify({ project, branch, mr_url: mrUrl, mr_iid: mrIid, timestamp: new Date().toISOString() }, null, 2) + '\n'
-    );
+    // very crash it guards against could leave watch-mr a truncated, unparseable mr_url.
+    adaptiveSchema.writeFileAtomicReplace(recordPath, JSON.stringify(next, null, 2) + '\n');
   } catch (_) { /* best-effort durable record; never block the MR flow */ }
 }
 
@@ -113,32 +135,42 @@ function readConfig() {
   return Object.assign({}, defaults, config);
 }
 
-function sinkBlock(content) {
-  const match = /(^## Sink\s*$[\s\S]*?)(?=\n## |\s*$)/m.exec(content);
-  return match ? match[1] : '';
-}
-
-function replaceOrAppendLine(section, key, value) {
-  const line = key + ': ' + value;
-  const re = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':.*$', 'm');
-  return re.test(section) ? section.replace(re, line) : section.trimEnd() + '\n' + line;
-}
-
 function updateStateSinkBlock(stateFile, mrUrl, mrIid) {
   if (!fs.existsSync(stateFile)) return false;
   const content = fs.readFileSync(stateFile, 'utf8');
-  const section = sinkBlock(content);
-  if (!section) return false;
-  let updatedSection = section;
-  updatedSection = replaceOrAppendLine(updatedSection, 'sink', 'mr');
-  updatedSection = replaceOrAppendLine(updatedSection, 'mr_url', mrUrl);
-  updatedSection = replaceOrAppendLine(updatedSection, 'mr_iid', mrIid);
-  adaptiveSchema.writeFileAtomicReplace(stateFile, content.replace(section, updatedSection));
+  const lines = content.split('\n');
+  const start = lines.findIndex(l => /^## Sink\s*$/.test(l));
+  if (start === -1) return false; // no Sink block: skip silently, exactly as before
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^## /.test(lines[i])) { end = i; break; }
+  }
+  const block = lines.slice(start + 1, end);
+  const tail = [];
+  while (block.length > 0 && block[block.length - 1].trim() === '') tail.unshift(block.pop());
+  const upsert = (key, value) => {
+    const idx = block.findIndex(l => new RegExp('^' + key + ':').test(l));
+    const line = key + ': ' + value;
+    if (idx === -1) block.push(line);
+    else block[idx] = line;
+  };
+  upsert('sink', 'mr');
+  upsert('mr_url', mrUrl);
+  upsert('mr_iid', mrIid);
+  const updated = lines.slice(0, start + 1).concat(block, tail, lines.slice(end)).join('\n');
+  // #1098: idempotent re-entry — a byte-identical result is not rewritten (no mtime churn, and no
+  // new archive commit minted by the publish that follows).
+  if (updated === content) return false;
+  adaptiveSchema.writeFileAtomicReplace(stateFile, updated);
   return true;
 }
 
 function appendSummary(summaryFile, mrUrl, mrIid) {
   if (!fs.existsSync(path.dirname(summaryFile))) return false;
+  // #1098: re-entry must not mint duplicate lines — skip when this MR URL is already recorded.
+  let existing = '';
+  try { existing = fs.readFileSync(summaryFile, 'utf8'); } catch (_) {}
+  if (('\n' + existing + '\n').includes('\nMR URL: ' + mrUrl + '\n')) return false;
   fs.appendFileSync(summaryFile, '\nMR URL: ' + mrUrl + '\nMR IID: ' + mrIid + '\n');
   return true;
 }
@@ -157,6 +189,216 @@ function findMergeRequestForBranch(branch) {
   ) || null;
 }
 
+// #1098 §2.1-2: the durable identity of this project's MR — the .cache record first, then the
+// state Sink block's mr_url. An OFFLINE placeholder is not an identity. Returns '' when none.
+function readRecordedMrUrl(projectFolder, stateFile) {
+  try {
+    const rec = JSON.parse(fs.readFileSync(path.join(projectFolder, '.cache', 'sink-pr-result.json'), 'utf8'));
+    if (rec && typeof rec === 'object' && typeof rec.mr_url === 'string' &&
+        rec.mr_url && rec.mr_url !== 'OFFLINE_PLACEHOLDER') return rec.mr_url;
+  } catch (_) {}
+  try {
+    const m = fs.readFileSync(stateFile, 'utf8').match(/^mr_url:\s*(\S+)\s*$/m);
+    if (m && m[1] && m[1] !== 'OFFLINE_PLACEHOLDER') return m[1];
+  } catch (_) {}
+  return '';
+}
+
+// #1098 §2.1-2: an MR view normalized to the fields reuse routing needs. `description` is carried
+// because a bundle's reuse check reads every member's `Closes #n` out of it.
+function normalizeMrView(data) {
+  if (!data || typeof data !== 'object') return null;
+  const url = typeof data.mr_url === 'string' && data.mr_url ? data.mr_url
+    : (typeof data.web_url === 'string' && data.web_url ? data.web_url : '');
+  const iid = Number(data.mr_iid);
+  if (!url || !Number.isFinite(iid) || iid <= 0) return null;
+  return {
+    url: url,
+    iid: parseInt(iid, 10),
+    state: routeMergeRequestState(data),
+    head: String(data.source_branch || ''),
+    base: String(data.target_branch || ''),
+    body: String(data.description || '')
+  };
+}
+
+// #1098 §2.1-2: the recorded MR's CURRENT state — merged and closed are as load-bearing as open
+// (a merged MR must never be re-pushed or re-created; a closed one is the orchestrator's call).
+// Any probe failure returns null so the caller falls back to the head-based discovery.
+function viewRecordedMr(mrUrl) {
+  try {
+    const iidMatch = String(mrUrl).match(/\/(\d+)\/?\s*$/);
+    const iid = iidMatch ? parseInt(iidMatch[1], 10) : 0;
+    if (!iid) return null;
+    return normalizeMrView(forge.viewMergeRequest(iid));
+  } catch (_) { return null; }
+}
+
+// #1098 §2.1-2: record-less discovery — open MRs for this source branch. The target branch and the
+// Closes set are verified at reuse, not here, so an MR that exists on a different target is
+// REFUSED with its name rather than silently missed.
+function listOpenMrs(branch) {
+  try {
+    return forge.listMergeRequests({ state: 'opened' })
+      .filter(mr => mr.source_branch === branch && routeMergeRequestState(mr) === 'open')
+      .map(mr => normalizeMrView({
+        mr_iid: mr.mr_iid, mr_url: mr.mr_url || mr.web_url, web_url: mr.web_url,
+        state: mr.state, source_branch: mr.source_branch, target_branch: mr.target_branch,
+        description: mr.description
+      })).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// #1098 §2.1-4 helpers — the archive-commit path rules mirror sink-merge's archive_commit arm.
+
+// The paths under `pathspec` git would REFUSE to stage — untracked AND covered by an ignore rule.
+function ignoredUntrackedUnder(mainRoot, pathspec) {
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', pathspec],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// The members of `rels` ignored BY NAME ALONE — a rule about what a file is called is never
+// overridden by this sink. Location rules are; name rules (.DS_Store, *.log) are not ours to force.
+function repoWideIgnoredNames(root, rels) {
+  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
+  if (!names.length) return new Set();
+  try {
+    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
+      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
+        stdio: ['pipe', 'pipe', 'ignore'] });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch (_) { return new Set(); }
+}
+
+// The worktree that has `branch` checked out, or null.
+function worktreeHoldingBranch(mainRoot, branch) {
+  let out = '';
+  try {
+    out = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return null; }
+  let current = null;
+  for (const line of String(out).split('\n')) {
+    if (line.indexOf('worktree ') === 0) { current = line.slice('worktree '.length); continue; }
+    if (line === 'branch refs/heads/' + branch) return current;
+  }
+  return null;
+}
+
+function firstLineOf(result) {
+  const text = String((result && (result.stderr || result.stdout)) || '');
+  return text.split('\n').map(l => l.trim()).filter(Boolean)[0] || 'unknown error';
+}
+
+// #1098 §2.1-4: the run's archive rides the MR. NON-LINKED posture (main checkout HEAD == branch):
+// the legacy commit-on-HEAD flow, staging the whole resolved project dir instead of two files.
+// LINKED posture (HEAD != branch): the archive commit is built from the main checkout's working
+// tree through the kernel's private index onto the branch tip, the local branch is advanced
+// (ff-only merge in the worktree that holds it, CAS update-ref otherwise), then pushed. The main
+// checkout's index and HEAD are never touched; the default branch is never pushed; a push is never
+// forced. A refusal is reported and thrown — never retried, never forced.
+function publishArchiveWithMr(root, project, branch, projectFolder, mrUrl, options) {
+  const options_ = options || {};
+  let head = '';
+  try {
+    head = execFileSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {}
+  const relDir = path.relative(root, projectFolder).split(path.sep).join('/');
+  if (head === branch) {
+    spawnSync('git', ['-C', root, 'add', '--', relDir], { stdio: 'pipe' });
+    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    if (diffResult.status !== 0) {
+      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+        'chore: record MR metadata for ' + project], { stdio: 'pipe' });
+      if (commitResult.status !== 0) {
+        throw new Error(
+          'MR at ' + mrUrl + ' but metadata commit failed.\n' +
+          'Manual recovery: git add ' + relDir +
+          " && git commit -m 'chore: record MR metadata for " + project + "'" +
+          ' && git push origin ' + branch
+        );
+      }
+      if (!options_.skipPush) {
+        const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
+        if (pushResult.status !== 0) {
+          throw new Error(
+            'MR at ' + mrUrl + ' but metadata push failed.\n' +
+            'Manual recovery: git push origin ' + branch
+          );
+        }
+      }
+    }
+    return;
+  }
+  const archiveRel = 'kaola-workflow/archive/' + project + '/';
+  // A live (not yet archived) project has no archive band to publish; its records stay with the
+  // finalize transaction, and a re-entry after archive publishes them.
+  if (!fs.existsSync(path.join(root, archiveRel))) return;
+  if (options_.skipPush) return; // test context without a real remote/branch
+  let tip = '';
+  try {
+    tip = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'refs/heads/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {
+    throw new Error(
+      'MR at ' + mrUrl + ' but the local branch ' + branch + ' is missing — the archive cannot ride the MR.\n' +
+      'Manual recovery: re-create the branch from the MR head, then re-run sink-mr (the MR record is durable).'
+    );
+  }
+  const ignoredHere = ignoredUntrackedUnder(root, archiveRel);
+  const byName = repoWideIgnoredNames(root, ignoredHere);
+  const forcePaths = ignoredHere.filter(p => {
+    const base = p.split('/').pop();
+    return !byName.has(base) && base !== 'sink-receipt.json' && base !== 'sink-fallback.json';
+  });
+  const commitRes = adaptiveSchema.commitPathsOntoCandidate(root, {
+    candidate: tip,
+    arms: [{
+      paths: [archiveRel],
+      excludes: [
+        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-receipt.json',
+        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-fallback.json'
+      ]
+    }],
+    forcePaths: forcePaths,
+    message: 'chore: record MR metadata for ' + project
+  });
+  if (commitRes.error) {
+    throw new Error('MR at ' + mrUrl + ' but the archive commit failed: ' + commitRes.error +
+      '\nNot retried, not forced; re-run sink-mr to continue from here (the MR record is durable).');
+  }
+  if (!commitRes.committed) return; // tree identical to the tip — a re-entry is a no-op
+  const holder = worktreeHoldingBranch(root, branch);
+  if (holder) {
+    const merge = spawnSync('git', ['-C', holder, 'merge', '--ff-only', '--no-edit', commitRes.committed], { stdio: 'pipe' });
+    if (merge.status !== 0) {
+      throw new Error(
+        'MR at ' + mrUrl + ' but the fast-forward of ' + branch + ' in ' + holder + ' was refused (' +
+        firstLineOf(merge) + ').\nNot retried, not forced; clear the worktree and re-run sink-mr.'
+      );
+    }
+  } else {
+    const cas = spawnSync('git', ['-C', root, 'update-ref', 'refs/heads/' + branch, commitRes.committed, tip], { stdio: 'pipe' });
+    if (cas.status !== 0) {
+      throw new Error(
+        'MR at ' + mrUrl + ' but the compare-and-swap update of refs/heads/' + branch + ' was refused (' +
+        firstLineOf(cas) + ').\nNot retried, not forced; re-run sink-mr to continue from here.'
+      );
+    }
+  }
+  const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
+  if (push.status !== 0) {
+    throw new Error(
+      'MR at ' + mrUrl + ' but the archive push to origin/' + branch + ' was refused (' +
+      firstLineOf(push) + ').\nNot retried, not forced; re-run sink-mr to continue from here.'
+    );
+  }
+}
+
 function ensureMergeRequest(args, opts) {
   const options = opts || {};
   // Default true when gitExec stub or skipPush — both indicate test context without real git repo.
@@ -172,7 +414,11 @@ function ensureMergeRequest(args, opts) {
   assert(args.project && isSafeName(args.project), '--project must be a safe folder name');
   if (args.issue != null) assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');
 
-  const root = options.root || getRoot();
+  // #1098 §2.1-1: every project-directory read/write targets the MAIN checkout — a linked dev
+  // worktree resolving its own toplevel found no archive, re-created a live folder inside the
+  // worktree, and bypassed the keep-open guard. In a non-linked checkout resolveMainRoot is the
+  // toplevel itself, so existing behavior is unchanged. An explicit test `root` is authoritative.
+  const root = options.root || adaptiveSchema.resolveMainRoot(getRoot());
 
   // #336: keep-open is merge-sink-only — the MR body 'Closes #N' would auto-close the
   // kept-open issue, and watch-mr's archive-on-merge would delete the preserved roadmap source.
@@ -217,11 +463,18 @@ function ensureMergeRequest(args, opts) {
   }
 
   const gitExec = options.gitExec || execFileSync;
-  if (!options.skipPush) gitExec('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
 
   // #394: resolve the MR target branch from the default branch (a sink-fallback.json receipt from
-  // sink-merge may carry the already-resolved branch; prefer it, else probe).
+  // sink-merge may carry the already-resolved branch; prefer it, else probe). #1098: moved BEFORE
+  // the existing-MR lookup and the push so reuse validation compares against the resolved default.
   const projectFolder = resolveProjectDir(root, args.project);
+  const stateFile = path.join(projectFolder, 'workflow-state.md');
+  // #1098 §2.1-1: a folder that is neither live nor archived is a caller error, refused BEFORE any
+  // push or MR creation (the old resolveProjectDir returned the live path and let writes mkdir it
+  // back into existence).
+  assert(fs.existsSync(projectFolder),
+    'sink-mr: project folder not found (neither kaola-workflow/' + args.project +
+    '/ nor kaola-workflow/archive/' + args.project + ') — refusing before creating an MR');
   let targetBranch = 'main';
   try {
     const fbPath = path.join(projectFolder, '.cache', 'sink-fallback.json');
@@ -234,52 +487,77 @@ function ensureMergeRequest(args, opts) {
     try { targetBranch = defaultBranch(root) || 'main'; } catch (_) { targetBranch = 'main'; }
   }
 
-  const existing = findMergeRequestForBranch(args.branch);
-  const mr = existing || forge.createMergeRequest({
-    sourceBranch: args.branch,
-    targetBranch: targetBranch,
-    title: args.title || ('Workflow branch ' + args.branch),
-    description: args.description || closesBody(resolveMemberSet(args, path.join(projectFolder, 'workflow-state.md')))
-  });
+  // #1098 §2.1-2: find the existing MR BEFORE any push. Identity comes from the durable record
+  // first; record-less discovery scans open MRs for this source branch.
+  let existing = null;
+  const recordedUrl = readRecordedMrUrl(projectFolder, stateFile);
+  if (recordedUrl) existing = viewRecordedMr(recordedUrl);
+  if (!existing) {
+    const open = listOpenMrs(args.branch);
+    if (open.length > 0) existing = open[0];
+  }
+  if (existing) {
+    if (existing.state === 'merged') {
+      // Merged: no push, no create, no merge — §2.2's reconciliation owns the disposition.
+      return { mr_url: existing.url, mr_iid: existing.iid, already_merged: true };
+    }
+    if (existing.state !== 'open') {
+      // CLOSED without merging: the archive is the only run record, and reopening is the
+      // orchestrator's decision — refuse, modify nothing.
+      assert(false,
+        'sink-mr: refusing: MR ' + existing.url + ' is closed without merging (mr_closed_unmerged). ' +
+        'The orchestrator decides whether to reopen; nothing was pushed or created.');
+    }
+    // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
+    assert(existing.head === args.branch,
+      'sink-mr: refusing to reuse MR ' + existing.url + ': source branch is ' +
+      (existing.head || '(empty)') + ', expected ' + args.branch);
+    assert(existing.base === targetBranch,
+      'sink-mr: refusing to reuse MR ' + existing.url + ': target branch is ' +
+      (existing.base || '(empty)') + ', expected ' + targetBranch);
+    const members = resolveMemberSet(args, stateFile);
+    const missingCloses = members.filter(n =>
+      !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
+    assert(missingCloses.length === 0,
+      'sink-mr: refusing to reuse MR ' + existing.url + ': description is missing "Closes #' +
+      missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
+      '. A bundle closes every member or none (#592/#1094); the MR was not modified.');
+  }
 
-  assert(mr && mr.mr_iid, 'GitLab MR creation did not return an IID');
-  assert(mr.mr_url || mr.web_url, 'GitLab MR creation did not return a URL');
+  const reused = !!existing;
+  let mr;
+  if (!reused) {
+    if (!options.skipPush) gitExec('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
+    mr = forge.createMergeRequest({
+      sourceBranch: args.branch,
+      targetBranch: targetBranch,
+      title: args.title || ('Workflow branch ' + args.branch),
+      description: args.description || closesBody(resolveMemberSet(args, stateFile))
+    });
+    assert(mr && mr.mr_iid, 'GitLab MR creation did not return an IID');
+    assert(mr.mr_url || mr.web_url, 'GitLab MR creation did not return a URL');
+  } else {
+    mr = {
+      mr_iid: existing.iid,
+      mr_url: existing.url,
+      web_url: existing.url,
+      state: 'opened',
+      source_branch: existing.head,
+      target_branch: existing.base
+    };
+  }
 
-  // #394 RECORD-BEFORE-THROW: persist mr_url durably IMMEDIATELY after MR creation.
+  // #394 RECORD-BEFORE-THROW: persist mr_url durably IMMEDIATELY after the MR is identified.
   recordMrResult(projectFolder, args.project, mr.mr_url || mr.web_url, mr.mr_iid, args.branch);
 
   // #394: target the resolved project folder (archive folder in the exit-3 lane) for durable writes.
-  const stateFile = path.join(projectFolder, 'workflow-state.md');
   const summaryFile = path.join(projectFolder, 'finalization-summary.md');
   updateStateSinkBlock(stateFile, mr.mr_url || mr.web_url, mr.mr_iid);
   appendSummary(summaryFile, mr.mr_url || mr.web_url, mr.mr_iid);
   if (!skipMetadataCommit) {
-    const relState = path.relative(root, stateFile);
-    const relSummary = path.relative(root, summaryFile);
-    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
-    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
-    if (diffResult.status !== 0) {
-      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
-        'chore: record MR metadata for ' + args.project], { stdio: 'pipe' });
-      if (commitResult.status !== 0) {
-        const mrUrl = mr.mr_url || mr.web_url;
-        throw new Error(
-          'MR created at ' + mrUrl + ' but metadata commit failed.\n' +
-          'Manual recovery: git add ' + relState + ' ' + relSummary +
-          " && git commit -m 'chore: record MR metadata for " + args.project + "'" +
-          ' && git push origin ' + args.branch
-        );
-      }
-      if (!options.skipPush) {
-        const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', args.branch], { stdio: 'pipe' });
-        if (pushResult.status !== 0) {
-          throw new Error(
-            'MR created at ' + (mr.mr_url || mr.web_url) + ' but metadata push failed.\n' +
-            'Manual recovery: git push origin ' + args.branch
-          );
-        }
-      }
-    }
+    // #1098 §2.1-4 — the archive rides the MR (replaces the two-file metadata commit that landed
+    // on local main in the linked posture and never reached origin).
+    publishArchiveWithMr(root, args.project, args.branch, projectFolder, mr.mr_url || mr.web_url, options);
   }
   return mr;
 }
@@ -329,4 +607,5 @@ module.exports = {
   routeMergeRequestState,
   updateStateSinkBlock
 };
+
 

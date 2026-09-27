@@ -144,7 +144,11 @@ withForge({
       mr_url: 'https://gitlab.example/group/project/-/merge_requests/8',
       web_url: 'https://gitlab.example/group/project/-/merge_requests/8',
       state: 'opened',
-      source_branch: 'feature'
+      source_branch: 'feature',
+      // #1098: reuse now verifies the target branch and every member's `Closes #n`, so the
+      // discovery fixture must carry them — an MR with no target is a different MR, not this one.
+      target_branch: 'main',
+      description: 'Closes #68'
     }];
   },
   createMergeRequest() {
@@ -163,7 +167,9 @@ withForge({
     gitExec(bin, args) { calls.push([bin, args]); return ''; }
   });
   assert.strictEqual(mr.mr_iid, 8);
-  assert.deepStrictEqual(calls[0], ['git', ['push', 'origin', 'feature']]);
+  // #1098: the lookup precedes the push, so REUSE issues no push at all (the pre-#1098 sink pushed
+  // unconditionally before noticing the MR, which is the ordering this contract reverses).
+  assert.deepStrictEqual(calls, [], '#1098: reuse must not push — the lookup precedes the push');
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: mr'));
   assert(state.includes('mr_url: https://gitlab.example/group/project/-/merge_requests/8'));
@@ -3170,5 +3176,244 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+// ── #1098 §2.1 — the MR sink's request-identity contract ──────────────────────────────────────
+// The GitHub leg's five rules, ported to GitLab. Each block below FAILS on the pre-#1098 sink-mr:
+// (a) the lookup ran AFTER an unconditional push, so a re-entry pushed before noticing an existing
+// MR; (b) a MERGED MR was silently reused and re-pushed; (c) a CLOSED MR was silently reused;
+// (d) reuse never verified the target branch or the bundle's per-member `Closes #n`, so a stale or
+// partial MR was adopted; (e) the Sink block was rewritten byte-for-byte on every re-entry
+// (appendSummary minted a second `MR URL:` pair, updateStateSinkBlock re-emitted the block).
+// This is not quibbling about ordering: with the old code, a second sink-mr run on an already
+// merged MR either failed on the closed MR or silently pushed new bytes at it.
+function gl1098WriteTaskFixture(root, project, issueIid) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+    '# Kaola-Workflow State',
+    '',
+    '## Project',
+    'name: ' + project,
+    'status: active',
+    '',
+    '## GitLab',
+    'issue_iid: ' + issueIid,
+    'project_id: 77',
+    'path_with_namespace: group/project',
+    'project_web_url: https://gitlab.example/group/project',
+    '',
+    '## Sink',
+    'branch: workflow/gitlab-issue-' + issueIid,
+    'issue_number: ' + issueIid,
+    'sink: merge',
+    ''
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n');
+  return dir;
+}
+
+// (a)+(d) An OPEN MR on this very head is REUSED — and no push is issued on the reuse path.
+{
+  const root = tempRoot('kw-gl-1098-reuse-');
+  const dir = gl1098WriteTaskFixture(root, 'reuse-project', 680);
+  // Seed the durable record: identity comes from the record first, then the head scan.
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'reuse-project', branch: 'feature-reuse',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/68', mr_iid: 68 }, null, 2) + '\n');
+  const calls = [];
+  const created = [];
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 68, mr_url: 'https://gitlab.example/group/project/-/merge_requests/68',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/68', state: 'opened',
+        source_branch: 'feature-reuse', target_branch: 'main', description: 'Closes #680' };
+    },
+    createMergeRequest() { created.push(1); throw new Error('an OPEN MR must be reused, not re-created'); }
+  }, () => {
+    const mr = sinkMr.ensureMergeRequest({ branch: 'feature-reuse', project: 'reuse-project', issue: 680 }, {
+      root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+    });
+    assert.strictEqual(mr.mr_iid, 68, '#1098: the existing OPEN MR must be adopted');
+  });
+  assert.deepStrictEqual(calls, [], '#1098: reuse must NOT push — the lookup precedes the push');
+  assert.deepStrictEqual(created, [], '#1098: reuse must NOT create');
+  const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  assert(state.includes('mr_iid: 68'), '#1098: the reused MR IID must be recorded');
+}
+
+// (a) Record-less discovery: no .cache record, but the head scan finds an OPEN MR on this branch.
+{
+  const root = tempRoot('kw-gl-1098-scan-');
+  gl1098WriteTaskFixture(root, 'scan-project', 687);
+  const created = [];
+  withForge({
+    listMergeRequests() {
+      return [{ mr_iid: 87, mr_url: 'https://gitlab.example/group/project/-/merge_requests/87',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/87', state: 'opened',
+        source_branch: 'feature-scan', target_branch: 'main', description: 'Closes #687' }];
+    },
+    viewMergeRequest() { return null; },
+    createMergeRequest() { created.push(1); throw new Error('a discovered OPEN MR must be reused'); }
+  }, () => {
+    const mr = sinkMr.ensureMergeRequest({ branch: 'feature-scan', project: 'scan-project', issue: 687 },
+      { root, skipPush: true });
+    assert.strictEqual(mr.mr_iid, 87, '#1098: a record-less head scan must still find and reuse the MR');
+  });
+  assert.deepStrictEqual(created, [], '#1098: discovery must not create a second MR');
+}
+
+// (b) A MERGED MR is reported already_merged and NOTHING is pushed or created.
+{
+  const root = tempRoot('kw-gl-1098-merged-');
+  const dir = gl1098WriteTaskFixture(root, 'merged-project', 681);
+  // Seed the durable record so the recorded-URL probe finds this MR, not a head scan.
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'merged-project', branch: 'feature-merged',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/81', mr_iid: 81 }, null, 2) + '\n');
+  const calls = [];
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 81, mr_url: 'https://gitlab.example/group/project/-/merge_requests/81',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/81', state: 'merged',
+        source_branch: 'feature-merged', target_branch: 'main', description: 'Closes #681' };
+    },
+    createMergeRequest() { throw new Error('a MERGED MR must not be re-created'); }
+  }, () => {
+    sinkMr.ensureMergeRequest({ branch: 'feature-merged', project: 'merged-project', issue: 681 }, {
+      root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+    });
+  });
+  assert.deepStrictEqual(calls, [], '#1098: a MERGED MR must not be pushed at');
+}
+
+// (c) A CLOSED-unmerged MR is REFUSED by name; nothing is pushed, created, or modified.
+{
+  const root = tempRoot('kw-gl-1098-closed-');
+  const dir = gl1098WriteTaskFixture(root, 'closed-project', 682);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'closed-project', branch: 'feature-closed',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/82', mr_iid: 82 }, null, 2) + '\n');
+  const calls = [];
+  let refused = null;
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 82, mr_url: 'https://gitlab.example/group/project/-/merge_requests/82',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/82', state: 'closed',
+        source_branch: 'feature-closed', target_branch: 'main', description: 'Closes #682' };
+    },
+    createMergeRequest() { throw new Error('a CLOSED MR must not be re-created'); }
+  }, () => {
+    try {
+      sinkMr.ensureMergeRequest({ branch: 'feature-closed', project: 'closed-project', issue: 682 }, {
+        root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+      });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: a CLOSED-unmerged MR must be refused');
+  assert(/closed without merging|mr_closed_unmerged/.test(refused.message),
+    '#1098: the refusal must name closed-unmerged, got: ' + refused.message);
+  assert.deepStrictEqual(calls, [], '#1098: a CLOSED MR must not be pushed at');
+}
+
+// (d) Reuse verifies the TARGET branch — a same-head MR on another base is refused, not adopted.
+{
+  const root = tempRoot('kw-gl-1098-base-');
+  const dir = gl1098WriteTaskFixture(root, 'base-project', 683);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'base-project', branch: 'feature-base',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/83', mr_iid: 83 }, null, 2) + '\n');
+  let refused = null;
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 83, mr_url: 'https://gitlab.example/group/project/-/merge_requests/83',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/83', state: 'opened',
+        source_branch: 'feature-base', target_branch: 'release', description: 'Closes #683' };
+    },
+    createMergeRequest() { throw new Error('a base-mismatched MR must be refused, not re-created'); }
+  }, () => {
+    try {
+      sinkMr.ensureMergeRequest({ branch: 'feature-base', project: 'base-project', issue: 683 }, { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: an MR on a different target branch must be refused');
+  assert(/target branch|base/i.test(refused.message),
+    '#1098: the base refusal must name the target branch, got: ' + refused.message);
+}
+
+// (d) Reuse verifies EVERY member's `Closes #n` — a partial bundle MR is refused, never adopted.
+{
+  const root = tempRoot('kw-gl-1098-closes-');
+  const dir = gl1098WriteTaskFixture(root, 'bundle-684-685', 684);
+  fs.appendFileSync(path.join(dir, 'workflow-state.md'), 'issue_numbers: 684,685\n');
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'bundle-684-685', branch: 'feature-bundle684',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/84', mr_iid: 84 }, null, 2) + '\n');
+  let refused = null;
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 84, mr_url: 'https://gitlab.example/group/project/-/merge_requests/84',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/84', state: 'opened',
+        source_branch: 'feature-bundle684', target_branch: 'main', description: 'Closes #684' };
+    },
+    createMergeRequest() { throw new Error('a partial-Closes MR must be refused, not re-created'); }
+  }, () => {
+    try {
+      sinkMr.ensureMergeRequest({ branch: 'feature-bundle684', project: 'bundle-684-685', issue: 684, issueNumbers: [684, 685] },
+        { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: a bundle MR missing a member\'s Closes must be refused');
+  assert(/Closes #685/.test(refused.message),
+    '#1098: the refusal must name the missing member, got: ' + refused.message);
+}
+
+// (e) Re-entry is idempotent: the Sink block and the summary are byte-stable across two runs.
+// The FIRST pass legitimately records sink: mr / mr_url / mr_iid; the SECOND must change nothing —
+// the pre-#1098 code re-appended the summary pair and re-emitted the block on every run.
+{
+  const root = tempRoot('kw-gl-1098-idem-');
+  const dir = gl1098WriteTaskFixture(root, 'idem-project', 686);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'idem-project', branch: 'feature-idem',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/86', mr_iid: 86 }, null, 2) + '\n');
+  const view = () => ({ mr_iid: 86, mr_url: 'https://gitlab.example/group/project/-/merge_requests/86',
+    web_url: 'https://gitlab.example/group/project/-/merge_requests/86', state: 'opened',
+    source_branch: 'feature-idem', target_branch: 'main', description: 'Closes #686' });
+  const runOnce = () => {
+    withForge({ listMergeRequests() { return []; }, viewMergeRequest: view,
+      createMergeRequest() { throw new Error('re-entry must reuse'); } }, () => {
+      sinkMr.ensureMergeRequest({ branch: 'feature-idem', project: 'idem-project', issue: 686 }, { root, skipPush: true });
+    });
+  };
+  runOnce();
+  const stateA = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  const summaryA = fs.readFileSync(path.join(dir, 'finalization-summary.md'), 'utf8');
+  const recordA = fs.readFileSync(path.join(dir, '.cache', 'sink-pr-result.json'), 'utf8');
+  assert(stateA.includes('mr_iid: 86'), '#1098: the first pass must record the MR IID');
+  assert(summaryA.includes('MR URL: https://gitlab.example/group/project/-/merge_requests/86'),
+    '#1098: the first pass must record the MR URL in the summary');
+  runOnce();
+  const stateB = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  const summaryB = fs.readFileSync(path.join(dir, 'finalization-summary.md'), 'utf8');
+  const recordB = fs.readFileSync(path.join(dir, '.cache', 'sink-pr-result.json'), 'utf8');
+  assert.strictEqual(stateB, stateA, '#1098: a re-entry must not rewrite the Sink block');
+  assert.strictEqual(summaryB, summaryA, '#1098: a re-entry must not append a second MR URL pair');
+  assert.strictEqual(recordB, recordA, '#1098: a re-entry must not rewrite the durable record');
+  assert.strictEqual((stateB.match(/^mr_iid:/gm) || []).length, 1,
+    '#1098: the Sink block must hold exactly one mr_iid line');
+}
+
+console.log('GitLab #1098 §2.1 MR-identity tests passed');
 
 console.log('GitLab sink tests passed');

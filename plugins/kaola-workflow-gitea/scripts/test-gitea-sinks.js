@@ -140,7 +140,11 @@ withForge({
       pr_number: 8,
       pr_url: 'https://gitea.example/group/project/pulls/8',
       state: 'open',
-      source_branch: 'feature'
+      source_branch: 'feature',
+      // #1098: reuse now verifies the target branch and every member's `Closes #n`, so the
+      // discovery fixture must carry them — a PR with no target is a different PR, not this one.
+      target_branch: 'main',
+      body: 'Closes #68'
     }];
   },
   createPullRequest() {
@@ -163,7 +167,9 @@ withForge({
   });
   assert.strictEqual(pr.pr_number, 8);
   assert.strictEqual(project.full_name, 'group/project');
-  assert.deepStrictEqual(calls[0], ['git', ['push', 'origin', 'feature']]);
+  // #1098: the lookup precedes the push, so REUSE issues no push at all (the pre-#1098 sink pushed
+  // unconditionally before noticing the PR, which is the ordering this contract reverses).
+  assert.deepStrictEqual(calls, [], '#1098: reuse must not push — the lookup precedes the push');
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: pr'));
   assert(state.includes('pr_url: https://gitea.example/group/project/pulls/8'));
@@ -3118,5 +3124,225 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+// ── #1098 §2.1 — the PR sink's request-identity contract ──────────────────────────────────────
+// The GitHub leg's five rules, ported to Gitea. Each block below FAILS on the pre-#1098 sink-pr:
+// (a) the lookup ran AFTER an unconditional push; (b) a MERGED PR was silently reused;
+// (c) a CLOSED PR was silently reused; (d) reuse never verified the target branch or the bundle's
+// per-member `Closes #n`; (e) the Sink block was rewritten on every re-entry and appendSummary
+// minted a second `PR URL:` pair.
+const GT1098_PROJECT = { full_name: 'group/project', html_url: 'https://gitea.example/group/project', owner: 'group', name: 'project' };
+
+function gt1098WriteTaskFixture(root, project, issueNumber) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+    '# Kaola-Workflow State',
+    '',
+    '## Project',
+    'name: ' + project,
+    'status: active',
+    '',
+    '## Gitea',
+    'issue_number: ' + issueNumber,
+    'full_name: group/project',
+    'project_html_url: https://gitea.example/group/project',
+    '',
+    '## Sink',
+    'branch: workflow/gitea-issue-' + issueNumber,
+    'issue_number: ' + issueNumber,
+    'sink: merge',
+    ''
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n');
+  return dir;
+}
+
+function gt1098SeedRecord(dir, project, branch, prUrl, prNumber) {
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project, branch, pr_url: prUrl, pr_number: prNumber }, null, 2) + '\n');
+}
+
+// (a)+(d) An OPEN PR on this very head is REUSED — and no push is issued on the reuse path.
+{
+  const root = tempRoot('kw-gt-1098-reuse-');
+  const dir = gt1098WriteTaskFixture(root, 'reuse-project', 680);
+  gt1098SeedRecord(dir, 'reuse-project', 'feature-reuse', 'https://gitea.example/group/project/pulls/68', 68);
+  const calls = [];
+  const created = [];
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 68, pr_url: 'https://gitea.example/group/project/pulls/68',
+        state: 'open', source_branch: 'feature-reuse', target_branch: 'main', body: 'Closes #680' };
+    },
+    createPullRequest() { created.push(1); throw new Error('an OPEN PR must be reused, not re-created'); }
+  }, () => {
+    const { pr } = sinkPr.ensurePullRequest({ branch: 'feature-reuse', project: 'reuse-project', issue: 680 }, {
+      root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+    });
+    assert.strictEqual(pr.pr_number, 68, '#1098: the existing OPEN PR must be adopted');
+  });
+  assert.deepStrictEqual(calls, [], '#1098: reuse must NOT push — the lookup precedes the push');
+  assert.deepStrictEqual(created, [], '#1098: reuse must NOT create');
+  const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  assert(state.includes('pr_number: 68'), '#1098: the reused PR number must be recorded');
+}
+
+// (a) Record-less discovery: no .cache record, but the head scan finds an OPEN PR on this branch.
+{
+  const root = tempRoot('kw-gt-1098-scan-');
+  gt1098WriteTaskFixture(root, 'scan-project', 687);
+  const created = [];
+  withForge({
+    listPullRequests() {
+      return [{ pr_number: 87, pr_url: 'https://gitea.example/group/project/pulls/87', state: 'open',
+        source_branch: 'feature-scan', target_branch: 'main', body: 'Closes #687' }];
+    },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() { return null; },
+    createPullRequest() { created.push(1); throw new Error('a discovered OPEN PR must be reused'); }
+  }, () => {
+    const { pr } = sinkPr.ensurePullRequest({ branch: 'feature-scan', project: 'scan-project', issue: 687 },
+      { root, skipPush: true });
+    assert.strictEqual(pr.pr_number, 87, '#1098: a record-less head scan must still find and reuse the PR');
+  });
+  assert.deepStrictEqual(created, [], '#1098: discovery must not create a second PR');
+}
+
+// (b) A MERGED PR is reported already_merged and NOTHING is pushed or created.
+{
+  const root = tempRoot('kw-gt-1098-merged-');
+  const dir = gt1098WriteTaskFixture(root, 'merged-project', 681);
+  gt1098SeedRecord(dir, 'merged-project', 'feature-merged', 'https://gitea.example/group/project/pulls/81', 81);
+  const calls = [];
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 81, pr_url: 'https://gitea.example/group/project/pulls/81',
+        state: 'merged', source_branch: 'feature-merged', target_branch: 'main', body: 'Closes #681' };
+    },
+    createPullRequest() { throw new Error('a MERGED PR must not be re-created'); }
+  }, () => {
+    const out = sinkPr.ensurePullRequest({ branch: 'feature-merged', project: 'merged-project', issue: 681 }, {
+      root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+    });
+    assert.strictEqual(out.already_merged, true, '#1098: a MERGED PR must report already_merged');
+  });
+  assert.deepStrictEqual(calls, [], '#1098: a MERGED PR must not be pushed at');
+}
+
+// (c) A CLOSED-unmerged PR is REFUSED by name; nothing is pushed, created, or modified.
+{
+  const root = tempRoot('kw-gt-1098-closed-');
+  const dir = gt1098WriteTaskFixture(root, 'closed-project', 682);
+  gt1098SeedRecord(dir, 'closed-project', 'feature-closed', 'https://gitea.example/group/project/pulls/82', 82);
+  const calls = [];
+  let refused = null;
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 82, pr_url: 'https://gitea.example/group/project/pulls/82',
+        state: 'closed', source_branch: 'feature-closed', target_branch: 'main', body: 'Closes #682' };
+    },
+    createPullRequest() { throw new Error('a CLOSED PR must not be re-created'); }
+  }, () => {
+    try {
+      sinkPr.ensurePullRequest({ branch: 'feature-closed', project: 'closed-project', issue: 682 }, {
+        root, gitExec(bin, a) { calls.push([bin, a]); return ''; }
+      });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: a CLOSED-unmerged PR must be refused');
+  assert(/closed without merging|pr_closed_unmerged/.test(refused.message),
+    '#1098: the refusal must name closed-unmerged, got: ' + refused.message);
+  assert.deepStrictEqual(calls, [], '#1098: a CLOSED PR must not be pushed at');
+}
+
+// (d) Reuse verifies the TARGET branch — a same-head PR on another base is refused, not adopted.
+{
+  const root = tempRoot('kw-gt-1098-base-');
+  const dir = gt1098WriteTaskFixture(root, 'base-project', 683);
+  gt1098SeedRecord(dir, 'base-project', 'feature-base', 'https://gitea.example/group/project/pulls/83', 83);
+  let refused = null;
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 83, pr_url: 'https://gitea.example/group/project/pulls/83',
+        state: 'open', source_branch: 'feature-base', target_branch: 'release', body: 'Closes #683' };
+    },
+    createPullRequest() { throw new Error('a base-mismatched PR must be refused, not re-created'); }
+  }, () => {
+    try {
+      sinkPr.ensurePullRequest({ branch: 'feature-base', project: 'base-project', issue: 683 }, { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: a PR on a different target branch must be refused');
+  assert(/target branch|base/i.test(refused.message),
+    '#1098: the base refusal must name the target branch, got: ' + refused.message);
+}
+
+// (d) Reuse verifies EVERY member's `Closes #n` — a partial bundle PR is refused, never adopted.
+{
+  const root = tempRoot('kw-gt-1098-closes-');
+  const dir = gt1098WriteTaskFixture(root, 'bundle-684-685', 684);
+  fs.appendFileSync(path.join(dir, 'workflow-state.md'), 'issue_numbers: 684,685\n');
+  gt1098SeedRecord(dir, 'bundle-684-685', 'feature-bundle684', 'https://gitea.example/group/project/pulls/84', 84);
+  let refused = null;
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 84, pr_url: 'https://gitea.example/group/project/pulls/84',
+        state: 'open', source_branch: 'feature-bundle684', target_branch: 'main', body: 'Closes #684' };
+    },
+    createPullRequest() { throw new Error('a partial-Closes PR must be refused, not re-created'); }
+  }, () => {
+    try {
+      sinkPr.ensurePullRequest({ branch: 'feature-bundle684', project: 'bundle-684-685', issue: 684, issueNumbers: [684, 685] },
+        { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098: a bundle PR missing a member\'s Closes must be refused');
+  assert(/Closes #685/.test(refused.message),
+    '#1098: the refusal must name the missing member, got: ' + refused.message);
+}
+
+// (e) Re-entry is idempotent: the Sink block, the summary, and the durable record are byte-stable.
+{
+  const root = tempRoot('kw-gt-1098-idem-');
+  const dir = gt1098WriteTaskFixture(root, 'idem-project', 686);
+  gt1098SeedRecord(dir, 'idem-project', 'feature-idem', 'https://gitea.example/group/project/pulls/86', 86);
+  const view = () => ({ pr_number: 86, pr_url: 'https://gitea.example/group/project/pulls/86',
+    state: 'open', source_branch: 'feature-idem', target_branch: 'main', body: 'Closes #686' });
+  const runOnce = () => {
+    withForge({ listPullRequests() { return []; }, discoverProject() { return GT1098_PROJECT; },
+      viewPullRequest: view,
+      createPullRequest() { throw new Error('re-entry must reuse'); } }, () => {
+      sinkPr.ensurePullRequest({ branch: 'feature-idem', project: 'idem-project', issue: 686 }, { root, skipPush: true });
+    });
+  };
+  runOnce();
+  const stateA = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  const summaryA = fs.readFileSync(path.join(dir, 'finalization-summary.md'), 'utf8');
+  const recordA = fs.readFileSync(path.join(dir, '.cache', 'sink-pr-result.json'), 'utf8');
+  assert(stateA.includes('pr_number: 86'), '#1098: the first pass must record the PR number');
+  runOnce();
+  const stateB = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+  const summaryB = fs.readFileSync(path.join(dir, 'finalization-summary.md'), 'utf8');
+  const recordB = fs.readFileSync(path.join(dir, '.cache', 'sink-pr-result.json'), 'utf8');
+  assert.strictEqual(stateB, stateA, '#1098: a re-entry must not rewrite the Sink block');
+  assert.strictEqual(summaryB, summaryA, '#1098: a re-entry must not append a second PR URL pair');
+  assert.strictEqual(recordB, recordA, '#1098: a re-entry must not rewrite the durable record');
+  assert.strictEqual((stateB.match(/^pr_number:/gm) || []).length, 1,
+    '#1098: the Sink block must hold exactly one pr_number line');
+}
+
+console.log('Gitea #1098 §2.1 PR-identity tests passed');
 
 console.log('Gitea sink tests passed');
