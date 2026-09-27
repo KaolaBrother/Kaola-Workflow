@@ -94,10 +94,6 @@ function scriptName(base, forge) {
   return manifest.renameIfPorted(base, forge);
 }
 
-// The command surfaces a runtime edition renders FROM, for one forge:
-// { basename, absPath, topic }. Sourced from the routing registry, so these are
-// exactly the generated, byte-checked surfaces — a runtime edition never reads a
-// hand-maintained command list.
 // editionTreeRootOverride — the explicit generated-tree root for the checkout `repo`, or null.
 // The generated edition trees normally land in the MAIN checkout (see each sync script's
 // TREE_ROOT), which every worktree on the machine shares. KAOLA_EDITION_TREE_ROOT (absolute)
@@ -116,6 +112,10 @@ function editionTreeRootOverride(repo, env = process.env) {
   return real(forRepo) === real(repo) ? path.resolve(root) : null;
 }
 
+// The command surfaces a runtime edition renders FROM, for one forge:
+// { basename, absPath, topic }. Sourced from the routing registry, so these are
+// exactly the generated, byte-checked surfaces — a runtime edition never reads a
+// hand-maintained command list.
 function commandSources(forge) {
   assertForge(forge);
   return routing.commandSurfacesForForge(forge).map(row => ({
