@@ -60,6 +60,11 @@ the baseline `46fbe12d`, not only tags, because `install.sh` bootstraps from `ma
 | Kimi role Skills | `SKILL_CATALOG.kimi` | 79 (16 names) | same loop (`.kimi*/skills/kaola-role-*/SKILL.md`) |
 | OpenCode | `CATALOG.opencode` | 131 (17 names) | render loop over `74da6a5b^..46fbe12d` (`.opencode*/agent/*.md`, `.opencode*/agents/*.md`). It also contains all 21 blobs ever tracked at `.opencode/agent/` |
 
+The generators are kept beside this file and are not run by any suite:
+
+- `tools/codex-catalog.js <repo>` rebuilds the two Codex lists.
+- `tools/render-edition-catalog.sh <repo> <runtime> <first-commit>` rebuilds one runtime's rows.
+
 The render loop, per commit:
 
 1. `git archive <commit> <render inputs present at that commit>` into a scratch directory, then
