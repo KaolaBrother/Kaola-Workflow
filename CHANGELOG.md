@@ -23,6 +23,25 @@
   task/result constraints. `scripts/test-issue-1101-native-only.js` (both Claude chains) fails if
   any of it returns.
 
+### Fixed
+
+- **The stale-worktree sweep's resumability pin resolves the project that OWNS the worktree instead
+  of deriving `issue-<N>` (#1102).** #1100's pin composed its receipt path from the issue number the
+  BRANCH spells, so it could only ever find a run whose folder is named `issue-<N>`. A bundle or
+  custom-named run (`bundle-<set>`, `branch-issue-merge-sink`, …) files its receipt under a folder of
+  another name, so both reads missed and the pin was silently inert for exactly the runs the sweep
+  could then treat as stale. Both worktree arms now take the project from the run's own records — the
+  run folder in the worktree's checkout, and the live/archive run registers in the main checkout —
+  and never from a recomputed name. Identity safety is the hard half: `workflow/issue-<N>` is reused
+  across runs of one issue, so a record is attributed to a worktree only when its `branch` matches
+  AND its `worktree_path` agrees; when the path cannot separate two runs of the same folder (the
+  ordinary case, since the worktree path is a pure function of the project name) only the newest
+  claim that still carries a receipt counts. An unresolvable or conflicting owner leaves the worktree
+  unpinned — today's behavior — rather than guessing. The receipt lookup also reads the
+  `archive/<project>.archived-<ts>/` collision-renamed destination the same way the archive's own
+  `isArchived` check already did. All-done and missing-receipt behavior is unchanged, and all four
+  claim copies (root, Codex, GitLab, Gitea) carry the same change.
+
 ### Changed
 
 - **Request sinks retry a refused archive push, fail closed on a failed probe, and share one kernel
