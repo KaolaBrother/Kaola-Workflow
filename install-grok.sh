@@ -4,7 +4,8 @@
 # Additive standalone installer (does NOT modify install.sh, install-opencode.sh,
 # install-kimi.sh, or the claude/codex/gitlab/gitea editions). Grok CLI is a runtime
 # (like opencode and Kimi), not a git forge, so it is delivered the grok-native way:
-# named agents under agents/ and flat slash commands under commands/. Its last step
+# flat slash commands under commands/. It installs no subagent profile (#1101) and retires the
+# ones earlier releases put under agents/, only on proof (see retire_grok_agents). Its last step
 # installs Grok's single persistent global-contract Rule (per-target, --runtime grok).
 #
 # FORGE: --forge=github|gitlab|gitea selects which forge's workflow prose and support
@@ -16,20 +17,19 @@
 #   ./install-grok.sh                         # deploy into the current directory
 #   ./install-grok.sh --target /path/to/repo  # deploy into a specific project
 #   ./install-grok.sh --forge=gitlab          # deploy the GitLab-shaped edition
-#   ./install-grok.sh --global                # deploy agents+commands to ${GROK_HOME:-~/.grok}
+#   ./install-grok.sh --global                # deploy commands to ${GROK_HOME:-~/.grok}
 #   ./install-grok.sh --regenerate            # refresh the generated tree from canonical here
 #
 # DEPLOY LAYOUT (scope-dependent):
-#   - PROJECT (--target/$PWD): agents and commands land under <project>/.grok/{agents,commands}.
-#   - GLOBAL (--global): they land DIRECTLY under ${GROK_HOME:-$HOME/.grok}/{agents,commands}.
+#   - PROJECT (--target/$PWD): commands land under <project>/.grok/commands.
+#   - GLOBAL (--global): they land DIRECTLY under ${GROK_HOME:-$HOME/.grok}/commands.
 #   - Support scripts + hook scripts land under the grok home (user-level):
 #     ${GROK_HOME:-$HOME/.grok}/kaola-workflow/{scripts,hooks}.
 #   - This installer's last step installs the single complete global Rule under
 #     ${GROK_HOME:-$HOME/.grok}/rules/ through the per-target global-contract CLI.
 #   - No Grok compact hook is installed: passive hook stdout is not model context.
 #
-# Models: every subagent inherits the session model and effort. This installer seeds no
-# per-role model or effort config.
+# Models: this installer seeds no model or effort config.
 
 set -euo pipefail
 
@@ -52,10 +52,10 @@ usage() {
   cat <<'EOF'
 Usage: ./install-grok.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
                          [--regenerate] [--uninstall] [--no-scripts] [--yes]
-  --target DIR     deploy agents+commands into DIR/.grok (default: current directory)
+  --target DIR     deploy commands into DIR/.grok (default: current directory)
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
-  --global         deploy agents+commands into ${GROK_HOME:-~/.grok} (all projects)
+  --global         deploy commands into ${GROK_HOME:-~/.grok} (all projects)
   --regenerate     refresh the in-repo .grok/ tree from canonical, then exit
   --uninstall      remove the kaola-deployed grok edition from the resolved scope
                    (honors --target/--global), then exit
@@ -68,8 +68,10 @@ scripts/kaola-workflow-install-manifest.js). The global workflow contract and
 compact-safe recovery live in one Grok Rule this installer installs as its last step.
 
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved
-scope: the deployed agents, commands, and recovery Rule (by source-tree filename),
-plus shared support scripts + hook scripts under the grok home.
+scope: the deployed commands and recovery Rule (by source-tree filename), the
+subagent profiles earlier releases deployed (only those whose bytes are a released
+render; others are kept and reported), plus shared support scripts + hook scripts
+under the grok home.
 The SHARED ~/.config/kaola-workflow/config.json is reference-counted: uninstall
 releases this runtime's reference and the file is removed only when no runtime holds one.
 EOF
@@ -123,7 +125,6 @@ if [[ "$REGENERATE" -eq 1 ]]; then
 fi
 
 # Names here are removed on install and uninstall by basename.
-RETIRED_AGENTS=(planner code-architect synthesizer build-error-resolver metric-optimizer adversarial-verifier security-reviewer)
 RETIRED_COMMANDS=()
 RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
 RETIRED_SUPPORT_SCRIPTS=(kaola-workflow-ledger-compare.js)
@@ -184,30 +185,18 @@ remove_retired_compact_prompt_file() {
   fi
 }
 
-copy_agents() {
+# Kaola-Workflow ships no Grok subagent profiles (#1101). Earlier releases copied rendered role
+# profiles into <scope>/agents with no ownership record, so the proof is the bytes: a file with a
+# Kaola role name whose sha256 is a render some release shipped (the frozen Grok catalog in
+# kaola-workflow-retired-agents.js) is removed; any other Kaola-named file is kept and reported.
+# A symlinked or non-directory agents carrier is reported and never followed.
+retire_grok_agents() {
   local dest="$1"
-  mkdir -p "$dest"
-  if [[ "$SOURCE_TREE/agents" -ef "$dest" ]]; then
-    echo "Self-dev deploy (source $SOURCE_TREE/agents is already the live tree) → copy skipped."
-    return
-  fi
-  local retired
-  for retired in "${RETIRED_AGENTS[@]+"${RETIRED_AGENTS[@]}"}"; do
-    [[ -f "$dest/$retired.md" ]] || continue
-    rm -f "$dest/$retired.md"
-  done
-  local src base count=0
-  for src in "$SOURCE_TREE/agents/"*.md; do
-    [[ -f "$src" ]] || continue
-    base="$(basename "$src")"
-    cp "$src" "$dest/$base"
-    count=$((count + 1))
-  done
-  if [[ "$count" -eq 0 ]]; then
-    echo "Install error: no agent sources found in $SOURCE_TREE/agents" >&2
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime grok --dir "$dest" || {
+    echo "Install error: retired Grok agent sweep failed for $dest" >&2
     exit 1
-  fi
-  echo "Installed workflow agents → $dest/ ($count)"
+  }
+  if [[ -d "$dest" && ! -L "$dest" ]]; then rmdir "$dest" 2>/dev/null || true; fi
 }
 
 copy_commands() {
@@ -366,18 +355,8 @@ uninstall_edition() {
     echo "Refusing to uninstall the edition's OWN source tree ($layout). No-op." >&2
     return
   fi
-  local f
-  if [[ -d "$SOURCE_TREE/agents" && -d "$layout/agents" ]]; then
-    for f in "$SOURCE_TREE/agents/"*.md; do
-      [[ -f "$f" ]] || continue
-      rm -f "$layout/agents/$(basename "$f")"
-    done
-  fi
-  local retired
-  for retired in "${RETIRED_AGENTS[@]+"${RETIRED_AGENTS[@]}"}"; do
-    [[ -f "$layout/agents/$retired.md" ]] || continue
-    rm -f "$layout/agents/$retired.md"
-  done
+  local f retired
+  retire_grok_agents "$layout/agents"
   if [[ -d "$SOURCE_TREE/commands" && -d "$layout/commands" ]]; then
     for f in "$SOURCE_TREE/commands/"*.md; do
       [[ -f "$f" ]] || continue
@@ -397,12 +376,11 @@ uninstall_edition() {
     done
   fi
   rm -f "$layout/rules/kaola-workflow-compact-recovery.md"
-  rmdir "$layout/agents" 2>/dev/null || true
   rmdir "$layout/commands" 2>/dev/null || true
   rmdir "$layout/hooks" 2>/dev/null || true
   rmdir "$layout/rules" 2>/dev/null || true
   if [[ "$GLOBAL" -ne 1 ]]; then rmdir "$layout" 2>/dev/null || true; fi
-  echo "Removed deployed agents + commands."
+  echo "Removed deployed commands."
   local scripts_dir="$home/kaola-workflow/scripts"
   local hooks_dir="$home/kaola-workflow/hooks"
   local prompts_dir="$home/kaola-workflow/prompts"
@@ -447,7 +425,7 @@ confirm_install() {
   if [[ ! -t 0 ]]; then return 0; fi
   cat <<EOF
 About to install the Kaola-Workflow grok edition:
-  agents + commands   → $LAYOUT_DEST
+  commands            → $LAYOUT_DEST (+ retired agent cleanup under agents/)
   support scripts     → $(grok_home)/kaola-workflow/scripts
   global Rule         → per-target $(grok_home)/rules/kaola-workflow-global.md (last step)
   hook scripts        → $(grok_home)/kaola-workflow/hooks
@@ -476,7 +454,7 @@ else
 fi
 
 confirm_install
-copy_agents "$LAYOUT_DEST/agents"
+retire_grok_agents "$LAYOUT_DEST/agents"
 copy_commands "$LAYOUT_DEST/commands"
 install_support_scripts
 retire_duplicate_recovery_rule

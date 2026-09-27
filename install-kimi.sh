@@ -242,91 +242,34 @@ is_plain_basename() {
   return 0
 }
 
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
 AGENT_MANIFEST_NAME=".kaola-workflow-agent-manifest"
-MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
 
-manifest_row_hash() {
-  local want="$1" file="$2" row_name row_hash row_rest
-  [[ -f "$file" && ! -L "$file" ]] || return 1
-  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
-    [[ "$row_name" == "$want" && -n "$row_hash" && -z "${row_rest:-}" ]] || continue
-    printf '%s\n' "$row_hash"
-    return 0
-  done < "$file"
-  return 1
-}
-
-# Older releases deployed native agent profiles into <dest>/agents with a manifest. This
-# runtime no longer installs Kaola role profiles, so upgrade/uninstall sweeps them: a name
-# recorded in the previous manifest whose installed bytes still carry the managed marker and
-# still hash to the recorded value is removed; anything else is user-owned and stays.
+# Retire what earlier releases installed (#1101), with scripts/kaola-workflow-retired-agents.js:
+#   native agents (<dest>/agents, v10.0.0-v11.1.1): a file the manifest records, still carrying
+#     the managed marker and still hashing to the recorded digest, or whose bytes are a released
+#     render, is removed; the manifest is retired once read;
+#   role Skills (<dest>/skills/kaola-role-<role>/, v6.24.0-v9.17.2): a one-file dir whose
+#     SKILL.md bytes are a released render (any release, not only v9.17.2) is removed.
+# Every other Kaola-named entry is kept and reported; a symlinked or non-directory carrier is
+# reported and never followed, and does not block the rest of the install or uninstall.
 sweep_retired_native_agents() {
   local agents_dest="$1"
-  [[ -d "$agents_dest" && ! -L "$agents_dest" ]] || return 0
-  local agent_manifest="$agents_dest/$AGENT_MANIFEST_NAME"
-  [[ -f "$agent_manifest" && ! -L "$agent_manifest" ]] || return 0
-  local dest base prev_hash current_hash
-  for dest in "$agents_dest"/*.md; do
-    [[ -f "$dest" && ! -L "$dest" ]] || continue
-    base="$(basename "$dest")"
-    prev_hash=""
-    if ! prev_hash="$(manifest_row_hash "$base" "$agent_manifest" 2>/dev/null)"; then continue; fi
-    [[ -n "$prev_hash" ]] || continue
-    grep -Fq "$MANAGED_AGENT_MARKER" "$dest" || continue
-    current_hash="$(sha256_file "$dest")"
-    [[ "$current_hash" == "$prev_hash" ]] || continue
-    rm -f "$dest"
-    echo "Removed retired native agent: $dest"
-  done
-  rm -f "$agent_manifest"
-  rmdir "$agents_dest" 2>/dev/null || true
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime kimi \
+    --dir "$agents_dest" --record "$agents_dest/$AGENT_MANIFEST_NAME" || {
+    echo "error: retired Kimi agent sweep failed for $agents_dest" >&2
+    exit 1
+  }
+  if [[ -d "$agents_dest" && ! -L "$agents_dest" ]]; then rmdir "$agents_dest" 2>/dev/null || true; fi
   return 0
 }
 
-# Exact SKILL.md hashes rendered by the released v9.17.2 Kimi generator. A former role name is
-# not ownership; only a one-file directory whose bytes match this immutable release receipt may
-# be removed during the native-agent migration.
-legacy_role_skill_hash() {
-  case "$1" in
-    kaola-role-adversarial-verifier) echo 8d04d3a23448d7420b83c6a72215ac035caa270a7434de6e369ce04a395efab2 ;;
-    kaola-role-build-error-resolver) echo 50b1ea6104d64aeab681f6119129051f28e7a23898121222a18310c8b70d2cdb ;;
-    kaola-role-code-architect) echo abc4f86c78366cd623eb483a0b0c470ac78138c18bf4c400afb40ddf62c95a99 ;;
-    kaola-role-code-explorer) echo df6af7f29a6d7d63a5e464f6697dc4783fa9bdea2ebff7e30bc920c8eb89203b ;;
-    kaola-role-code-reviewer) echo 9e90cdf24e54270441071f4ae3d41be2dd6dc8022306d794573dc2aaa91b6c9c ;;
-    kaola-role-doc-updater) echo eef163cb560b5c31eb4463c9daf3e75d921a2da0f8fed19395926ace1efeb9da ;;
-    kaola-role-implementer) echo 907f3513f539be01cd2ffeb424e81fefdfd704073afec35ac17e93e68f851b5f ;;
-    kaola-role-investigator) echo 4c6a4c26967936934447ed8d3f991ee13927bd1edb75e2103fd5bc19fc578596 ;;
-    kaola-role-knowledge-lookup) echo 3a15c6a5a0bcdfda9ce7c954b647fa3eaf5a1c2f780f818d6b2970588e77839a ;;
-    kaola-role-metric-optimizer) echo dad99b056d81ff5c5230f2c225fc0a5da5e77283a3a2b2cd3cb6d3774b31227f ;;
-    kaola-role-planner) echo ce6db4ef2d85aca2f3372f4a51738ee1241cc5df0347cfd74b47b9c705a22f14 ;;
-    kaola-role-security-reviewer) echo dbea3eae55f2bc7eacf48ef6a60475af3ea5f216f8dce281395124e8608d4b0d ;;
-    kaola-role-synthesizer) echo 3e315c1f24bbf22112f82e057bfefcedc843aa0d3acbeaa787a386ab10f5c98d ;;
-    kaola-role-tdd-guide) echo 20a860c164e58476c51f7c2f1e98d5a5dd8a5f2860e961db63f0b4bf03bc7783 ;;
-    *) return 1 ;;
-  esac
-}
-
-remove_exact_legacy_role_skills() {
-  local skills_dest="$1" name dir expected entry_count
-  for name in "${RETIRED_ROLE_SKILLS[@]}"; do
-    expected="$(legacy_role_skill_hash "$name" 2>/dev/null || true)"
-    [[ -n "$expected" ]] || continue
-    dir="$skills_dest/$name"
-    [[ -d "$dir" && ! -L "$dir" ]] || continue
-    entry_count="$(find "$dir" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d '[:space:]')"
-    [[ "$entry_count" == "1" && -f "$dir/SKILL.md" && ! -L "$dir/SKILL.md" ]] || continue
-    [[ "$(sha256_file "$dir/SKILL.md")" == "$expected" ]] || continue
-    rm -rf "$dir"
-    echo "Removed exact v9.17.2 role skill: $dir"
-  done
+retire_role_skills() {
+  local skills_dest="$1"
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire-skills --runtime kimi \
+    --dir "$skills_dest" || {
+    echo "error: retired Kimi role-Skill sweep failed for $skills_dest" >&2
+    exit 1
+  }
 }
 
 copy_skills() {
@@ -353,9 +296,9 @@ copy_skills() {
     [[ -d "$stale" ]] || continue
     rm -rf "$stale"
   done
-  # v10 migration: remove only exact released v9.17.2 role-Skill bytes. Same-name owner content,
-  # including a one-line edit, is outside Kaola ownership and remains untouched.
-  remove_exact_legacy_role_skills "$skills_dest"
+  # Role Skills: only released role-Skill bytes are removed. Same-name owner content, including a
+  # one-line edit, is outside Kaola ownership and is kept and reported.
+  retire_role_skills "$skills_dest"
   # Re-copy via a fail-CLOSED ALLOWLIST: only workflow command Skills.
   local src_dir base skill_count=0 skipped=0
   for src_dir in "$SOURCE_TREE/skills/"*/; do
@@ -556,17 +499,14 @@ uninstall_edition() {
     echo "Refusing to uninstall the edition's OWN source tree ($skills_dest). No-op." >&2
     return
   fi
-  # Fail closed before deleting any surface when current native-agent topology is a symlink.
-  local agent_manifest="$agents_dest/$AGENT_MANIFEST_NAME"
-  if [[ -L "$agents_dest" || ( -e "$agents_dest" && ! -d "$agents_dest" )
-        || -L "$agent_manifest" || ( -e "$agent_manifest" && ! -f "$agent_manifest" ) ]]; then
-    echo "Uninstall error: refusing non-regular native agent carrier: $agents_dest" >&2
-    return 1
-  fi
-  local src_dir
+  local src_dir src_name
   for src_dir in "$SOURCE_TREE/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
-    rm -rf "$skills_dest/$(basename "$src_dir")"
+    src_name="$(basename "$src_dir")"
+    # A role Skill is never removed by name — a stale generated tree may still render one — only
+    # by the byte proof in retire_role_skills below.
+    [[ "$src_name" == kaola-role-* ]] && continue
+    rm -rf "$skills_dest/$src_name"
   done
   # Uninstall removes by SOURCE-TREE name, so a role skill RETIRED since the deployed install is
   # absent from the source tree and would linger forever. Remove the retired names explicitly.
@@ -577,7 +517,7 @@ uninstall_edition() {
     rm -rf "$skills_dest/$retired"
     echo "Removed retired role skill: $skills_dest/$retired"
   done
-  remove_exact_legacy_role_skills "$skills_dest"
+  retire_role_skills "$skills_dest"
   rmdir "$skills_dest" 2>/dev/null || true
   echo "Removed deployed skills."
   sweep_retired_native_agents "$agents_dest"

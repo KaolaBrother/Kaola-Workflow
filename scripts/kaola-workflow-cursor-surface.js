@@ -322,9 +322,8 @@ function buildGlobalDesired(opts) {
   const sync = require('./sync-cursor-edition.js');
   const manifest = require('./kaola-workflow-install-manifest.js');
   const desired = {};
-  // Kaola-Workflow ships no Cursor agents (#1101). A receipt that still records agents/*.md from an
-  // earlier release loses them through removeRetiredManaged(): an unchanged receipt-owned file is
-  // removed, and a modified one is left in place.
+  // Kaola-Workflow ships no Cursor agents (#1101); retireCursorAgents() retires the ones an earlier
+  // release installed.
   for (const file of sync.listCanonCommands(opts.forge)) {
     const rel = 'commands/' + file;
     desired[rel] = desiredRecord(sourceRegular(path.join(opts.sourceTree, rel), 'command authority'), 0o644);
@@ -342,6 +341,10 @@ function buildGlobalDesired(opts) {
     }
     desired['kaola-workflow/scripts/kaola-workflow-cursor-surface.js'] = desiredRecord(
       sourceRegular(__filename, 'Cursor materialization helper'), 0o755);
+    // The retirement proof the installed helper needs when --ensure-target meets a project an
+    // earlier release materialized agents into (#1101).
+    desired['kaola-workflow/scripts/kaola-workflow-retired-agents.js'] = desiredRecord(
+      sourceRegular(path.join(__dirname, 'kaola-workflow-retired-agents.js'), 'retired-agent sweep'), 0o755);
     for (const name of sync.expectedHookFiles()) {
       const bytes = sourceRegular(path.join(opts.sourceTree, 'hooks', name), 'Cursor hook');
       desired['kaola-workflow/hooks/' + name] = desiredRecord(bytes, 0o755);
@@ -403,6 +406,37 @@ function removeLegacyRetired(root, receiptInfo, retiredHashes) {
   return removed;
 }
 
+// #1101: retire the agents an earlier release put in <root>/agents. A receipt-recorded file whose
+// bytes still match its record, or an unrecorded file whose bytes are a released Cursor render
+// (the frozen catalog in kaola-workflow-retired-agents.js — receipt-less 10.0.1-era installs), is
+// removed; any other Kaola-named file is kept and reported (stderr), never forgotten silently.
+// Receipt rows for agents/ are consumed here and never carried into a new receipt.
+function retireCursorAgents(root, receiptInfo, apply) {
+  const dir = path.join(root, 'agents');
+  let retired;
+  try { retired = require('./kaola-workflow-retired-agents.js'); }
+  catch (_) {
+    if (inspectPath(dir).status === 'missing') return { removed: [], preserved: [] };
+    process.stderr.write('warning: retired-agent sweep unavailable beside ' + __filename + '; ' + dir + ' left in place\n');
+    return { removed: [], preserved: [], unavailable: true };
+  }
+  const rows = new Map();
+  if (receiptInfo && receiptInfo.status === 'valid') {
+    for (const [rel, record] of Object.entries(receiptInfo.receipt.files)) {
+      const match = rel.match(/^agents\/([^/]+\.md)$/);
+      if (match) rows.set(match[1], record.sha256);
+    }
+  }
+  const result = retired.retireAgentDir({ runtime: 'cursor', dir, rows, apply: apply !== false });
+  if (apply !== false && inspectPath(dir).status === 'directory') {
+    try { fs.rmdirSync(dir); } catch (_) { /* a kept or foreign file keeps the dir */ }
+  }
+  for (const line of retired.report(result, false)) process.stderr.write(line + '\n');
+  return { removed: result.removed, preserved: result.preserved };
+}
+
+const isAgentRecord = rel => rel.startsWith('agents/');
+
 function applyManaged(root, desired) {
   for (const [rel, wanted] of Object.entries(desired).sort(([a], [b]) => a.localeCompare(b))) {
     const file = path.join(root, ...rel.split('/'));
@@ -416,7 +450,7 @@ function removeRetiredManaged(root, desired, receiptInfo, preservedPrefixes) {
   if (receiptInfo.status !== 'valid') return;
   const prefixes = preservedPrefixes || [];
   for (const [rel, record] of Object.entries(receiptInfo.receipt.files)) {
-    if (Object.prototype.hasOwnProperty.call(desired, rel)
+    if (Object.prototype.hasOwnProperty.call(desired, rel) || isAgentRecord(rel)
         || prefixes.some(prefix => rel.startsWith(prefix))) continue;
     const file = path.join(root, ...rel.split('/'));
     const state = inspectPath(file);
@@ -435,7 +469,7 @@ function recordsFor(desired) {
 function carryForwardSkippedRecords(root, receiptInfo, records, prefixes) {
   if (receiptInfo.status !== 'valid') return records;
   for (const [rel, record] of Object.entries(receiptInfo.receipt.files)) {
-    if (Object.prototype.hasOwnProperty.call(records, rel)
+    if (Object.prototype.hasOwnProperty.call(records, rel) || isAgentRecord(rel)
         || !prefixes.some(prefix => rel.startsWith(prefix))) continue;
     // Missing skipped assets are no longer active ownership. Every other carrier remains in the
     // receipt under its prior hash: uninstall removes it only if unchanged, while doctor reports
@@ -487,6 +521,7 @@ function installGlobal(opts) {
   const preservedPrefixes = opts.noScripts
     ? ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/']
     : (opts.authorityOnly ? ['hooks/'] : []);
+  const retiredAgents = retireCursorAgents(home, receiptInfo);
   removeRetiredManaged(home, built.desired, receiptInfo, preservedPrefixes);
   verifyDesired(home, built.desired);
   const receiptFiles = recordsFor(built.desired);
@@ -503,7 +538,7 @@ function installGlobal(opts) {
   atomicWrite(receiptPath, stableJson(receipt), 0o644);
   return { scope: 'global', root: home, receipt: receiptPath, files: Object.keys(receiptFiles).length,
     adopted_legacy_release: receiptInfo.status === 'missing' ? '10.0.1-if-byte-matched' : null,
-    removed_legacy_files: adoptedLegacyRetired };
+    removed_legacy_files: adoptedLegacyRetired, retired_agents: retiredAgents };
 }
 
 function inspectAuthority(forge, expectedVersion) {
@@ -527,6 +562,9 @@ function inspectAuthority(forge, expectedVersion) {
   }
   if (info.receipt.forge !== forge) result.freshness = 'stale_forge';
   for (const [rel, record] of Object.entries(info.receipt.files)) {
+    // An agents/ row is a retired profile an earlier release recorded (#1101): the next install
+    // retires or reports it, and nothing materializes it, so it never makes the authority stale.
+    if (isAgentRecord(rel)) continue;
     const state = inspectPath(path.join(home, ...rel.split('/')));
     const status = state.status === 'regular' && state.sha256 === record.sha256
       ? 'current' : (state.status === 'regular' ? 'hash_mismatch' : state.status);
@@ -628,6 +666,7 @@ function installProject(opts) {
   applyManaged(layout, desired);
   if (mergedHooks) atomicWrite(hooksFile, mergedHooks, 0o644);
   removeLegacyRetired(layout, receiptInfo, retiredHashes);
+  const retiredAgents = retireCursorAgents(layout, receiptInfo);
   removeRetiredManaged(layout, desired, receiptInfo, opts.noScripts ? ['hooks/'] : []);
   verifyDesired(layout, desired);
   const receiptFiles = recordsFor(desired);
@@ -648,7 +687,7 @@ function installProject(opts) {
   };
   atomicWrite(receiptPath, stableJson(receipt), 0o644);
   return { status: 'materialized', scope: 'project', root: layout, target,
-    receipt: receiptPath, files: Object.keys(desired).length };
+    receipt: receiptPath, files: Object.keys(desired).length, retired_agents: retiredAgents };
 }
 
 function ensureProject(opts) {
@@ -669,10 +708,14 @@ function removeEmptyParents(root, rel) {
 
 function uninstallManaged(root, receiptPath, kind, hooksFile) {
   const info = parseReceipt(receiptPath, kind);
-  if (info.status !== 'valid') return { scope: kind, root, receipt_status: info.status, removed: 0, preserved: 'all' };
+  const retiredAgents = retireCursorAgents(root, info);
+  if (info.status !== 'valid') {
+    return { scope: kind, root, receipt_status: info.status, removed: 0, preserved: 'all', retired_agents: retiredAgents };
+  }
   let removed = 0;
   let preserved = 0;
   for (const [rel, record] of Object.entries(info.receipt.files)) {
+    if (isAgentRecord(rel)) continue;
     const file = path.join(root, ...rel.split('/'));
     const state = inspectPath(file);
     if (state.status === 'regular' && state.sha256 === record.sha256) {
@@ -683,7 +726,7 @@ function uninstallManaged(root, receiptPath, kind, hooksFile) {
   }
   removeRecordedHooks(hooksFile, info.receipt.hook_entries || {});
   if (inspectPath(receiptPath).status === 'regular') fs.unlinkSync(receiptPath);
-  return { scope: kind, root, receipt_status: 'valid', removed, preserved };
+  return { scope: kind, root, receipt_status: 'valid', removed, preserved, retired_agents: retiredAgents };
 }
 
 function uninstall(opts) {

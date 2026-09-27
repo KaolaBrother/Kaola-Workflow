@@ -4,8 +4,10 @@
 # Additive standalone installer (does NOT modify install.sh, install-opencode.sh,
 # install-kimi.sh, or the claude/codex/gitlab/gitea editions). Cursor is a runtime
 # (like opencode, Kimi, and Grok), not a git forge, so it is delivered the Cursor-native way:
-# named agents under .cursor/agents/, flat slash commands under .cursor/commands/, and an empty
-# Kaola hook mapping. Its last step installs the local alwaysApply global-contract Rule
+# flat slash commands under .cursor/commands/ and an empty Kaola hook mapping. It installs no
+# subagent profile (#1101) and retires the ones earlier releases put under agents/, only on proof
+# (receipt digest or a released render; see retireCursorAgents in kaola-workflow-cursor-surface.js).
+# Its last step installs the local alwaysApply global-contract Rule
 # through the per-target global-contract CLI (--runtime cursor).
 #
 # FORGE: --forge=github|gitlab|gitea selects which forge's workflow prose and support
@@ -16,15 +18,15 @@
 # Usage:
 #   ./install-cursor.sh --target /path/to/repo  # deploy into a specific project
 #   ./install-cursor.sh --target /repo --forge=gitlab
-#   ./install-cursor.sh --global                # deploy agents+commands to ${CURSOR_HOME:-~/.cursor}
+#   ./install-cursor.sh --global                # deploy commands to ${CURSOR_HOME:-~/.cursor}
 #   ./install-cursor.sh --regenerate            # refresh the generated tree from canonical here
 #   ./install-cursor.sh --doctor --json         # report surface facts; does not install
 #
 # DEPLOY LAYOUT (scope-dependent):
-#   - PROJECT (--target): agents and commands land under <project>/.cursor/{agents,commands}.
+#   - PROJECT (--target): commands land under <project>/.cursor/commands.
 #     The target is mandatory, derives from the receipt-verified global authority, and is never
 #     selected from ambient cwd.
-#   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}
+#   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/commands
 #     with no nested .cursor/ under CURSOR_HOME. Running --global inside a Git work tree does
 #     not create or refresh that repository's .cursor/ tree. Project catalogs that already
 #     exist are left untouched. --global from a directory with no git toplevel does not invent
@@ -35,8 +37,7 @@
 #     retired prompt hooks are removed while foreign entries are preserved. No Kaola hook script
 #     is installed. Skip support scripts and the hooks.json migration with --no-scripts.
 #
-# Models: generated agents carry the one subagent binding this runtime ships; this installer
-# seeds no user-specific per-role model or effort config.
+# Models: this installer seeds no model or effort config.
 
 set -euo pipefail
 
@@ -64,10 +65,10 @@ usage() {
 Usage: ./install-cursor.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
                          [--regenerate] [--uninstall] [--no-scripts] [--yes]
                          [--doctor] [--json] [--product cli|app] [--host local|cloud]
-  --target DIR     explicitly materialize agents+commands into DIR/.cursor
+  --target DIR     explicitly materialize commands into DIR/.cursor
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
-  --global         deploy agents+commands into ${CURSOR_HOME:-~/.cursor} (all projects);
+  --global         deploy commands into ${CURSOR_HOME:-~/.cursor} (all projects);
                    does not write the invoking Git repository
   --doctor         report Cursor product/host surface facts and exit (no install)
   --json           with --doctor, emit JSON
@@ -177,7 +178,7 @@ confirm_install() {
   if [[ ! -t 0 ]]; then return 0; fi
   cat <<EOF
 About to install the Kaola-Workflow cursor edition:
-  agents/commands/rule → $LAYOUT_DEST
+  commands/rule       → $LAYOUT_DEST (+ retired agent cleanup under agents/)
   support scripts     → $(cursor_home)/kaola-workflow/scripts
   Kaola hook events   → none (retired entries removed; foreign entries kept)
 EOF
@@ -245,7 +246,7 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
   node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" --uninstall "${transaction_args[@]}"
   uninstall_global_carrier
   release_shared_config_ref
-  echo "Uninstall complete; only receipt-proven unchanged bytes were removed."
+  echo "Uninstall complete; only receipt-proven unchanged bytes and released agent renders were removed."
   exit 0
 fi
 

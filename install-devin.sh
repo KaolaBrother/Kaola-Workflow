@@ -36,8 +36,10 @@
 #   node scripts/kaola-workflow-global-contract.js uninstall --runtime devin --json
 #
 # Retired agents: older releases wrote managed profiles into .devin/agents/ and
-# ~/.config/devin/agents/. A file still carrying the kaola-workflow-managed-agent marker
-# is Kaola-owned and is removed on install; anything without it is user-owned and stays.
+# ~/.config/devin/agents/ with no ownership record. A Kaola-named profile whose bytes are a render
+# some release shipped is removed on install (#1101; the frozen catalog in
+# kaola-workflow-retired-agents.js); an edited or unrecorded one is kept and reported, and any
+# other file is user-owned and stays. The managed marker alone is not proof.
 
 set -euo pipefail
 
@@ -228,36 +230,24 @@ check_support_scripts() {
   return "$bad"
 }
 
-MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-
-# Remove the Kaola-managed agent profiles an older release deployed. Ownership is the
-# managed marker the generator embedded in every profile it rendered; a file without it
-# is user-owned and is never touched.
+# Remove the agent profiles an older release deployed, on byte proof (see the header).
 sweep_retired_devin_agents() {
   local agents_dest="$1"
-  [[ -d "$agents_dest" && ! -L "$agents_dest" ]] || return 0
-  local dest
-  for dest in "$agents_dest"/*.md; do
-    [[ -f "$dest" && ! -L "$dest" ]] || continue
-    grep -Fq "$MANAGED_AGENT_MARKER" "$dest" || continue
-    rm -f "$dest"
-    echo "Removed retired agent: $dest"
-  done
-  rmdir "$agents_dest" 2>/dev/null || true
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime devin --dir "$agents_dest" || {
+    echo "error: retired Devin agent sweep failed for $agents_dest" >&2
+    exit 1
+  }
+  if [[ -d "$agents_dest" && ! -L "$agents_dest" ]]; then rmdir "$agents_dest" 2>/dev/null || true; fi
 }
 
-# Verify that the staged .devin/skills tree matches the destination and that no
-# Kaola-managed agent files remain.
+# Verify that the staged .devin/skills tree matches the destination and that no released
+# retired agent profile remains (a kept, edited profile is reported, not a failure).
 check_artifacts() {
   local src_skills="$SOURCE_TREE/skills"
-  local bad=0 dest
-  if [[ -d "$AGENTS_DEST" ]]; then
-    for dest in "$AGENTS_DEST"/*.md; do
-      [[ -f "$dest" && ! -L "$dest" ]] || continue
-      if grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-        echo "check: retired Kaola-managed agent still installed: $dest" >&2; bad=1
-      fi
-    done
+  local bad=0
+  if ! node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime devin \
+      --dir "$AGENTS_DEST" --check >&2; then
+    echo "check: retired Kaola agent profile still installed under $AGENTS_DEST" >&2; bad=1
   fi
   if [[ ! -d "$SKILLS_DEST" ]]; then
     echo "check: missing $SKILLS_DEST" >&2; bad=1

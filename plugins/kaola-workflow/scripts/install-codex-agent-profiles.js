@@ -1386,9 +1386,8 @@ function splitInlineTomlFields(body) {
 // [features], and a bare `multi_agent_v2 = true` (plus their dotted-root equivalents) — hence the
 // inline-table parser below and the dual-shape ambiguity tracking in detectCodexDispatchMode.
 // Reads ONLY the `enabled` flag; parseMultiAgentV2NumericFields below reads the concurrency/
-// wait-timeout fields from the same feature. multi_agent_v2 stays a CHECKED required engine feature
-// (codex_multi_agent_v2_required refuses when it is absent/false) — see the preflight gate this
-// installer keeps byte-in-lock-step with.
+// wait-timeout fields from the same feature. Report-only: Kaola-Workflow neither requires nor writes
+// multi_agent_v2; the preflight carries the same helpers in lock-step.
 function parseInlineTomlTableAssignments(value) {
   const trimmed = String(value || '').trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
@@ -1472,9 +1471,8 @@ function detectCodexDispatchMode(configContent) {
 
   const v2Enabled = seen && !ambiguous && enabled;
   return {
-    // #775: the single legal dispatch mode once V2 is enabled — no more v1-thread-id fallback.
-    // null (not a fabricated 'v1-thread-id') when V2 is not enabled; runPreflight refuses
-    // codex_multi_agent_v2_required in that case rather than silently exiting ok.
+    // 'v2-task-name' when V2 is enabled; null (not a fabricated 'v1-thread-id') otherwise.
+    // Report-only: the host's native dispatch applies either way.
     dispatch_mode: v2Enabled ? 'v2-task-name' : null,
     multi_agent_v2_enabled: v2Enabled,
   };
@@ -1516,20 +1514,13 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because '
-      + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in '
-      + 'Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. '
-      + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
-      + 'in-session; or, if your Codex '
-      + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
-      + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
-      + 'model_reasoning_effort=ultra) for proactive delegation.';
+    return 'Codex does not expose its multi_agent_v2 spawn tools: features.multi_agent_v2.enabled is absent '
+      + 'or false (opt-in and off by default in Codex >=0.145.0). The host\'s native subagent behavior '
+      + 'applies; Kaola-Workflow neither requires nor writes this setting.';
   }
-  return 'Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). '
-    + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
-    + 'an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), '
-    + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
-    + 'for proactive delegation.';
+  return 'Codex dispatch posture is explicitRequestOnly: Codex spawns sub-agents when explicitly asked '
+    + 'in-session, and proactive delegation is gated by Codex on its own root reasoning-effort setting. '
+    + 'Kaola-Workflow requires neither and sets no model or effort.';
 }
 
 // #775: gates ONLY on multi_agent_v2_enabled (`features.multi_agent_v2`) — v1 is retired, so there is no
@@ -1590,16 +1581,14 @@ function deriveDispatchPosture(configContent) {
 // ---------------------------------------------------------------------------
 const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
 
-const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow '
-  + 'dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 '
-  + '(the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node '
-  + 'runtime so long-poll joins are not capped short. Example:\n'
-  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n'
-  + 'max_wait_timeout_ms = 1800000\n'
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'How Codex bounds [features.multi_agent_v2] when the user enables it '
+  + '(Kaola-Workflow neither requires nor writes any of it): max_concurrent_threads_per_session INCLUDES '
+  + 'the root thread, so the effective subagent width is that budget minus 1, and the *_wait_timeout_ms '
+  + 'keys cap long-poll joins. '
   + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
   + 'is absent are Codex >=0.145.0 SOURCE behavior, verified at tag rust-v0.145.0 in codex-rs/core/src/config/mod.rs (DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4; effective_agent_max_threads uses saturating_sub(1)) and introduced by PR #19792 — source-verified, not documented: the public configuration reference does not carry multi_agent_v2 at all. The wait-timeout bounds '
-  + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
-  + 'agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for '
+  + 'have no independently verified default and are read only when explicitly configured. '
+  + 'agents.max_threads is a separate [agents] key, NOT an alias for '
   + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
   + 'features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key '
   + 'rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the '
@@ -2360,7 +2349,7 @@ function main() {
   // ATTESTATION-STYLE / NON-FATAL treatment as the dispatch posture above. It reports STATE and
   // names no cause for it: detectCodexDispatchMode reads features.multi_agent_v2 only.
   const v2DispatchMode = detectCodexDispatchMode(postInstallConfigContent);
-  console.log(`Kaola-Workflow Codex multi_agent_v2: ${v2DispatchMode.multi_agent_v2_enabled ? 'enabled' : 'NOT enabled (see codex_multi_agent_v2_required at preflight)'}`);
+  console.log(`Kaola-Workflow Codex multi_agent_v2: ${v2DispatchMode.multi_agent_v2_enabled ? 'enabled' : 'not enabled'}`);
   const v2Bounds = deriveMultiAgentV2Bounds(postInstallConfigContent, v2DispatchMode.multi_agent_v2_enabled);
   if (v2Bounds.max_concurrent_threads_per_session !== null) {
     console.log(

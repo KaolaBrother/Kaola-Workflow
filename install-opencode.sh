@@ -48,11 +48,10 @@
 # names this edition once shipped and no longer does, and a deployed command that is neither
 # retired nor about to be written is left alone. The namespace glob that used to stand in for
 # that list could not tell the two apart, so it swept whatever the source failed to render —
-# silently, and reported as a successful install. Retired agents DERIVE it: a previous release
-# recorded `<filename>\t<sha256>` for every agent it deployed, so upgrade removes exactly the
-# previously-recorded files that are still byte-identical to what we wrote. A file absent from
-# the manifest is user-authored and is never touched; a recorded file the user then edited is
-# their work and is never touched either.
+# silently, and reported as a successful install. Retired agents (#1101) are proven, never
+# named: a previous release's manifest row (`<filename>\t<sha256>`) still matching the file, or
+# bytes that are a released render (the first releases wrote no manifest), prove Kaola wrote it.
+# Any other Kaola-named file — edited or unrecorded — is kept and reported.
 
 set -euo pipefail
 
@@ -90,8 +89,8 @@ Usage: ./install-opencode.sh [--target DIR] [--forge=github|gitlab|gitea] [--glo
   --no-scripts     skip installing support scripts (see SUPPORT SCRIPTS below)
   --yes            non-interactive (accept the default deploy path)
 
-CONFIG: opencode.json is user-owned and is never written by this installer, including any
-agent.<role>.model entries an older release seeded.
+CONFIG: opencode.json is user-owned and is never written by this installer. Any
+agent.<role> binding for a Kaola role an older release may have seeded is reported, not edited.
 
 SUPPORT SCRIPTS: workflow commands locate scripts via kaola_script(), which searches
 ./scripts/ and ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/
@@ -101,9 +100,9 @@ repo needs none of that (./scripts/ is used directly).
 
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}):
-the deployed commands/plugin/hooks and any previously-deployed agents (agents by deploy
-manifest — never a blind rm of a dir; the manifest is what lets an agent RETIRED since the
-last install still be removed) and the opencode-native support scripts.
+the deployed commands/plugin/hooks, the subagent profiles earlier releases deployed (only on
+proof: a manifest row still matching, or a released render; others are kept and reported)
+and the opencode-native support scripts.
 The SHARED ~/.config/kaola-workflow/config.json is reference-counted: it is removed only when no
 runtime still holds a reference.
 Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
@@ -241,7 +240,6 @@ in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n
 # Name of the deploy manifest recorded inside the deployed agent dir (a dotfile, so it never
 # shadows an agent). Same tab-separated `<filename>\t<sha256>` shape install.sh uses.
 AGENT_MANIFEST_NAME=".kaola-workflow-agent-manifest"
-SOURCE_AGENT_DIR="$SOURCE_TREE/agents"
 SOURCE_COMMAND_DIR="$SOURCE_TREE/commands"
 
 sha256_file() {
@@ -264,63 +262,37 @@ is_plain_basename() {
   return 0
 }
 
-# Print the hash the given manifest records for `$1` and return 0 when the manifest lists that
-# exact name; return 1 (printing nothing) otherwise. Literal string compare — the name is never
-# interpolated into a path or a pattern.
-manifest_row_hash() {
-  local want="$1" file="$2" row_name row_hash row_rest
-  [[ -f "$file" ]] || return 1
-  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
-    [[ -n "${row_name:-}" ]] || continue
-    [[ "$row_name" == "$want" ]] || continue
-    printf '%s\n' "${row_hash:-}"
-    return 0
-  done < "$file"
-  return 1
-}
-
-# Report every manifest row that is not a plain file name. Such a row cannot describe a file this
-# installer deployed into the agent dir, so it is named on stderr and then ignored.
-warn_unsafe_manifest_names() {
-  local file="$1" row_name row_rest
-  [[ -f "$file" ]] || return 0
-  while IFS=$'\t' read -r row_name row_rest || [[ -n "${row_name:-}" ]]; do
-    [[ -n "${row_name:-}" ]] || continue
-    if ! is_plain_basename "$row_name"; then
-      echo "warning: ignoring agent manifest entry that is not a plain file name: $row_name" >&2
-    fi
-  done < "$file"
-  return 0
-}
-
-# Remove agents a PREVIOUS install deployed that the current tree no longer ships. Fail-closed:
-# a candidate must be recorded in the previous manifest, absent from the canonical source tree,
-# present on disk, and still byte-identical to the hash we recorded. Anything else is left alone.
-# An absent/empty previous manifest sweeps NOTHING.
-#
-# The sweep ENUMERATES THE AGENT DIRECTORY and intersects it against the previous manifest, so a
-# delete path is never CONSTRUCTED from a manifest-supplied name: a row holding `../…`, an
-# absolute path, or a separator simply matches no directory entry and is reported + skipped.
-sweep_retired_agents() {
-  local prev_manifest="$1"
-  local agent_dir="$2"
-  local dest base prev_hash current_hash
-  [[ -f "$prev_manifest" ]] || return 0
-  warn_unsafe_manifest_names "$prev_manifest"
-  for dest in "$agent_dir"/*.md; do
-    [[ -f "$dest" && ! -L "$dest" ]] || continue
-    base="$(basename "$dest")"
-    # Still shipped by the tree → it was just re-copied; never a sweep candidate.
-    if [[ -f "$SOURCE_AGENT_DIR/$base" ]]; then continue; fi
-    prev_hash=""
-    if ! prev_hash="$(manifest_row_hash "$base" "$prev_manifest")"; then continue; fi
-    [[ -n "$prev_hash" ]] || continue
-    current_hash="$(sha256_file "$dest")"
-    [[ "$current_hash" == "$prev_hash" ]] || continue
-    rm -f "$dest"
-    echo "Removed retired agent: $dest"
+# Retire the subagent profiles earlier releases installed (#1101), with
+# scripts/kaola-workflow-retired-agents.js: <layout>/agents (manifest), the retired singular
+# <layout>/agent (its own manifest, or none in the first releases) and, for the global scope, the
+# nested <config>/.opencode/agent the v6.7-v6.8 global installs wrote. A file a manifest records
+# with the digest it still has, or whose bytes are a released render, is removed; every other
+# Kaola-named file is kept and reported; each manifest is retired once read. A symlinked or
+# non-directory carrier is reported and never followed; it does not block the install (H9).
+# opencode.json is never written: its agent.<role> bindings carry no ownership evidence, so a
+# Kaola-role binding is only reported.
+retire_opencode_agents() {
+  local dest_root="$1" layout_root="$2" global="$3" dir
+  local sweep="$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js"
+  for dir in "$layout_root/agents" "$layout_root/agent"; do
+    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" || {
+      echo "error: retired OpenCode agent sweep failed for $dir" >&2
+      exit 1
+    }
+    if [[ -d "$dir" && ! -L "$dir" ]]; then rmdir "$dir" 2>/dev/null || true; fi
   done
-  return 0
+  if [[ "$global" -eq 1 ]]; then
+    dir="$dest_root/.opencode/agent"
+    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" || {
+      echo "error: retired OpenCode agent sweep failed for $dir" >&2
+      exit 1
+    }
+    if [[ -d "$dir" && ! -L "$dir" ]]; then
+      rmdir "$dir" 2>/dev/null || true
+      rmdir "$dest_root/.opencode" 2>/dev/null || true
+    fi
+  fi
+  node "$sweep" report-bindings --runtime opencode --config "$dest_root/opencode.json" || true
 }
 
 copy_tree() {
@@ -328,36 +300,9 @@ copy_tree() {
   # layout_root: the dir that DIRECTLY holds agents/commands/plugins/hooks. Project → $dest_root/.opencode;
   # Global → $dest_root (the config root itself; opencode never scans a nested .opencode/ there).
   local layout_root="${2:-$dest_root/.opencode}"
-  local agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
-  local legacy_agent_dir="$layout_root/agent"
-  local legacy_manifest="$legacy_agent_dir/$AGENT_MANIFEST_NAME"
-
-  # Retired-agent ownership is the install transaction's admission wall. Refuse every unproven
-  # topology or same-name collision before mkdir/cp changes any runtime surface (including the
-  # plugin). A later refusal must never leave an otherwise failed install partially deployed.
-  if [[ -L "$layout_root/agents" || ( -e "$layout_root/agents" && ! -d "$layout_root/agents" )
-        || -L "$legacy_agent_dir" || ( -e "$legacy_agent_dir" && ! -d "$legacy_agent_dir" ) ]]; then
-    echo "Install error: refusing non-directory native agent carrier under $layout_root" >&2
-    exit 1
-  fi
-  if [[ -L "$agent_manifest" || ( -e "$agent_manifest" && ! -f "$agent_manifest" )
-        || -L "$legacy_manifest" || ( -e "$legacy_manifest" && ! -f "$legacy_manifest" ) ]]; then
-    echo "Install error: refusing non-regular native agent manifest under $layout_root" >&2
-    exit 1
-  fi
-  local manifest_name manifest_hash manifest_rest retired_dest
-  if [[ -f "$agent_manifest" ]]; then
-    while IFS=$'\t' read -r manifest_name manifest_hash manifest_rest \
-        || [[ -n "${manifest_name:-}" ]]; do
-      [[ -n "${manifest_name:-}" ]] || continue
-      is_plain_basename "$manifest_name" || continue
-      retired_dest="$layout_root/agents/$manifest_name"
-      if [[ -L "$retired_dest" || ( -e "$retired_dest" && ! -f "$retired_dest" ) ]]; then
-        echo "Install error: refusing non-regular retired native agent: $retired_dest" >&2
-        exit 1
-      fi
-    done < "$agent_manifest"
-  fi
+  local global_scope=0
+  [[ "$layout_root" == "$dest_root" ]] && global_scope=1
+  retire_opencode_agents "$dest_root" "$layout_root" "$global_scope"
 
   mkdir -p "$layout_root/commands" "$layout_root/plugins" "$layout_root/hooks"
   # #1044 retires the old OpenCode compact reader. Remove only the exact historical bytes; preserve
@@ -379,28 +324,6 @@ copy_tree() {
     echo "Self-dev deploy (source .opencode is already the live tree) → copy skipped."
     return
   fi
-  # Retired agents: this runtime ships no Kaola role profiles, so the previous install's
-  # manifest is the whole deletion set — remove every recorded file still byte-identical to
-  # what we wrote, then retire the manifest itself. Unrecorded or user-modified files stay.
-  sweep_retired_agents "$agent_manifest" "$layout_root/agents"
-  rm -f "$agent_manifest"
-  rmdir "$layout_root/agents" 2>/dev/null || true
-  # Migrate the retired singular agent carrier using its own manifest proof. Modified or
-  # unrecorded files are preserved byte-for-byte; the obsolete manifest itself is retired.
-  if [[ -f "$legacy_manifest" ]]; then
-    warn_unsafe_manifest_names "$legacy_manifest"
-    local legacy_file legacy_base legacy_hash
-    for legacy_file in "$legacy_agent_dir/"*.md; do
-      [[ -f "$legacy_file" && ! -L "$legacy_file" ]] || continue
-      legacy_base="$(basename "$legacy_file")"
-      legacy_hash="$(manifest_row_hash "$legacy_base" "$legacy_manifest" 2>/dev/null || true)"
-      [[ -n "$legacy_hash" && "$(sha256_file "$legacy_file")" == "$legacy_hash" ]] || continue
-      rm -f "$legacy_file"
-      echo "Removed Kaola-owned singular agent: $legacy_file"
-    done
-    rm -f "$legacy_manifest"
-  fi
-  rmdir "$legacy_agent_dir" 2>/dev/null || true
   # The COMMAND deploy is SELF-HEALING, and it removes exactly two things: the names this edition
   # RETIRED on purpose, and each command file it is about to WRITE, immediately before writing it.
   # A deployed command that is neither is one this install has nothing to put back, so a source
@@ -496,48 +419,10 @@ uninstall_edition() {
     echo "Refusing to uninstall the edition's OWN source tree ($layout_root). No-op." >&2
     return
   fi
-  # Refuse unproven link topology before any uninstall mutation. A hash-equal target does not
-  # turn a symlink into a profile this installer owns.
-  local preflight_legacy_agent_dir="$layout_root/agent"
-  local preflight_agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
-  local preflight_legacy_manifest="$preflight_legacy_agent_dir/$AGENT_MANIFEST_NAME"
-  if [[ -L "$layout_root/agents" || ( -e "$layout_root/agents" && ! -d "$layout_root/agents" )
-        || -L "$preflight_legacy_agent_dir"
-        || ( -e "$preflight_legacy_agent_dir" && ! -d "$preflight_legacy_agent_dir" ) ]]; then
-    echo "Uninstall error: refusing non-directory native agent carrier under $layout_root" >&2
-    return 1
-  fi
-  if [[ -L "$preflight_agent_manifest"
-        || ( -e "$preflight_agent_manifest" && ! -f "$preflight_agent_manifest" )
-        || -L "$preflight_legacy_manifest"
-        || ( -e "$preflight_legacy_manifest" && ! -f "$preflight_legacy_manifest" ) ]]; then
-    echo "Uninstall error: refusing non-regular native agent manifest under $layout_root" >&2
-    return 1
-  fi
   local f base sub
-  # Agents: remove what the deploy manifest records this installer wrote — which includes every
-  # agent RETIRED since that install. Manifest-listed names only; an unlisted file is
-  # user-authored and is left alone.
-  #
-  # Like the sweep, this ENUMERATES the agent dir and intersects it against the manifest rather
-  # than building `$layout_root/agent/<manifest name>` — a manifest row is never treated as a
-  # path, so a row holding `../…` or an absolute path cannot delete anything outside the dir.
-  local agent_manifest dest
-  agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
-  if [[ -L "$agent_manifest" ]]; then
-    echo "Uninstall error: refusing symbolic-link agent manifest: $agent_manifest" >&2
-    return 1
-  fi
-  if [[ -f "$agent_manifest" ]]; then
-    warn_unsafe_manifest_names "$agent_manifest"
-    for dest in "$layout_root/agents/"*.md; do
-      [[ -f "$dest" && ! -L "$dest" ]] || continue
-      base="$(basename "$dest")"
-      local owned_hash="$(manifest_row_hash "$base" "$agent_manifest" 2>/dev/null || true)"
-      if [[ -n "$owned_hash" && "$(sha256_file "$dest")" == "$owned_hash" ]]; then rm -f "$dest"; fi
-    done
-    rm -f "$agent_manifest"
-  fi
+  local dest
+  # Retired agents: the same proof the install uses (retire_opencode_agents).
+  retire_opencode_agents "$dest_root" "$layout_root" "$GLOBAL"
   for f in "$SOURCE_COMMAND_DIR/"*.md; do
     [[ -f "$f" ]] || continue
     dest="$layout_root/commands/$(basename "$f")"
@@ -558,17 +443,6 @@ uninstall_edition() {
     rm -f "$layout_root/hooks/$base"
     echo "Removed retired hook: $layout_root/hooks/$base"
   done
-  # Upgrade/uninstall cleanup for exact Kaola names in the retired singular carriers.
-  local legacy_agent_dir="$layout_root/agent" legacy_manifest="$layout_root/agent/$AGENT_MANIFEST_NAME"
-  if [[ -f "$legacy_manifest" ]]; then
-    for dest in "$legacy_agent_dir/"*.md; do
-      [[ -f "$dest" && ! -L "$dest" ]] || continue
-      base="$(basename "$dest")"
-      local legacy_owned_hash="$(manifest_row_hash "$base" "$legacy_manifest" 2>/dev/null || true)"
-      [[ -n "$legacy_owned_hash" && "$(sha256_file "$dest")" == "$legacy_owned_hash" ]] && rm -f "$dest"
-    done
-    rm -f "$legacy_manifest"
-  fi
   for base in "${WORKFLOW_COMMANDS[@]}"; do
     dest="$layout_root/command/$base"
     [[ -f "$dest" && ! -L "$dest" && -f "$SOURCE_COMMAND_DIR/$base" ]] || continue
@@ -641,7 +515,7 @@ install_support_scripts() {
   # present in source.").
   #
   # ENUMERATES THE DESTINATION and intersects it against what was just deployed, so a delete path
-  # is never CONSTRUCTED from a manifest-supplied name (same discipline as sweep_retired_agents).
+  # is never CONSTRUCTED from a manifest-supplied name (same discipline as the retired-agent sweep).
   # Scoped to `*.js` — install.sh's scope, not a wider one invented here — so anything else a user
   # keeps alongside survives. A deploy that copied NOTHING (an empty/failed manifest read) sweeps
   # nothing rather than emptying the directory.
