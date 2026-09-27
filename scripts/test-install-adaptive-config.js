@@ -143,6 +143,8 @@ try {
     runInstall(home, []);
     const manifestPath = path.join(home, '.claude', 'agents', '.kaola-agent-models.json');
     assert(!fs.existsSync(manifestPath), 'install.sh must NOT write the retired .kaola-agent-models.json');
+    // #1101: a fresh install creates no agents dir at all; an older install's dir is what holds it.
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
     // Plant a stale manifest (an older install's residue) and re-run: it must be disposed of.
     fs.writeFileSync(manifestPath, JSON.stringify({ contractor: 'opus' }));
     const upgradeOut = String(runInstall(home, []) || '');
@@ -172,26 +174,20 @@ try {
       'install.sh ' + flag + ' must fail with the generic unknown-argument error, got: ' + (threw.stderr || ''));
   }
 
-  // A standard-tier role resolves from the static defaults alone (no manifest).
-  {
-    const h = freshHome('implementer-default'); homes.push(h);
-    runInstall(h, []);
-    // spawn-class: environment
-    const resolved = execFileSync('node',
-      [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), 'implementer',
-        '--agent-dir', path.join(h, '.claude', 'agents'), '--raw'],
-      { cwd: root, encoding: 'utf8' }).trim();
-    assert(resolved === 'sonnet', 'implementer must resolve to sonnet from the static defaults; got ' + resolved);
-  }
+  // (Removed with #1101: "implementer resolves to sonnet from the static defaults" — there is no
+  // role -> model map any more; the resolver keeps only the Codex session proof, pinned by its own
+  // suite.)
 
   // #816: the RETIRED bookkeeping role must be swept from a previously-installed box — by the
-  // installer on upgrade (manifest-driven sweep_retired_agents) AND by uninstall (RETIRED_AGENTS).
+  // installer on upgrade AND by uninstall, both on the manifest proof (#1101 H3: uninstall no longer
+  // removes a marker-bearing file by name; an unrecorded one is kept and reported).
   {
     const h = freshHome('retired-contractor-sweep'); homes.push(h);
     runInstall(h, []);
     const agentsDir = path.join(h, '.claude', 'agents');
     const stale = path.join(agentsDir, 'contractor.md');
     const manifest = path.join(agentsDir, '.kaola-workflow-agent-manifest');
+    fs.mkdirSync(agentsDir, { recursive: true }); // #1101: a fresh install creates no agents dir
     // Simulate a box that installed the role on a PREVIOUS release: the file plus its manifest row.
     const staleBody = '---\nname: contractor\nmodel: sonnet\n---\n<!--\nkaola-workflow-managed-agent: true\n-->\nbody\n';
     fs.writeFileSync(stale, staleBody);
@@ -200,10 +196,15 @@ try {
     const upgradeOut2 = String(runInstall(h, []) || '');
     assert(!fs.existsSync(stale),
       '#816: install.sh must sweep a previously-installed contractor.md (retired role)');
-    assert(upgradeOut2.includes('Removed retired agent'),
+    assert(upgradeOut2.includes('Removed retired Kaola-Workflow agent: ' + stale),
       '#816: the sweep must name the removal on stdout, got: ' + upgradeOut2);
-    // uninstall path: plant it again (no manifest row needed — RETIRED_AGENTS removes by name).
+    // uninstall path: plant it again WITH a manifest row (the upgrade retired the manifest; a box
+    // that still holds the role holds its row). An unrecorded twin is the H3 counter-case.
     fs.writeFileSync(stale, staleBody);
+    fs.appendFileSync(manifest, 'contractor.md\t' + sha + '\n');
+    const unrecorded = path.join(agentsDir, 'synthesizer.md');
+    const unrecordedBody = staleBody.replace('contractor', 'synthesizer');
+    fs.writeFileSync(unrecorded, unrecordedBody);
     // #977: contractor is not the only retired role a live box can carry. These three were
     // retired from agents/ after real installs shipped them — censused from git history
     // (`git log --no-renames --diff-filter=D -- agents/`), NOT read from uninstall.sh's own
@@ -224,10 +225,14 @@ try {
     const userBody = '---\nname: my-own-helper\nmodel: sonnet\n---\n\nMy own agent.\n';
     fs.writeFileSync(userAgent, userBody);
     // spawn-class: environment
-    execFileSync('bash', ['uninstall.sh', '--forge=github'],
+    const uninstallOut = execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(stale),
-      '#816: uninstall.sh must remove a previously-installed contractor.md (RETIRED_AGENTS)');
+      '#816: uninstall.sh must remove a previously-installed, manifest-recorded contractor.md');
+    assert(fs.existsSync(unrecorded) && fs.readFileSync(unrecorded, 'utf8') === unrecordedBody,
+      '#1101 H3: uninstall.sh keeps a marker-bearing role file the manifest does not record');
+    assert(String(uninstallOut).includes('Preserved retired Kaola-Workflow agent (no_ownership_record): ' + unrecorded),
+      '#1101 H3: the kept unrecorded role file is reported, got: ' + uninstallOut);
     assert(fs.existsSync(userAgent) && fs.readFileSync(userAgent, 'utf8') === userBody,
       '#977: a user-authored agent in the shared dir survives uninstall byte-intact');
     const left977 = RETIRED_ROLES.filter(n => fs.existsSync(path.join(agentsDir, n + '.md')));

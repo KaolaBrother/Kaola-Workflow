@@ -7,7 +7,26 @@
 // process would test the suite's environment instead of the fixture's. The annotations are
 // per site rather than per file on purpose: the ratchet reads lines, so a site added later
 // still has to declare itself.
-
+//
+// #1101: Kaola-Workflow ships no subagent profiles and no model bindings, so this suite no longer
+// asserts that any are installed, rendered, pinned, manifested or repaired. Where each removed
+// meaning went:
+//   - role roster / frontmatter model / resolver tier pins, the Claude finalize implementer call
+//     card, the Claude manifest columns, the Codex profile pin schema, reviewer-profile contracts,
+//     profile byte-parity, managed-block canonical body, profile/config drift repair, layered
+//     role overrides, autofix and doctor plugin-cache profile checks -> gone with the roles (the
+//     negative is scripts/test-issue-1101-native-only.js);
+//   - symlinked profile dir / config refusal -> the scope's .codex is retire-only now: reported,
+//     never followed, not refused (#1101 H9) — test-issue-1101-codex-agent-migration.js C12; the
+//     HOME write targets (hooks, hook home) still refuse, pinned below;
+//   - ambiguous marker pair refused / role table outside the block refused / an unrelated user
+//     [agents.*] role kept -> preserved-and-reported, and the user table kept — its C8;
+//   - pruneStaleProfiles hash-only removal -> retire by record or released bytes only (H2) — its
+//     C7/C9;
+//   - profile staging-write safety -> the installer writes no profile; hook writes keep their
+//     own staging tests below;
+//   - the codex_multi_agent_v2_required refusal and profile-stale preflight statuses -> retired
+//     with the roles (the preflight reports host facts; its own suites own that).
 
 const assert = require('assert');
 const { execFileSync, spawnSync } = require('child_process');
@@ -21,14 +40,6 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
 const initialCodexVersion = process.env.KAOLA_CODEX_VERSION;
 const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
 const codexPreflight = require('./kaola-workflow-codex-preflight');
-const agentGenerator = require('./generate-agent-profiles');
-const REVIEWER_ROLES = Object.freeze(['code-reviewer']);
-const behaviorContracts = agentGenerator.loadBehaviorContracts(root);
-const runtimeAdapters = agentGenerator.loadRuntimeAdapters(root);
-const claudeSubagentDefault = runtimeAdapters.runtimes.claude.capabilities.subagent_default.model;
-// Loaded for its ROLE REGISTRY ONLY (see EXPECTED_ROLE_MODELS): the tiers this file asserts are
-// resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
-const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
 const CODEX_FLOOR_ATTESTATION = '0.145.0';
 function withCodexVersionAttestation(env = process.env) {
@@ -40,123 +51,6 @@ function withCodexVersionAttestation(env = process.env) {
 // withCodexVersionAttestation(); the no-override fixture below deliberately removes it.
 assert.strictEqual(process.env.KAOLA_CODEX_VERSION, initialCodexVersion,
   '#1036 R1: the suite must not mutate process.env.KAOLA_CODEX_VERSION globally');
-
-const VENDOR_MODEL_LITERAL = /\b(?:haiku|sonnet|opus|fable|gpt-[a-z0-9.-]+|grok-[a-z0-9.-]+|glm-[a-z0-9.-]+)\b/ig;
-
-function vendorModelLiterals(text) {
-  return [...String(text || '').matchAll(VENDOR_MODEL_LITERAL)].map(match => match[0].toLowerCase());
-}
-
-function agentCallBlocks(text) {
-  return [...String(text || '').matchAll(/^Agent\(\n[\s\S]*?^\)/gm)].map(match => match[0]);
-}
-
-function claudeFinalizeDefaultGaps(text) {
-  const blocks = agentCallBlocks(text);
-  const gaps = [];
-  if (!blocks.some(candidate =>
-    /\bsubagent_type\s*=\s*["']implementer["']/.test(candidate))) {
-    gaps.push('implementer-call');
-  }
-  for (const block of blocks) {
-    const roleMatch = block.match(/\bsubagent_type\s*=\s*["']([^"']+)["']/);
-    if (!roleMatch) continue;
-    const role = roleMatch[1];
-    const contract = behaviorContracts.roles[role];
-    if (!contract) continue;
-    // The named profile carries the single subagent binding; the call must not re-pin a model.
-    if (/^\s*model\s*=/m.test(block)) gaps.push(`${role}-model-pin`);
-    if (/^\s*(?:reasoning_)?effort\s*=/m.test(block)) gaps.push(`${role}-claude-effort-pin`);
-  }
-  const prose = String(text || '').replace(/\s+/g, ' ').toLowerCase();
-  if (!(prose.includes('task-sensitive') && prose.includes('override'))) {
-    gaps.push('task-sensitive-override');
-  }
-  return gaps;
-}
-
-function mutateAgentCall(text, role, mutate) {
-  let changed = false;
-  const output = String(text || '').replace(/^Agent\(\n[\s\S]*?^\)/gm, block => {
-    if (changed || !new RegExp(`\\bsubagent_type\\s*=\\s*["']${role}["']`).test(block)) return block;
-    changed = true;
-    return mutate(block);
-  });
-  return { changed, output };
-}
-
-// #1018 / ADR 0019: three-tier axis pins that do not need an install. Source
-// frontmatter, resolver map, routing skeletons, and reviewer bodies are the
-// subjects. These must go RED on the two-tier HEAD and green only after the
-// implementer lands the recorded decision.
-{
-  const initSkel = fs.readFileSync(path.join(root, 'templates/routing/init.skeleton.md'), 'utf8');
-  const universalAxioms = fs.readFileSync(path.join(root, 'templates/axioms.md'), 'utf8');
-  const globalContract = fs.readFileSync(
-    path.join(root, 'templates/global/kaola-workflow-global.md'), 'utf8');
-  for (const [label, universal] of [
-    ['machine-global contract', globalContract],
-    ['universal axioms', universalAxioms],
-  ]) {
-    assert.deepStrictEqual(vendorModelLiterals(universal), [],
-      label + ' must remain runtime-neutral and carry no vendor model literal');
-  }
-  const vendorLeakMutation = globalContract
-    + '\nUse gpt-6-luna as the universal default for every standard role.\n';
-  assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-6-luna'),
-    '#1035 mutation: a vendor model hardcoded into the universal consumer contract is detected');
-  assert(!/model_reasoning_effort\s*=/.test(initSkel),
-    '#1047: workflow-init carries no runtime model-configuration tutorial');
-
-  // #1018 / ADR 0019 pins replaced by #1062's single subagent binding: every Claude profile
-  // renders the same `model: sonnet` binding — no role-carried tier axis remains.
-  const RETIRED_ROLE_NAMES = ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
-    'metric-optimizer', 'adversarial-verifier', 'security-reviewer'];
-  const extractFmModel = (rel) => {
-    const text = fs.readFileSync(path.join(root, rel), 'utf8');
-    const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    if (!m) return '';
-    const row = m[1].split(/\r?\n/).find(line => /^model\s*:/.test(line));
-    return row ? row.replace(/^model\s*:\s*/, '').trim() : '';
-  };
-  for (const role of RETIRED_ROLE_NAMES) {
-    assert(!fs.existsSync(path.join(root, 'agents', role + '.md')),
-      '#1062: agents/' + role + '.md must not exist — the role is retired');
-    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], undefined,
-      '#1062: DEFAULT_AGENT_MODELS[' + role + '] must not exist — the role is retired');
-  }
-  assert.strictEqual(Object.keys(resolver.DEFAULT_AGENT_MODELS).length, 7,
-    '#1062: the resolver registry covers exactly the 7-role catalog');
-  assert.strictEqual(claudeSubagentDefault, 'sonnet',
-    '#1062: the Claude adapter declares exactly one subagent_default binding (sonnet)');
-  for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
-    assert.strictEqual(model, 'sonnet',
-      '#1062: ' + role + ' renders the single Claude subagent binding (sonnet); got ' + model);
-    const fm = extractFmModel('agents/' + role + '.md');
-    assert.strictEqual(fm, model,
-      '#1062: ' + role + ' source frontmatter (' + fm + ') must stay byte-equal to DEFAULT_AGENT_MODELS (' + model + ')');
-  }
-  for (const role of REVIEWER_ROLES) {
-    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'sonnet',
-      '#1062: ' + role + ' renders the single subagent binding (sonnet); got '
-      + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
-  }
-
-  // #1018 AC-7 DELETED per owner ruling (19:03 heartbeat, #1054): the original "findings anchor
-  // to the dispatched surface; out-of-scope as observations, never expanded, never acted on"
-  // wording was procedure-ritual boilerplate #1054's role redesign retired from all three
-  // reviewer bodies. My first revision replaced it with a per-role "scope-anchor phrase" positive
-  // check — but that is still a wording pin (an equivalent rephrasing that keeps each reviewer
-  // bounded to its one assigned subject, without using that exact phrase, would red it for no
-  // real reason). No meaning survives AC-7 that isn't already a prose gate, so it is deleted
-  // outright rather than kept as a synonym-widened pin. Reviewer scope boundaries are protected by
-  // generation integrity and native behavior acceptance (mission 14), not by this suite.
-}
-
-
-function renderClaudeInstalledReviewer(source) {
-  return source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
-}
 
 function runCodexInstaller(installerPath, projectRoot, homeRoot) {
   // spawn-class: environment
@@ -177,13 +71,9 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
     + `trust_level = ${JSON.stringify(trustLevel)}\n`);
 }
 
-// #775 (Codex 0.145 re-baseline): Kaola never writes [agents] enabled=true itself (owner decision
-// D2) — every fixture below that expects preflight/doctor to reach profile/config checks BEYOND
-// the codex_multi_agent_v2_required gate must explicitly enable it first. Enabling at the GLOBAL
-// ~/.codex layer is sufficient for any project scope (an absent project-layer field never resets
-// an explicitly-set higher/lower layer value — see deriveEffectiveRuntime); the
-// codex_multi_agent_v2_required refusal itself is proven separately and is unaffected by this
-// helper (its own fixtures deliberately omit this call).
+// Kaola never writes features.multi_agent_v2 itself; a fixture that needs the host setting on
+// enables it at the GLOBAL ~/.codex layer, which is sufficient for any project scope (an absent
+// project-layer field never resets an explicitly-set value — see deriveEffectiveRuntime).
 function enableMultiAgentV2(homeRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -191,28 +81,14 @@ function enableMultiAgentV2(homeRoot) {
   fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled = true\n\n' + existing);
 }
 
-// Install targets are authority boundaries, not merely output paths. Refuse every
-// pre-existing symlink before reading or writing through it so project/global setup
-// cannot redirect profiles, config, hooks, the stable hook home, or the manifest.
+// Install targets are authority boundaries, not merely output paths. The installer WRITES only
+// under HOME (hooks, the stable hook home), so a pre-existing symlink there is refused before any
+// read or write through it. The scope's .codex is retire-only since #1101 (reported, never
+// followed, not refused) — scripts/test-issue-1101-codex-agent-migration.js C12.
 {
   const installerPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts',
     'install-codex-agent-profiles.js');
   const cases = [
-    {
-      label: 'managed agents directory symlink',
-      prepare(projectRoot, homeRoot, outsideRoot) {
-        fs.mkdirSync(path.join(projectRoot, '.codex', 'agents'), { recursive: true });
-        fs.symlinkSync(outsideRoot, path.join(projectRoot, '.codex', 'agents', 'kaola-workflow'));
-      },
-    },
-    {
-      label: 'project config symlink',
-      prepare(projectRoot, homeRoot, outsideRoot) {
-        fs.mkdirSync(path.join(projectRoot, '.codex'), { recursive: true });
-        fs.symlinkSync(path.join(outsideRoot, 'sentinel.txt'),
-          path.join(projectRoot, '.codex', 'config.toml'));
-      },
-    },
     {
       label: 'global hooks symlink',
       prepare(projectRoot, homeRoot, outsideRoot) {
@@ -229,7 +105,6 @@ function enableMultiAgentV2(homeRoot) {
       },
     },
   ];
-
   for (const fixture of cases) {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-safe-project-'));
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-safe-home-'));
@@ -253,328 +128,6 @@ function enableMultiAgentV2(homeRoot) {
       fs.rmSync(homeRoot, { recursive: true, force: true });
       fs.rmSync(outsideRoot, { recursive: true, force: true });
     }
-  }
-}
-
-// Profile replacement staging must never reuse the predictable historical
-// `.tmp-<pid>` path, follow a planted symlink, or clobber a colliding randomized
-// stage. A collision is retried with a fresh exclusive candidate; exhausting the
-// retry budget preserves both the live target and the collision, and a failed
-// rename removes only the stage this writer created.
-{
-  const failures = [];
-
-  function runStageRegression(label, callback) {
-    try {
-      callback();
-    } catch (error) {
-      failures.push(`${label}: ${error && error.stack ? error.stack : error}`);
-    }
-  }
-
-  function withRandomStageHexes(hexes, callback) {
-    const originalRandomBytes = crypto.randomBytes;
-    let index = 0;
-    crypto.randomBytes = size => {
-      const hex = hexes[Math.min(index, hexes.length - 1)];
-      index += 1;
-      assert.strictEqual(hex.length, size * 2, 'fixture hex must match requested random-byte width');
-      return Buffer.from(hex, 'hex');
-    };
-    try {
-      return { value: callback(), calls: index };
-    } finally {
-      crypto.randomBytes = originalRandomBytes;
-    }
-  }
-
-  runStageRegression('profile predictable-stage symlink', () => {
-    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-stage-source-'));
-    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-stage-target-'));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-stage-outside-'));
-    const target = path.join(targetDir, 'implementer.toml');
-    const sentinel = path.join(outsideDir, 'sentinel.txt');
-    const plantedStage = `${target}.tmp-${process.pid}`;
-    try {
-      fs.writeFileSync(path.join(sourceDir, 'implementer.toml'), 'new profile bytes\n');
-      fs.writeFileSync(sentinel, 'unchanged\n');
-      fs.symlinkSync(sentinel, plantedStage);
-      assert.strictEqual(typeof codexProfileInstaller.copyAgentProfiles, 'function',
-        'installer must export its profile staging helper for filesystem regressions');
-
-      codexProfileInstaller.copyAgentProfiles(sourceDir, targetDir);
-
-      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new profile bytes\n');
-      assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n',
-        'profile staging must not write through the historical predictable symlink');
-      assert(fs.lstatSync(plantedStage).isSymbolicLink(),
-        'profile staging must leave an unowned predictable-path collision untouched');
-    } finally {
-      fs.rmSync(sourceDir, { recursive: true, force: true });
-      fs.rmSync(targetDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  runStageRegression('randomized-stage collision retry', () => {
-    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-collision-source-'));
-    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-collision-target-'));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-collision-outside-'));
-    const target = path.join(targetDir, 'implementer.toml');
-    const sentinel = path.join(outsideDir, 'sentinel.txt');
-    const collisionHex = '11'.repeat(16);
-    const collision = `${target}.kaola-stage-${collisionHex}`;
-    try {
-      fs.writeFileSync(path.join(sourceDir, 'implementer.toml'), 'collision-safe profile\n');
-      fs.writeFileSync(sentinel, 'unchanged\n');
-      fs.symlinkSync(sentinel, collision);
-
-      const random = withRandomStageHexes([collisionHex, '22'.repeat(16)], () => {
-        codexProfileInstaller.copyAgentProfiles(sourceDir, targetDir);
-      });
-
-      assert.strictEqual(random.calls, 2,
-        'profile staging must retry the colliding exclusive candidate with fresh randomness');
-      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'collision-safe profile\n');
-      assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n');
-      assert(fs.lstatSync(collision).isSymbolicLink(),
-        'exclusive profile staging must preserve a colliding symlink owned by another process');
-    } finally {
-      fs.rmSync(sourceDir, { recursive: true, force: true });
-      fs.rmSync(targetDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  runStageRegression('randomized-stage collision exhaustion', () => {
-    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-exhaust-source-'));
-    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-exhaust-target-'));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-exhaust-outside-'));
-    const target = path.join(targetDir, 'implementer.toml');
-    const sentinel = path.join(outsideDir, 'sentinel.txt');
-    const collisionHex = '55'.repeat(16);
-    const collision = `${target}.kaola-stage-${collisionHex}`;
-    try {
-      fs.writeFileSync(path.join(sourceDir, 'implementer.toml'), 'replacement profile\n');
-      fs.writeFileSync(target, 'live profile\n');
-      fs.writeFileSync(sentinel, 'unchanged\n');
-      fs.symlinkSync(sentinel, collision);
-
-      assert.throws(() => {
-        withRandomStageHexes([collisionHex], () => {
-          codexProfileInstaller.copyAgentProfiles(sourceDir, targetDir);
-        });
-      }, error => error && /^atomic_stage_collision:/.test(error.message),
-      'exhausted exclusive-stage collisions must raise a typed refusal');
-
-      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'live profile\n',
-        'collision exhaustion must preserve the live target');
-      assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n');
-      assert(fs.lstatSync(collision).isSymbolicLink(),
-        'collision exhaustion must not clean up a stage the installer did not create');
-    } finally {
-      fs.rmSync(sourceDir, { recursive: true, force: true });
-      fs.rmSync(targetDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  runStageRegression('owned-stage cleanup after rename failure', () => {
-    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-cleanup-source-'));
-    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-profile-cleanup-target-'));
-    const target = path.join(targetDir, 'implementer.toml');
-    const stageHex = '66'.repeat(16);
-    const stage = `${target}.kaola-stage-${stageHex}`;
-    const originalRenameSync = fs.renameSync;
-    try {
-      fs.writeFileSync(path.join(sourceDir, 'implementer.toml'), 'replacement profile\n');
-      fs.writeFileSync(target, 'live profile\n');
-      fs.renameSync = (source, destination) => {
-        if (source === stage && destination === target) {
-          throw new Error('fixture rename failure');
-        }
-        return originalRenameSync(source, destination);
-      };
-
-      assert.throws(() => {
-        withRandomStageHexes([stageHex], () => {
-          codexProfileInstaller.copyAgentProfiles(sourceDir, targetDir);
-        });
-      }, /fixture rename failure/);
-
-      assert.strictEqual(fs.existsSync(stage), false,
-        'a failed rename must remove only the exclusive stage created by this writer');
-      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'live profile\n',
-        'a failed rename must preserve the live target');
-    } finally {
-      fs.renameSync = originalRenameSync;
-      fs.rmSync(sourceDir, { recursive: true, force: true });
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
-  });
-
-  assert.strictEqual(failures.length, 0,
-    `atomic stage regressions failed:\n${failures.join('\n\n')}`);
-}
-
-// The installer owns one exact managed marker pair and one declaration for each
-// managed role. Ambiguous marker spellings and pre-existing aliases must refuse
-// before profiles, hooks, manifests, or config bytes are written. Unrelated user
-// roles remain valid neighbors.
-{
-  const installerPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts',
-    'install-codex-agent-profiles.js');
-  const begin = '# BEGIN kaola-workflow agents';
-  const end = '# END kaola-workflow agents';
-  const installerSource = fs.readFileSync(installerPath, 'utf8');
-  const postVerifySource = installerSource.slice(
-    installerSource.indexOf('function postVerify('),
-    installerSource.indexOf('// issue #543 D4:', installerSource.indexOf('function postVerify(')),
-  );
-  assert(postVerifySource.includes('managedConfigProof('),
-    'postVerify must reuse the canonical marker/body/outside-declaration proof');
-  assert(!/indexOf\(\s*(?:beginMarker|endMarker)\s*\)/.test(postVerifySource),
-    'postVerify must not fall back to raw marker indexOf checks');
-
-  function assertInstallerRefusesWithoutWrites(configText, expectedStatus, label) {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-config-proof-project-'));
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-config-proof-home-'));
-    const configPath = path.join(projectRoot, '.codex', 'config.toml');
-    try {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, configText);
-      const before = fs.readFileSync(configPath, 'utf8');
-      const result = runCodexInstaller(installerPath, projectRoot, homeRoot);
-      assert.notStrictEqual(result.status, 0, label + ': installer must refuse');
-      assert(new RegExp(`^${expectedStatus}:`, 'm').test(result.stderr),
-        label + ': installer must use ' + expectedStatus + '; got ' + result.stderr);
-      assert.strictEqual(fs.readFileSync(configPath, 'utf8'), before,
-        label + ': refusal must preserve config.toml byte-for-byte');
-      assert(!fs.existsSync(path.join(projectRoot, '.codex', 'agents')),
-        label + ': refusal must happen before profile writes');
-      assert(!fs.existsSync(path.join(homeRoot, '.codex')),
-        label + ': refusal must happen before global hook/stable-home writes');
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-    }
-  }
-
-  const markerCases = [
-    ['leading marker whitespace', `  ${begin}\n  ${end}\n`],
-    ['trailing marker whitespace', `${begin}  \n${end}\t\n`],
-    ['marker suffix comments', `${begin} # duplicate\n${end} # duplicate\n`],
-    ['marker case drift', '# begin KAOLA-WORKFLOW Agents\n# end KAOLA-WORKFLOW Agents\n'],
-    ['unpaired marker', `${begin}\n`],
-  ];
-  for (const [label, configText] of markerCases) {
-    assertInstallerRefusesWithoutWrites(configText, 'managed_block_ambiguous', label);
-  }
-
-  const conflictCases = [
-    ['exact managed role table', '[agents.code-reviewer]\nconfig_file = "local.toml"\n'],
-    ['nested managed role table', '[agents.code-reviewer.extra]\nvalue = true\n'],
-    ['quoted managed role table', '["agents"."code-reviewer"]\nconfig_file = "local.toml"\n'],
-    ['dotted managed role assignment',
-      '"agents"."code-reviewer".config_file = "local.toml"\n'],
-    ['managed role assignment inside agents table',
-      '[agents]\n"code-reviewer" = { config_file = "local.toml" }\n'],
-    ['managed role inside root inline agents table',
-      'agents = { "code-reviewer" = { config_file = "local.toml" } }\n'],
-  ];
-  for (const [label, configText] of conflictCases) {
-    assertInstallerRefusesWithoutWrites(configText, 'managed_role_conflict_outside', label);
-  }
-
-  {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-unrelated-role-project-'));
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-unrelated-role-home-'));
-    const configPath = path.join(projectRoot, '.codex', 'config.toml');
-    const unrelated = '[agents.my-local-role]\nconfig_file = "./agents/my-local-role.toml"\n';
-    try {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, unrelated);
-      const result = runCodexInstaller(installerPath, projectRoot, homeRoot);
-      assert.strictEqual(result.status, 0,
-        'unrelated role declaration must coexist with managed profiles: ' + result.stderr);
-      const installed = fs.readFileSync(configPath, 'utf8');
-      assert(installed.startsWith(unrelated),
-        'unrelated role declaration must be preserved byte-for-byte before the managed block');
-      assert(installed.includes(`${begin}\n`) && installed.includes(`\n${end}`),
-        'unrelated role install must append one canonical managed marker pair');
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-    }
-  }
-}
-
-// The supported binding is the single gpt-6-luna/max pin on every generated profile; an exact
-// historical Sol/medium pair is stale migration input rather than fresh schema input, and a
-// profile with no pin at all is now schema-invalid.
-{
-  const current = fs.readFileSync(path.join(root, 'plugins/kaola-workflow/agents/implementer.toml'), 'utf8');
-  const legacyPinned = current
-    .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
-    .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
-  assert.deepStrictEqual(codexProfileInstaller.validateProfileText(current, 'implementer'), [],
-    'a profile carrying the single pinned binding must satisfy the source schema');
-  assert(codexProfileInstaller.validateProfileText(
-    current.replace(/^model = "gpt-6-luna"$\n/m, '')
-      .replace(/^model_reasoning_effort = "max"$\n/m, ''), 'implementer').length > 0,
-    'an unpinned profile must FAIL the source schema — omission is no longer the binding');
-  assert.strictEqual(typeof codexProfileInstaller.classifyProfilePinPosture, 'function',
-    'installer exports the profile pin migration classifier');
-  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(legacyPinned), 'legacy_pinned',
-    'an exact historical Sol/medium pair is stale migration input, not fresh');
-  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(current), 'malformed',
-    'the current gpt-6-luna/max pin is not a legacy migration pair');
-}
-
-// A previous manifest proves stale ownership only when it still binds the exact
-// bytes on disk. Drifted or unverifiable paths become unmanaged, even when a
-// stale entry uses a historically retired Kaola filename.
-{
-  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-stale-profile-prune-'));
-  const managedName = 'old-managed.toml';
-  const customName = 'custom-profile.toml';
-  const malformedName = 'malformed-hash.toml';
-  const unverifiableName = 'unverifiable.toml';
-  const retiredName = codexProfileInstaller.RETIRED_PROFILE_FILES[0];
-  const digest = value => 'sha256:' + agentGenerator.sha256(value);
-  try {
-    fs.writeFileSync(path.join(agentsDir, managedName), 'managed bytes\n');
-    fs.writeFileSync(path.join(agentsDir, customName), 'custom bytes\n');
-    fs.writeFileSync(path.join(agentsDir, malformedName), 'malformed hash bytes\n');
-    fs.mkdirSync(path.join(agentsDir, unverifiableName));
-    fs.writeFileSync(path.join(agentsDir, retiredName), 'custom retired-name bytes\n');
-
-    const result = codexProfileInstaller.pruneStaleProfiles(agentsDir, [], {
-      files: {
-        [managedName]: digest('managed bytes\n'),
-        [customName]: digest('old managed bytes\n'),
-        [malformedName]: 'sha256:not-a-digest',
-        [unverifiableName]: digest('old directory bytes\n'),
-        [retiredName]: digest('old retired bytes\n'),
-      },
-    });
-
-    assert(!fs.existsSync(path.join(agentsDir, managedName)),
-      'byte-identical stale managed profile must be deleted');
-    assert.deepStrictEqual(result.removed, [{ file: managedName, reason: 'stale-managed' }],
-      'only an exact previous-manifest hash match is stale-managed');
-    assert.deepStrictEqual(result.extraUnmanaged,
-      [customName, malformedName, retiredName, unverifiableName].sort(),
-      'modified, malformed-hash, retired-name, and unverifiable entries stay unmanaged');
-    assert.strictEqual(fs.readFileSync(path.join(agentsDir, customName), 'utf8'), 'custom bytes\n',
-      'an old manifest hash must not delete a custom profile');
-    assert.strictEqual(fs.readFileSync(path.join(agentsDir, retiredName), 'utf8'),
-      'custom retired-name bytes\n',
-      'a previous-manifest mismatch must not fall through to retired-name deletion');
-    assert(fs.statSync(path.join(agentsDir, unverifiableName)).isDirectory(),
-      'an unverifiable stale path must remain on disk');
-  } finally {
-    fs.rmSync(agentsDir, { recursive: true, force: true });
   }
 }
 
@@ -1234,1136 +787,6 @@ function enableMultiAgentV2(homeRoot) {
     /simulated installer hook refresh failure/i);
 }
 
-// A project-local Codex layer has higher precedence than the global layer. A
-// fresh global install must therefore never mask a present, stale project
-// Kaola profile set, even when the mutation is parse-valid, self-rehashed, and
-// its local manifest is rewritten to agree with the mutated bytes.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-project-override-'));
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-global-base-'));
-  try {
-    // spawn-class: environment
-    const runInstaller = args => execFileSync(process.execPath, [installerPath, ...args], {
-      cwd: pluginRoot,
-      env: { ...process.env, HOME: homeRoot },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    runInstaller(['--global']);
-    trustCodexProject(homeRoot, projectRoot);
-    runInstaller([projectRoot]);
-    enableMultiAgentV2(homeRoot);
-
-    const projectAgents = path.join(projectRoot, '.codex', 'agents', 'kaola-workflow');
-    const profilePath = path.join(projectAgents, 'code-reviewer.toml');
-    const canonical = fs.readFileSync(profilePath, 'utf8');
-    const mutated = canonical.replace('# Code Reviewer', '# Code Reviewer\n\nProject note.');
-    assert.notStrictEqual(mutated, canonical,
-      'project override fixture must change parse-valid body bytes');
-    assert.deepStrictEqual(codexPreflight.validateProfileText(mutated, 'code-reviewer'), [],
-      'project override fixture remains schema/identity valid so exact provenance is the deciding gate');
-    fs.writeFileSync(profilePath, mutated);
-
-    const manifestPath = path.join(projectAgents, '.kaola-managed-profiles.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    manifest.files['code-reviewer.toml'] = 'sha256:' + agentGenerator.sha256(mutated);
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-
-    // spawn-class: environment
-    const refused = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(refused.status, 0,
-      'fresh global profiles must not mask a stale higher-precedence project override');
-    const refusal = JSON.parse(refused.stdout);
-    assert.strictEqual(refusal.status, 'profiles_stale',
-      'parse-valid project override drift is an exact-byte stale refusal');
-    assert((refusal.stale_profiles || []).some(entry =>
-      (entry.reasons || []).some(reason => reason.includes('profile_bytes_mismatch'))),
-    'project override refusal must preserve the exact bundled-source mismatch reason');
-
-    // spawn-class: environment
-    const repaired = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(repaired.status, 0,
-      'normal preflight may repair the active project override before dispatch: '
-      + repaired.stderr + repaired.stdout);
-    assert.strictEqual(fs.readFileSync(profilePath, 'utf8'), canonical,
-      'project override autofix restores the canonical bundled reviewer bytes');
-  } finally {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-  }
-}
-
-// The preflight must validate the complete managed config bytes that Codex will
-// load, not just count table headings. Metadata/path drift and outside wildcard,
-// exact, or nested Kaola-role collisions fail normal + doctor gates; unrelated
-// user roles remain valid outside the canonical managed markers.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const cases = [
-    {
-      // #775: the managed block template no longer opens with [features] at all (config/
-      // agents.toml carries only [agents.<role>] registrations now), so leading managed-body
-      // byte drift is exercised via a trailing-whitespace mutation instead of a retired header.
-      label: 'managed block leading byte drift',
-      mutate: text => text.replace('[agents.code-explorer]\n', '[agents.code-explorer]  \n'),
-    },
-    {
-      label: 'missing config_file',
-      mutate: text => text.replace(
-        'config_file = "./agents/kaola-workflow/code-reviewer.toml"\n', ''),
-    },
-    {
-      label: 'cross-role existing config_file',
-      mutate: text => text.replace(
-        'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-        'config_file = "./agents/kaola-workflow/doc-updater.toml"'),
-    },
-    {
-      label: 'absolute config_file',
-      mutate: text => text.replace(
-        'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-        'config_file = "/tmp/code-reviewer.toml"'),
-    },
-    {
-      label: 'description metadata drift',
-      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live rewritten description
-      // (measured: `description = "Code reviewer. Independently examines...` in
-      // plugins/kaola-workflow/agents/code-reviewer.toml) — the old "Precision-first code review
-      // specialist" prefix no longer exists, so this mutation was a byte-identical no-op. A short
-      // stable prefix of the live description is enough; the whole sentence is not pinned.
-      mutate: text => text.replace(
-        'description = "Code reviewer. Independently examines',
-        'description = "Drifted. Independently examines'),
-    },
-    {
-      label: 'nickname metadata drift',
-      mutate: text => text.replace(
-        'nickname_candidates = ["Reviewer", "Critic", "Inspector"]',
-        'nickname_candidates = ["Wrong", "Critic", "Inspector"]'),
-    },
-    {
-      label: 'extra managed key',
-      mutate: text => text.replace(
-        'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-        'config_file = "./agents/kaola-workflow/code-reviewer.toml"\nmodel = "foreign"'),
-    },
-    {
-      label: 'quoted outside agent table',
-      mutate: text => text + '\n[agents."code-reviewer"]\nconfig_file = "./agents/kaola-workflow/code-reviewer.toml"\n',
-      outside: true,
-    },
-    {
-      label: 'nested table below managed role',
-      mutate: text => text + '\n[agents.code-reviewer.extra]\nvalue = "shadow"\n',
-      outside: true,
-    },
-    {
-      label: 'fully quoted outside agent table',
-      mutate: text => text + '\n["agents"."code-reviewer"]\nconfig_file = "./agents/kaola-workflow/code-reviewer.toml"\n',
-      outside: true,
-    },
-    {
-      label: 'unicode-escaped outside agent table',
-      mutate: text => text + '\n["ag\\u0065nts"."code-reviewer"]\nconfig_file = "./agents/kaola-workflow/code-reviewer.toml"\n',
-      outside: true,
-    },
-    {
-      label: 'long-unicode-escaped outside agent table',
-      mutate: text => text + '\n["ag\\U00000065nts"."code-reviewer"]\nconfig_file = "./agents/kaola-workflow/code-reviewer.toml"\n',
-      outside: true,
-    },
-    {
-      label: 'unicode-escaped root dotted agent assignment',
-      mutate: text => '"ag\\u0065nts"."code-reviewer".config_file = "./agents/kaola-workflow/code-reviewer.toml"\n\n' + text,
-      outside: true,
-    },
-    {
-      label: 'long-unicode-escaped root inline agent assignment',
-      mutate: text => '"ag\\U00000065nts" = { code-reviewer = { config_file = "./agents/kaola-workflow/code-reviewer.toml" } }\n\n' + text,
-      outside: true,
-    },
-    {
-      label: 'indented outside agent table',
-      mutate: text => text + '\n  [ agents . code-reviewer ]\nconfig_file = "./agents/kaola-workflow/code-reviewer.toml"\n',
-      outside: true,
-    },
-    {
-      label: 'wildcard agents table override',
-      mutate: text => text + '\n[agents]\ncode-reviewer = { config_file = "./agents/kaola-workflow/code-reviewer.toml" }\n',
-      outside: true,
-    },
-  ];
-
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-managed-config-project-'));
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-managed-config-home-'));
-  try {
-    const installed = runCodexInstaller(installerPath, projectRoot, homeRoot);
-    assert.strictEqual(installed.status, 0, 'managed-config fixture install: ' + installed.stderr);
-    trustCodexProject(homeRoot, projectRoot);
-    enableMultiAgentV2(homeRoot);
-    const configPath = path.join(projectRoot, '.codex', 'config.toml');
-    const canonical = fs.readFileSync(configPath, 'utf8');
-    const userProfile = path.join(projectRoot, '.codex', 'agents', 'my-local-role.toml');
-    fs.mkdirSync(path.dirname(userProfile), { recursive: true });
-    fs.writeFileSync(userProfile,
-      'name = "my-local-role"\ndeveloper_instructions = "project user role"\n');
-    fs.writeFileSync(configPath, canonical
-      + '\n[agents.my-local-role]\n'
-      + 'description = "unrelated project user role"\n'
-      + 'config_file = "./agents/my-local-role.toml"\n');
-    // spawn-class: environment
-    let unrelated = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(unrelated.status, 0,
-      'an unrelated project role outside canonical managed markers remains allowed: '
-      + unrelated.stderr + unrelated.stdout);
-    // spawn-class: environment
-    unrelated = spawnSync(process.execPath,
-      [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(unrelated.status, 0,
-      'doctor stays green for an unrelated project role outside canonical managed markers: '
-      + unrelated.stderr + unrelated.stdout);
-    assert.strictEqual(JSON.parse(unrelated.stdout).status, 'ok',
-      'unrelated project role does not make the doctor scope stale');
-
-    for (const fixture of cases) {
-      const mutated = fixture.mutate(canonical);
-      assert.notStrictEqual(mutated, canonical, fixture.label + ': mutation must change config bytes');
-      fs.writeFileSync(configPath, mutated);
-
-      // spawn-class: environment
-      const normal = spawnSync(process.execPath,
-        [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(normal.status, 0,
-        fixture.label + ': normal preflight must refuse managed config drift');
-      const normalJson = JSON.parse(normal.stdout);
-      assert.notStrictEqual(normalJson.status, 'ok', fixture.label + ': refusal status must not be ok');
-      if (fixture.outside) {
-        assert.strictEqual(normalJson.status, 'autofix_unsafe',
-          fixture.label + ': outside agents declaration requires manual repair');
-      } else {
-        assert.strictEqual(normalJson.status, 'config_stale',
-          fixture.label + ': managed block byte drift is typed config_stale');
-      }
-
-      // spawn-class: environment
-      const doctor = spawnSync(process.execPath,
-        [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(doctor.status, 0, fixture.label + ': doctor must report stale');
-      const doctorJson = JSON.parse(doctor.stdout);
-      const projectScope = doctorJson.scopes.find(scope => scope.scope === 'project');
-      assert(projectScope, fixture.label + ': doctor must include project scope');
-      if (fixture.outside) {
-        assert((projectScope.conflicting_roles_outside || []).length > 0,
-          fixture.label + ': doctor records the outside agents declaration');
-      } else {
-        assert.strictEqual(projectScope.managed_block_drift, true,
-          fixture.label + ': doctor records exact managed block drift');
-      }
-    }
-
-    fs.writeFileSync(configPath,
-      '[mcp_servers.context7.env]\nagents = "ordinary-env-value"\n\n' + canonical);
-    // spawn-class: environment
-    const nestedAgentsKey = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(nestedAgentsKey.status, 0,
-      'an `agents` key inside a non-agent TOML table is not a top-level override: '
-      + nestedAgentsKey.stderr + nestedAgentsKey.stdout);
-
-    const proseOnly = 'decoy = """\n'
-      + canonical.trimEnd() + '\n'
-      + '[features.multi_agent_v2]\n'
-      + 'enabled = true\nnon_code_mode_only = false\n'
-      + '"""\n'
-      + "literal_notes = '''\n[agents.security-reviewer]\n[features]\n'''\n";
-    fs.writeFileSync(configPath, proseOnly);
-    // spawn-class: environment
-    const decoyPreflight = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(decoyPreflight.status, 0,
-      'a canonical-looking managed block inside multiline prose is not an active block');
-    assert.notStrictEqual(JSON.parse(decoyPreflight.stdout).status, 'ok',
-      'multiline marker decoy must never satisfy the managed config gate');
-    const proseInstall = runCodexInstaller(installerPath, projectRoot, homeRoot);
-    assert.strictEqual(proseInstall.status, 0,
-      'table-looking lines inside TOML multiline strings must not affect installer parsing: '
-      + proseInstall.stderr);
-    const proseInstalledConfig = fs.readFileSync(configPath, 'utf8');
-    assert(proseInstalledConfig.includes(
-      '# BEGIN kaola-workflow agents\n[agents.'),
-    'multiline prose that says [features] must not suppress the canonical managed agents-only body');
-    // spawn-class: environment
-    const prosePreflight = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(prosePreflight.status, 0,
-      'table-looking lines inside TOML multiline strings must not create false conflicts or unsafe transport: '
-      + prosePreflight.stderr + prosePreflight.stdout);
-
-    // #775: the managed block template (config/agents.toml) no longer carries ANY top-level
-    // table to conditionally strip — managedBlock() ignores existing content entirely now, so an
-    // unrelated external [features]-shaped table (retired grammar the user may still have lying
-    // around) has no effect on the always-agents-only managed body.
-    fs.writeFileSync(configPath, '  ["features"] # TOML-equivalent quoted table\nmulti_agent = true\n');
-    const quotedFeaturesInstall = runCodexInstaller(installerPath, projectRoot, homeRoot);
-    assert.strictEqual(quotedFeaturesInstall.status, 0,
-      'installer accepts a quoted/indented external features table: '
-      + quotedFeaturesInstall.stderr);
-    const quotedFeaturesConfig = fs.readFileSync(configPath, 'utf8');
-    assert(!quotedFeaturesConfig.includes(
-      '# BEGIN kaola-workflow agents\n[features]\n'),
-    'the managed block never carries a [features] table, regardless of external content');
-    assert(quotedFeaturesConfig.includes(
-      '# BEGIN kaola-workflow agents\n[agents.'),
-    'the managed block always selects the canonical agent-only body');
-    // spawn-class: environment
-    const quotedFeaturesPreflight = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(quotedFeaturesPreflight.status, 0,
-      'preflight derives the same managed-body grammar for quoted external features: '
-      + quotedFeaturesPreflight.stderr + quotedFeaturesPreflight.stdout);
-  } finally {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-  }
-}
-
-// Codex merges config layers from HOME through the repository root to cwd. Role/managed-block
-// staleness must therefore be evaluated against the effective overlay: no lower fresh layer may
-// mask a higher stale declaration. #775: the retired transport-mode grammar (scalar vs table
-// [features.multi_agent_v2] shape overlaid across layers) has no replacement — the only
-// remaining per-layer overlay concern is whether [agents].enabled resolves true/false across
-// layers, and whether numeric bounds fields overlay per-field; both are proven directly below.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-layered-project-'));
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-layered-home-'));
-  try {
-    // spawn-class: environment
-    const globalInstall = spawnSync(process.execPath, [installerPath, '--global'], {
-      cwd: pluginRoot,
-      env: { ...process.env, HOME: homeRoot },
-      encoding: 'utf8',
-    });
-    assert.strictEqual(globalInstall.status, 0, 'layered fixture global install: ' + globalInstall.stderr);
-    trustCodexProject(homeRoot, projectRoot);
-    enableMultiAgentV2(homeRoot);
-    const projectCodex = path.join(projectRoot, '.codex');
-    fs.mkdirSync(projectCodex, { recursive: true });
-    const projectConfig = path.join(projectCodex, 'config.toml');
-
-    fs.writeFileSync(projectConfig,
-      '[agents.code-reviewer]\n'
-      + 'description = "override"\n'
-      + 'config_file = "./agents/kaola-workflow/code-reviewer.toml"\n');
-    // spawn-class: environment
-    let result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(result.status, 0,
-      'one-role project override must not be masked by fresh global profiles');
-    assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
-      'one-role project override is a typed manual-repair refusal');
-
-    fs.writeFileSync(projectConfig,
-      '[agents.code-reviewer.extra]\nvalue = "shadow"\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(result.status, 0,
-      'a nested table below a managed Kaola role must not be masked by global profiles');
-    assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
-      'nested managed-role shadow uses the manual-repair refusal');
-
-    fs.mkdirSync(path.join(projectCodex, 'agents'), { recursive: true });
-    fs.writeFileSync(path.join(projectCodex, 'agents', 'my-local-role.toml'),
-      'name = "my-local-role"\ndeveloper_instructions = "local"\n');
-    fs.writeFileSync(projectConfig,
-      '[agents.my-local-role]\n'
-      + 'description = "unrelated local role"\n'
-      + 'config_file = "./agents/my-local-role.toml"\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 0,
-      'an unrelated valid project role must coexist with fresh global Kaola profiles: '
-      + result.stderr + result.stdout);
-
-    const globalConfigPath = path.join(homeRoot, '.codex', 'config.toml');
-    const globalCanonical = fs.readFileSync(globalConfigPath, 'utf8');
-
-    fs.writeFileSync(globalConfigPath, globalCanonical
-      + '\n[agents."code-reviewer"]\n'
-      + 'config_file = "./agents/kaola-workflow/code-reviewer.toml"\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(result.status, 0,
-      'a duplicate managed Kaola role outside the global managed markers must fail closed');
-    assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
-      'a duplicate global managed-role declaration requires manual repair');
-    // spawn-class: environment
-    let doctor = spawnSync(process.execPath,
-      [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(doctor.status, 0,
-      'doctor must mark an outside duplicate global managed role stale');
-    let doctorJson = JSON.parse(doctor.stdout);
-    const duplicateGlobalScope = (doctorJson.scopes || []).find(scope => scope.scope === 'user');
-    assert(duplicateGlobalScope
-      && (duplicateGlobalScope.managed_role_conflicts_outside || []).includes('code-reviewer'),
-    'doctor reports the exact conflicting global managed role');
-
-    const globalUserRole = path.join(homeRoot, '.codex', 'agents', 'global-user-role.toml');
-    fs.mkdirSync(path.dirname(globalUserRole), { recursive: true });
-    fs.writeFileSync(globalUserRole,
-      'name = "global-user-role"\ndeveloper_instructions = "global user role"\n');
-    fs.writeFileSync(globalConfigPath, globalCanonical
-      + '\n[agents.global-user-role]\n'
-      + 'description = "unrelated global user role"\n'
-      + 'config_file = "./agents/global-user-role.toml"\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 0,
-      'an unrelated global user role must coexist with managed Kaola roles: '
-      + result.stderr + result.stdout);
-    // spawn-class: environment
-    doctor = spawnSync(process.execPath,
-      [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(doctor.status, 0,
-      'doctor stays green for an unrelated global user role: '
-      + doctor.stderr + doctor.stdout);
-    assert.strictEqual(JSON.parse(doctor.stdout).status, 'ok',
-      'unrelated global role does not make the doctor scope stale');
-
-    // #775: [agents].enabled layering — a lower (project) layer that does not mention `enabled`
-    // at all never resets a higher (global) layer's explicit true; an explicit lower-layer
-    // `enabled = false` DOES override the higher layer (overlay-per-field, not per-table).
-    fs.writeFileSync(projectConfig, '');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(JSON.parse(result.stdout).multi_agent_v2_enabled, true,
-      "an absent project-layer [agents] table never resets the global layer's enabled=true");
-    fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = false\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 7,
-      "an explicit project-layer enabled=false overrides the global layer's enabled=true");
-    assert.strictEqual(JSON.parse(result.stdout).status, 'codex_multi_agent_v2_required',
-      'the overridden-disabled effective layer refuses codex_multi_agent_v2_required');
-
-    // #775: numeric bounds fields also overlay per-field from a single effective merged [agents]
-    // table (the same overlay-per-key discipline as `enabled` above) — a higher layer configuring
-    // only max_concurrent_threads_per_session combines with a lower layer's max_wait_timeout_ms.
-    fs.writeFileSync(globalConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_wait_timeout_ms = 1800000\n\n' + globalCanonical);
-    fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 6\n');
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 0, 'combined per-field bounds overlay must not refuse: ' + result.stderr + result.stdout);
-    const combinedJson = JSON.parse(result.stdout);
-    assert.strictEqual(combinedJson.max_concurrent_threads_per_session, 6,
-      "higher project layer's threads value wins");
-    assert.strictEqual(combinedJson.max_wait_timeout_ms, 1800000,
-      "lower global layer's wait-timeout value is preserved when the higher layer does not repeat it");
-
-    // A nested cwd still loads every project config layer from repository root.
-    fs.writeFileSync(globalConfigPath, globalCanonical);
-    fs.mkdirSync(path.join(projectRoot, '.git'));
-    const nested = path.join(projectRoot, 'src', 'nested');
-    fs.mkdirSync(nested, { recursive: true });
-    const projectInstall = runCodexInstaller(installerPath, projectRoot, homeRoot);
-    assert.strictEqual(projectInstall.status, 0,
-      'nested-layer fixture project install: ' + projectInstall.stderr);
-    const rootProjectConfig = path.join(projectRoot, '.codex', 'config.toml');
-    fs.writeFileSync(rootProjectConfig, fs.readFileSync(rootProjectConfig, 'utf8').replace(
-      'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-      'config_file = "./agents/kaola-workflow/doc-updater.toml"'));
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', nested, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(result.status, 0,
-      'nested cwd must refuse stale repository-root managed config');
-    assert.strictEqual(JSON.parse(result.stdout).status, 'config_stale',
-      'root project layer drift remains a typed config refusal from nested cwd');
-    // spawn-class: environment
-    doctor = spawnSync(process.execPath,
-      [preflightPath, '--doctor', '--project-root', nested, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(doctor.status, 0,
-      'doctor from nested cwd must refuse the same stale repository-root layer');
-    doctorJson = JSON.parse(doctor.stdout);
-    assert((doctorJson.scopes || []).some(scope =>
-      scope.codex_dir === path.join(projectRoot, '.codex')
-      && scope.managed_block_drift === true),
-    'doctor enumerates and reports the stale repository-root project layer');
-  } finally {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-  }
-}
-
-// Autofix must repair and then re-verify every trusted loaded project layer,
-// not stop after the first stale repository-root footprint while a higher cwd
-// override remains active.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-multilayer-project-'));
-  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-multilayer-home-'));
-  const nestedRoot = path.join(projectRoot, 'packages', 'nested');
-  try {
-    fs.mkdirSync(path.join(projectRoot, '.git'));
-    fs.mkdirSync(nestedRoot, { recursive: true });
-    // spawn-class: environment
-    let install = spawnSync(process.execPath, [installerPath, '--global'], {
-      cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
-    });
-    assert.strictEqual(install.status, 0, 'multi-layer fixture global install');
-    trustCodexProject(homeRoot, projectRoot);
-    enableMultiAgentV2(homeRoot);
-    install = runCodexInstaller(installerPath, projectRoot, homeRoot);
-    assert.strictEqual(install.status, 0, 'multi-layer fixture repository-root install');
-    install = runCodexInstaller(installerPath, nestedRoot, homeRoot);
-    assert.strictEqual(install.status, 0, 'multi-layer fixture nested install');
-
-    const managedDirs = [projectRoot, nestedRoot].map(dir =>
-      path.join(dir, '.codex', 'agents', 'kaola-workflow'));
-    for (const managedDir of managedDirs) {
-      fs.rmSync(path.join(managedDir, 'implementer.toml'));
-    }
-    // spawn-class: environment
-    let result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.notStrictEqual(result.status, 0,
-      'two stale trusted layers refuse before autofix');
-    assert.strictEqual(JSON.parse(result.stdout).status, 'profiles_missing',
-      'multi-layer missing profiles retain the typed refusal');
-
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 0,
-      'autofix repairs every stale trusted layer: ' + result.stderr + result.stdout);
-    assert.strictEqual(JSON.parse(result.stdout).autofixed, true,
-      'multi-layer repair reports autofixed only after the complete recursive postcheck');
-    for (const managedDir of managedDirs) {
-      assert(fs.existsSync(path.join(managedDir, 'implementer.toml')),
-        'multi-layer repair restores implementer in ' + managedDir);
-    }
-
-    for (const managedDir of managedDirs) {
-      const profile = path.join(managedDir, 'tdd-guide.toml');
-      fs.writeFileSync(profile, fs.readFileSync(profile, 'utf8').replace(
-        'name = "tdd-guide"', 'name = "wrong-role"'));
-    }
-    // spawn-class: environment
-    result = spawnSync(process.execPath,
-      [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-    assert.strictEqual(result.status, 0,
-      'autofix repairs malformed profiles in every trusted layer: ' + result.stderr + result.stdout);
-    for (const managedDir of managedDirs) {
-      assert(/^name = "tdd-guide"$/m.test(fs.readFileSync(
-        path.join(managedDir, 'tdd-guide.toml'), 'utf8')),
-      'multi-layer malformed repair restores canonical role identity in ' + managedDir);
-    }
-
-    const firstRepairTarget = path.join(managedDirs[0], 'implementer.toml');
-    fs.rmSync(firstRepairTarget);
-    const laterManifestPath = path.join(managedDirs[1], '.kaola-managed-profiles.json');
-    const canonicalLaterManifest = fs.readFileSync(laterManifestPath, 'utf8');
-    const laterManifest = JSON.parse(canonicalLaterManifest);
-    laterManifest.schema_version = 999;
-    fs.writeFileSync(laterManifestPath, JSON.stringify(laterManifest, null, 2) + '\n');
-    result = codexPreflight.runPreflight({
-      projectRoot: nestedRoot,
-      home: homeRoot,
-      scriptDir: path.join(pluginRoot, 'scripts'),
-      planPath: null,
-      noAutofix: false,
-      codexVersion: CODEX_FLOOR_ATTESTATION,
-    });
-    assert.strictEqual(result.exitCode, 6,
-      'autofix must preflight every stale target before mutating the first one');
-    assert.strictEqual(result.result.status, 'profile_schema_version_unsupported',
-      'a later future-schema target keeps its typed non-repairable refusal');
-    assert(!fs.existsSync(firstRepairTarget),
-      'a later unrepairable target must prevent writes to every earlier repair target');
-
-    fs.writeFileSync(laterManifestPath, canonicalLaterManifest);
-    const laterConfigPath = path.join(nestedRoot, '.codex', 'config.toml');
-    fs.writeFileSync(laterConfigPath, '# BEGIN kaola-workflow agents\n');
-    result = codexPreflight.runPreflight({
-      projectRoot: nestedRoot,
-      home: homeRoot,
-      scriptDir: path.join(pluginRoot, 'scripts'),
-      planPath: null,
-      noAutofix: false,
-      codexVersion: CODEX_FLOOR_ATTESTATION,
-    });
-    assert.strictEqual(result.exitCode, 4,
-      'autofix must preflight a later ambiguous marker range before all writes');
-    assert.strictEqual(result.result.status, 'autofix_unsafe',
-      'a later ambiguous marker range keeps its typed manual-repair refusal');
-    assert(!fs.existsSync(firstRepairTarget),
-      'a later ambiguous marker range must prevent writes to every earlier target');
-  } finally {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-    fs.rmSync(homeRoot, { recursive: true, force: true });
-  }
-}
-
-// An explicit --home is the complete global authority for both inspection and
-// autofix. The child installer must not fall back to the preflight process HOME.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const selectedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-'));
-  const inheritedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-inherited-home-'));
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-project-'));
-  const originalHome = process.env.HOME;
-  try {
-    // spawn-class: environment
-    const install = spawnSync(process.execPath, [installerPath, '--global'], {
-      cwd: pluginRoot,
-      env: { ...process.env, HOME: selectedHome },
-      encoding: 'utf8',
-    });
-    assert.strictEqual(install.status, 0, 'selected-home fixture global install: ' + install.stderr);
-    enableMultiAgentV2(selectedHome);
-    const selectedProfile = path.join(selectedHome, '.codex', 'agents', 'kaola-workflow',
-      'implementer.toml');
-    fs.rmSync(selectedProfile);
-
-    process.env.HOME = inheritedHome;
-    const result = codexPreflight.runPreflight({
-      projectRoot,
-      home: selectedHome,
-      scriptDir: path.join(pluginRoot, 'scripts'),
-      planPath: null,
-      noAutofix: false,
-      codexVersion: CODEX_FLOOR_ATTESTATION,
-    });
-    assert.strictEqual(result.exitCode, 0,
-      'global autofix honors the explicitly selected home: ' + JSON.stringify(result.result));
-    assert.strictEqual(result.result.autofixed, true,
-      'selected-home repair reports autofixed after persisted re-verification');
-    assert(fs.existsSync(selectedProfile),
-      'global autofix restores the stale profile beneath the selected home');
-    assert(!fs.existsSync(path.join(inheritedHome, '.codex')),
-      'global autofix must not create or mutate the inherited process home');
-  } finally {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    fs.rmSync(selectedHome, { recursive: true, force: true });
-    fs.rmSync(inheritedHome, { recursive: true, force: true });
-    fs.rmSync(projectRoot, { recursive: true, force: true });
-  }
-}
-
-// Doctor cache inspection is scoped to the exact installed Kaola plugin identity.
-// Unrelated plugins must be invisible, while the selected name/version cache is a
-// closed, non-symlink source tree with its manifest, config, and every role intact.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const pluginIdentity = JSON.parse(fs.readFileSync(
-    path.join(pluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
-  const marketplace = 'kaola-test-marketplace';
-
-  function cacheFixture() {
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-home-'));
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-project-'));
-    const versionRoot = path.join(homeRoot, '.codex', 'plugins', 'cache', marketplace,
-      pluginIdentity.name, pluginIdentity.version);
-    fs.mkdirSync(versionRoot, { recursive: true });
-    fs.cpSync(path.join(pluginRoot, 'agents'), path.join(versionRoot, 'agents'), { recursive: true });
-    fs.cpSync(path.join(pluginRoot, 'config'), path.join(versionRoot, 'config'), { recursive: true });
-    fs.cpSync(path.join(pluginRoot, '.codex-plugin'), path.join(versionRoot, '.codex-plugin'),
-      { recursive: true });
-    fs.mkdirSync(path.join(versionRoot, 'scripts'));
-    return { homeRoot, projectRoot, versionRoot };
-  }
-
-  function doctor(fixture, liveCachedSource = false) {
-    return codexPreflight.runDoctor({
-      projectRoot: fixture.projectRoot,
-      home: fixture.homeRoot,
-      scriptDir: liveCachedSource
-        ? path.join(fixture.versionRoot, 'scripts')
-        : path.join(pluginRoot, 'scripts'),
-      codexVersion: CODEX_FLOOR_ATTESTATION,
-    });
-  }
-
-  {
-    const fixture = cacheFixture();
-    try {
-      const result = doctor(fixture, true);
-      assert.strictEqual(result.exitCode, 0,
-        'doctor preserves the normal live installed-source cache layout');
-      assert.strictEqual(cacheScope(result).plugin_name, pluginIdentity.name,
-        'live installed-source doctor derives its plugin name from its own manifest');
-      assert.strictEqual(cacheScope(result).plugin_version, pluginIdentity.version,
-        'live installed-source doctor derives its plugin version from its own manifest');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  function cacheScope(result) {
-    return result.result.scopes.find(scope => scope.scope === 'plugin_cache');
-  }
-
-  {
-    const fixture = cacheFixture();
-    try {
-      const unrelatedAgents = path.join(fixture.homeRoot, '.codex', 'plugins', 'cache',
-        marketplace, 'unrelated-plugin', '99.0.0', 'agents');
-      fs.mkdirSync(unrelatedAgents, { recursive: true });
-      fs.writeFileSync(path.join(unrelatedAgents, 'broken.toml'), 'not valid managed TOML\n');
-      const oldKaolaAgents = path.join(fixture.homeRoot, '.codex', 'plugins', 'cache',
-        marketplace, pluginIdentity.name, '0.0.1', 'agents');
-      fs.mkdirSync(oldKaolaAgents, { recursive: true });
-      fs.writeFileSync(path.join(oldKaolaAgents, 'broken.toml'), 'not valid managed TOML\n');
-      const result = doctor(fixture);
-      assert.strictEqual(result.exitCode, 0,
-        'doctor ignores malformed files from unrelated plugins and non-selected versions');
-      assert.strictEqual(result.result.scopes.filter(scope => scope.scope === 'plugin_cache').length, 1,
-        'doctor reports only the cache matching its own plugin name/version identity');
-      assert.strictEqual(cacheScope(result).plugin_name, pluginIdentity.name,
-        'plugin cache report exposes the validated manifest name');
-      assert.strictEqual(cacheScope(result).plugin_version, pluginIdentity.version,
-        'plugin cache report exposes the validated manifest version');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const role of agentGenerator.ROLES) {
-    const fixture = cacheFixture();
-    try {
-      fs.rmSync(path.join(fixture.versionRoot, 'agents', role + '.toml'));
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0,
-        'doctor rejects a cache missing required reviewer role ' + role);
-      assert(cacheScope(result).missing_roles.includes(role),
-        'cache report names missing reviewer role ' + role);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    try {
-      fs.rmSync(path.join(fixture.versionRoot, 'agents', 'implementer.toml'));
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0,
-        'doctor rejects a cache missing an ordinary configured role');
-      assert(cacheScope(result).missing_roles.includes('implementer'),
-        'cache report names an ordinary missing template role');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    try {
-      fs.writeFileSync(path.join(fixture.versionRoot, 'agents', 'stale-role.toml'),
-        'name = "stale-role"\ndescription = "stale"\nnickname_candidates = ["Stale"]\ndeveloper_instructions = """stale"""\n');
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0, 'doctor rejects stale extra cached role TOMLs');
-      assert(cacheScope(result).stale_files.includes('stale-role.toml'),
-        'cache report names the stale extra role TOML');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const configCase of [
-    {
-      label: 'missing cached config',
-      reason: 'plugin_config_path_missing',
-      mutate(fixture) {
-        fs.rmSync(path.join(fixture.versionRoot, 'config', 'agents.toml'));
-      },
-    },
-    {
-      label: 'symlinked cached config',
-      reason: 'plugin_config_path_unsafe',
-      mutate(fixture, outsideRoot) {
-        const configPath = path.join(fixture.versionRoot, 'config', 'agents.toml');
-        const outsideConfig = path.join(outsideRoot, 'agents.toml');
-        fs.copyFileSync(configPath, outsideConfig);
-        fs.rmSync(configPath);
-        fs.symlinkSync(outsideConfig, configPath);
-      },
-    },
-    {
-      label: 'byte-drifted cached config',
-      reason: 'plugin_config_bytes_mismatch',
-      mutate(fixture) {
-        fs.appendFileSync(path.join(fixture.versionRoot, 'config', 'agents.toml'),
-          '\n# stale cached config\n');
-      },
-    },
-  ]) {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-config-'));
-    try {
-      configCase.mutate(fixture, outsideRoot);
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0, 'doctor rejects ' + configCase.label);
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes(configCase.reason))),
-      'cache report types ' + configCase.label + ' as ' + configCase.reason);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const mutation of [
-    { field: 'name', value: 'not-kaola-workflow', reason: 'plugin_manifest_name_mismatch' },
-    { field: 'version', value: '0.0.0', reason: 'plugin_manifest_version_mismatch' },
-  ]) {
-    const fixture = cacheFixture();
-    try {
-      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      manifest[mutation.field] = mutation.value;
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0,
-        'doctor rejects cached plugin manifest ' + mutation.field + ' drift');
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes(mutation.reason))),
-      'cache report carries typed manifest mismatch ' + mutation.reason);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    try {
-      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      manifest.version = '0.0.0';
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-      const result = doctor(fixture, true);
-      assert.notStrictEqual(result.exitCode, 0,
-        'live installed-source doctor rejects manifest identity drift from its version path');
-      assert.strictEqual(result.result.status, 'plugin_identity_invalid',
-        'live manifest/path mismatch has a typed identity refusal');
-      assert(result.result.error.includes('plugin_manifest_version_mismatch'),
-        'live identity refusal names the manifest version mismatch');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  // #1104: the CLI's __dirname is realpath-resolved, so the live cache copy must
-  // keep its manifest/path identity check when --home reaches it through a symlink.
-  {
-    const fixture = cacheFixture();
-    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
-    try {
-      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
-        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
-          path.join(fixture.versionRoot, 'scripts', script));
-      }
-      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      manifest.version = '0.0.0';
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-      const realHome = fs.realpathSync(fixture.homeRoot);
-      const linkedHome = path.join(linkRoot, 'home');
-      fs.symlinkSync(realHome, linkedHome);
-      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
-        // spawn-class: environment
-        const run = spawnSync(process.execPath,
-          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
-            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
-          { encoding: 'utf8', env: withCodexVersionAttestation() });
-        assert.strictEqual(run.status, 2,
-          `live cached CLI doctor with a ${label} --home rejects manifest version drift: `
-            + run.stdout + run.stderr);
-        const report = JSON.parse(run.stdout);
-        assert.strictEqual(report.status, 'plugin_identity_invalid',
-          `live cached CLI doctor with a ${label} --home has a typed identity refusal`);
-        assert(report.error.includes('plugin_manifest_version_mismatch'),
-          `live cached CLI doctor with a ${label} --home names the manifest version mismatch`);
-      }
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(linkRoot, { recursive: true, force: true });
-    }
-  }
-
-  // #1104: the same live cache copy with a matching manifest stays ok under
-  // either --home form.
-  {
-    const fixture = cacheFixture();
-    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
-    try {
-      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
-        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
-          path.join(fixture.versionRoot, 'scripts', script));
-      }
-      const realHome = fs.realpathSync(fixture.homeRoot);
-      const linkedHome = path.join(linkRoot, 'home');
-      fs.symlinkSync(realHome, linkedHome);
-      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
-        // spawn-class: environment
-        const run = spawnSync(process.execPath,
-          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
-            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
-          { encoding: 'utf8', env: withCodexVersionAttestation() });
-        assert.strictEqual(run.status, 0,
-          `live cached CLI doctor with a ${label} --home accepts a matching manifest: `
-            + run.stdout + run.stderr);
-        assert.strictEqual(JSON.parse(run.stdout).status, 'ok',
-          `live cached CLI doctor with a ${label} --home reports ok for a matching manifest`);
-      }
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(linkRoot, { recursive: true, force: true });
-    }
-  }
-
-  // #1104: a lexical scriptDir reaching the live cache through a symlinked cache
-  // layer keeps the lexical containment check and its non-symlink refusal.
-  for (const layer of ['.codex', 'version']) {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-layer-'));
-    try {
-      const linked = layer === '.codex' ? path.join(fixture.homeRoot, '.codex') : fixture.versionRoot;
-      const outside = path.join(outsideRoot, 'target');
-      fs.renameSync(linked, outside);
-      fs.symlinkSync(outside, linked);
-      const result = doctor(fixture, true);
-      assert.strictEqual(result.exitCode, 2,
-        `live installed-source doctor rejects a symlinked ${layer} cache layer reached lexically`);
-      assert.strictEqual(result.result.status, 'plugin_identity_invalid',
-        `symlinked ${layer} cache layer has a typed identity refusal`);
-      assert(result.result.error.includes('plugin_cache_path_unsafe'),
-        `symlinked ${layer} cache layer refusal names plugin_cache_path_unsafe`);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-outside-'));
-    try {
-      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
-      const outsideManifest = path.join(outsideRoot, 'plugin.json');
-      fs.copyFileSync(manifestPath, outsideManifest);
-      fs.rmSync(manifestPath);
-      fs.symlinkSync(outsideManifest, manifestPath);
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0, 'doctor rejects a symlinked cached plugin manifest');
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes('plugin_manifest_unsafe'))),
-      'cache report types a symlinked manifest as unsafe');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-root-'));
-    try {
-      const cacheRoot = path.join(fixture.homeRoot, '.codex', 'plugins', 'cache');
-      const outsideCache = path.join(outsideRoot, 'cache');
-      fs.renameSync(cacheRoot, outsideCache);
-      fs.symlinkSync(outsideCache, cacheRoot);
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0, 'doctor rejects a symlinked plugin cache component');
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes('plugin_cache_path_unsafe'))),
-      'cache report types a symlinked cache component as unsafe');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const inspectionCase of [
-    {
-      method: 'lstatSync', code: 'EACCES', operation: 'inspect cache root',
-      target: fixture => path.join(fixture.homeRoot, '.codex', 'plugins', 'cache'),
-      reason: 'plugin_cache_path_unsafe',
-    },
-    {
-      method: 'readdirSync', code: 'EIO', operation: 'list cache root',
-      target: fixture => path.join(fixture.homeRoot, '.codex', 'plugins', 'cache'),
-      reason: 'plugin_cache_path_unsafe',
-    },
-    {
-      method: 'lstatSync', code: 'EACCES', operation: 'inspect selected plugin directory',
-      target: fixture => path.dirname(fixture.versionRoot),
-      reason: 'plugin_cache_path_unsafe',
-    },
-    {
-      method: 'lstatSync', code: 'EIO', operation: 'inspect selected version directory',
-      target: fixture => fixture.versionRoot,
-      reason: 'plugin_cache_path_unsafe',
-    },
-    {
-      method: 'readdirSync', code: 'EIO', operation: 'list selected agents directory',
-      target: fixture => path.join(fixture.versionRoot, 'agents'),
-      reason: 'plugin_cache_agents_path_unsafe',
-    },
-  ]) {
-    const fixture = cacheFixture();
-    try {
-      const failingPath = inspectionCase.target(fixture);
-      const original = fs[inspectionCase.method];
-      let result;
-      try {
-        fs[inspectionCase.method] = function failCacheInspection(target, ...args) {
-          if (path.resolve(String(target)) === path.resolve(failingPath)) {
-            const error = new Error(`simulated cache ${inspectionCase.operation} failure`);
-            error.code = inspectionCase.code;
-            throw error;
-          }
-          return original.call(fs, target, ...args);
-        };
-        result = doctor(fixture);
-      } finally {
-        fs[inspectionCase.method] = original;
-      }
-      assert.notStrictEqual(result.exitCode, 0,
-        `doctor fails closed when it cannot ${inspectionCase.operation}`);
-      assert(cacheScope(result),
-        `cache ${inspectionCase.operation} failure must remain a visible plugin_cache scope`);
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes(inspectionCase.reason))),
-      `cache ${inspectionCase.operation} failure is typed as ${inspectionCase.reason}`);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-version-'));
-    try {
-      fs.cpSync(fixture.versionRoot, outsideRoot, { recursive: true });
-      fs.rmSync(fixture.versionRoot, { recursive: true });
-      fs.symlinkSync(outsideRoot, fixture.versionRoot);
-      const result = doctor(fixture);
-      assert.notStrictEqual(result.exitCode, 0, 'doctor rejects a symlinked expected cache version');
-      assert(cacheScope(result).malformed.some(entry =>
-        (entry.reasons || []).some(reason => reason.includes('plugin_cache_path_unsafe'))),
-      'cache report types a symlinked expected version path as unsafe');
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const sourceCase of [
-    {
-      label: 'symlinked live-cache source profile',
-      relative: path.join('agents', 'implementer.toml'),
-      reason: 'plugin_source_profile_unsafe',
-    },
-    {
-      label: 'symlinked live-cache source config',
-      relative: path.join('config', 'agents.toml'),
-      reason: 'plugin_config_path_unsafe',
-    },
-  ]) {
-    const fixture = cacheFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-source-wall-'));
-    try {
-      const sourcePath = path.join(fixture.versionRoot, sourceCase.relative);
-      const outsidePath = path.join(outsideRoot, path.basename(sourceCase.relative));
-      fs.renameSync(sourcePath, outsidePath);
-      fs.symlinkSync(outsidePath, sourcePath);
-      const result = codexPreflight.runPreflight({
-        projectRoot: fixture.projectRoot,
-        home: fixture.homeRoot,
-        scriptDir: path.join(fixture.versionRoot, 'scripts'),
-        planPath: null,
-        noAutofix: true,
-        codexVersion: CODEX_FLOOR_ATTESTATION,
-      });
-      assert.strictEqual(result.exitCode, 2,
-        'normal preflight rejects ' + sourceCase.label + ' before dispatch');
-      assert.strictEqual(result.result.status, 'profile_source_stale',
-        'normal preflight uses the source-contract refusal for ' + sourceCase.label);
-      assert((result.result.malformed || []).some(reason => reason.includes(sourceCase.reason)),
-        sourceCase.label + ' carries typed reason ' + sourceCase.reason);
-    } finally {
-      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
-      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-}
-
-
-
-
 // Codex rust-v0.144.4 accepts a top-level project_root_markers array in normal
 // multiline TOML form. The preflight boundary parser must consume the complete
 // value while still refusing malformed or duplicate top-level declarations.
@@ -2431,10 +854,9 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// Codex loads project `.codex` layers only after an explicit project trust
-// decision. The gate must refuse ignored Kaola footprints, exclude ignored
-// transport, honor exact per-layer/root trust precedence, and use the persisted
-// project_root_markers when discovering layers from a nested workdir.
+// Codex loads project `.codex` layers only after an explicit project trust decision: an untrusted
+// project layer is excluded from the effective runtime and labelled ignored. (#1101: the
+// project_trust_required refusal of an ignored Kaola profile footprint retired with the profiles.)
 {
   const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
   const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
@@ -2444,94 +866,6 @@ function enableMultiAgentV2(homeRoot) {
     [preflightPath, ...(doctor ? ['--doctor'] : []), '--project-root', projectRoot,
       '--home', homeRoot, '--no-autofix', '--json'],
     { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-
-  for (const trustLevel of ['unknown', 'untrusted']) {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${trustLevel}-project-`));
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${trustLevel}-home-`));
-    try {
-      // spawn-class: environment
-      let install = spawnSync(process.execPath, [installerPath, '--global'], {
-        cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
-      });
-      assert.strictEqual(install.status, 0, trustLevel + ': global fixture install');
-      install = runCodexInstaller(installerPath, projectRoot, homeRoot);
-      assert.strictEqual(install.status, 0, trustLevel + ': project fixture install');
-      if (trustLevel === 'untrusted') trustCodexProject(homeRoot, projectRoot, 'untrusted');
-      if (trustLevel === 'unknown') {
-        const managedDir = path.join(projectRoot, '.codex', 'agents', 'kaola-workflow');
-        const externalManagedDir = path.join(homeRoot, 'ignored-project-agent-authority');
-        fs.renameSync(managedDir, externalManagedDir);
-        fs.symlinkSync(externalManagedDir, managedDir);
-      }
-
-      const normal = invoke(projectRoot, homeRoot);
-      assert.notStrictEqual(normal.status, 0,
-        trustLevel + ': ignored project Kaola footprint must refuse normal preflight');
-      const normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.status, 'project_trust_required',
-        trustLevel + ': normal preflight uses the typed trust refusal');
-      assert.strictEqual(normalJson.project_trust, trustLevel,
-        trustLevel + ': normal refusal records the effective trust level');
-      assert.strictEqual(normalJson.authority_path, undefined,
-        trustLevel + ': ignored project authority is not followed or reclassified before trust');
-
-      const doctor = invoke(projectRoot, homeRoot, true);
-      assert.notStrictEqual(doctor.status, 0,
-        trustLevel + ': doctor must gate the same ignored Kaola footprint');
-      const doctorJson = JSON.parse(doctor.stdout);
-      assert.strictEqual(doctorJson.project_trust_required, true,
-        trustLevel + ': doctor exposes the same trust blocker');
-      assert.strictEqual(doctorJson.project_trust, trustLevel,
-        trustLevel + ': doctor records effective project trust');
-      assert((doctorJson.scopes || []).some(scope =>
-        scope.kaola_footprint === true && scope.project_trust === trustLevel),
-      trustLevel + ': doctor identifies the ignored Kaola project scope');
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-    }
-  }
-
-  for (const ambiguity of ['duplicate', 'invalid']) {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${ambiguity}-project-`));
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${ambiguity}-home-`));
-    try {
-      // spawn-class: environment
-      let install = spawnSync(process.execPath, [installerPath, '--global'], {
-        cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
-      });
-      assert.strictEqual(install.status, 0, ambiguity + ': global fixture install');
-      install = runCodexInstaller(installerPath, projectRoot, homeRoot);
-      assert.strictEqual(install.status, 0, ambiguity + ': project fixture install');
-      const globalConfig = path.join(homeRoot, '.codex', 'config.toml');
-      fs.appendFileSync(globalConfig,
-        `\n[projects.${JSON.stringify(path.resolve(projectRoot))}]\n`
-        + (ambiguity === 'duplicate'
-          ? 'trust_level = "trusted"\ntrust_level = "untrusted"\n'
-          : 'trust_level = "conditionally-trusted"\n'));
-
-      const normal = invoke(projectRoot, homeRoot);
-      assert.notStrictEqual(normal.status, 0,
-        ambiguity + ': ambiguous trust configuration must fail closed');
-      const normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.status, 'project_trust_required',
-        ambiguity + ': ambiguous trust uses the typed trust refusal');
-      assert.strictEqual(normalJson.project_trust, 'ambiguous',
-        ambiguity + ': ambiguity is explicit, never silently trusted');
-
-      const doctor = invoke(projectRoot, homeRoot, true);
-      assert.notStrictEqual(doctor.status, 0,
-        ambiguity + ': doctor must fail closed on the same trust ambiguity');
-      const doctorJson = JSON.parse(doctor.stdout);
-      assert.strictEqual(doctorJson.project_trust, 'ambiguous',
-        ambiguity + ': doctor reports trust ambiguity');
-      assert.strictEqual(doctorJson.project_trust_required, true,
-        ambiguity + ': doctor exposes the trust blocker');
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-    }
-  }
 
   {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-trust-ignored-transport-project-'));
@@ -2551,138 +885,19 @@ function enableMultiAgentV2(homeRoot) {
       fs.writeFileSync(path.join(projectCodex, 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n');
 
       const normal = invoke(projectRoot, homeRoot);
-      assert.strictEqual(normal.status, 7,
-        'an untrusted, footprint-free project config still leaves v2 disabled: '
-        + normal.stderr + normal.stdout);
+      assert.strictEqual(normal.status, 0,
+        'an untrusted project config is reported, never a refusal: ' + normal.stderr + normal.stdout);
       const normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.scope, 'effective', 'ignored project config leaves global profiles active');
       assert.strictEqual(normalJson.multi_agent_v2_enabled, false,
         'ignored project [agents].enabled=true does not enter the effective runtime');
 
       const doctor = invoke(projectRoot, homeRoot, true);
-      assert.notStrictEqual(doctor.status, 0,
-        'doctor also excludes the untrusted project [agents].enabled=true: ' + doctor.stderr + doctor.stdout);
       const doctorJson = JSON.parse(doctor.stdout);
-      assert.strictEqual(doctorJson.project_trust_required, false,
-        'a footprint-free ignored config requires no trust decision');
       assert((doctorJson.scopes || []).some(scope =>
         scope.codex_dir === projectCodex && scope.config_layer_ignored === true),
       'doctor labels the untrusted project layer ignored');
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-    }
-  }
-
-  {
-    const trustedParent = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-trusted-parent-'));
-    const repositoryRoot = path.join(trustedParent, 'repository');
-    const nestedRoot = path.join(repositoryRoot, 'src', 'nested');
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-trusted-parent-home-'));
-    try {
-      fs.mkdirSync(repositoryRoot, { recursive: true });
-      fs.writeFileSync(path.join(repositoryRoot, 'ROOT.marker'), 'root\n');
-      fs.mkdirSync(nestedRoot, { recursive: true });
-      // spawn-class: environment
-      let install = spawnSync(process.execPath, [installerPath, '--global'], {
-        cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
-      });
-      assert.strictEqual(install.status, 0, 'trusted parent: global fixture install');
-      const globalConfig = path.join(homeRoot, '.codex', 'config.toml');
-      fs.writeFileSync(globalConfig,
-        '"project_root_mark\\u0065rs" = ["ROOT.marker"]\n\n'
-        + fs.readFileSync(globalConfig, 'utf8'));
-      install = runCodexInstaller(installerPath, repositoryRoot, homeRoot);
-      assert.strictEqual(install.status, 0, 'trusted parent: project fixture install');
-      trustCodexProject(homeRoot, trustedParent, 'trusted');
-      const projectConfig = path.join(repositoryRoot, '.codex', 'config.toml');
-      // #775: prepend (never append) — a bare [agents] header cannot follow the managed block's
-      // [agents.<role>] sub-tables (TOML forbids re-declaring [agents] once a sub-table has
-      // already opened it; the same rule the codex_multi_agent_v2_required remediation states).
-      fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = true\n\n' + fs.readFileSync(projectConfig, 'utf8'));
-
-      let normal = invoke(nestedRoot, homeRoot);
-      assert.notStrictEqual(normal.status, 0,
-        'an arbitrary trusted parent must not authorize a descendant project layer');
-      let normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.status, 'project_trust_required',
-        'trusted parent mismatch uses the typed trust refusal');
-
-      trustCodexProject(homeRoot, repositoryRoot, 'trusted');
-      normal = invoke(nestedRoot, homeRoot);
-      assert.strictEqual(normal.status, 0,
-        'exact detected-root trust enables repository config from a nested cwd: '
-        + normal.stderr + normal.stdout);
-      normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.dispatch_mode, 'v2-task-name',
-        'custom project_root_markers discovers the trusted root V2 layer');
-      assert.strictEqual(normalJson.multi_agent_v2_enabled, true,
-        'trusted project [agents].enabled=true remains effective');
-
-      for (const keySpelling of ['"project_root_markers"', "'project_root_markers'"]) {
-        const currentGlobal = fs.readFileSync(globalConfig, 'utf8');
-        fs.writeFileSync(globalConfig, currentGlobal.replace(
-          /^"project_root_mark(?:\\u0065|e)rs"|^'project_root_markers'/m,
-          keySpelling));
-        const spellingResult = invoke(nestedRoot, homeRoot);
-        assert.strictEqual(spellingResult.status, 0,
-          `${keySpelling}: TOML-equivalent root-marker key discovers the same trusted layer: `
-          + spellingResult.stderr + spellingResult.stdout);
-      }
-
-      let doctor = invoke(nestedRoot, homeRoot, true);
-      assert.strictEqual(doctor.status, 0,
-        'doctor honors exact detected-root trust: ' + doctor.stderr + doctor.stdout);
-      let doctorJson = JSON.parse(doctor.stdout);
-      assert((doctorJson.scopes || []).some(scope =>
-        scope.codex_dir === path.join(repositoryRoot, '.codex')
-        && scope.multi_agent_v2_enabled === true),
-      'doctor applies the custom-marker repository-root [agents].enabled=true from nested cwd');
-
-      // Exact nested trust outranks the shared detected-root fallback for that
-      // layer only; an ignored unsafe nested transport must not mask the still
-      // trusted root profile/config authority.
-      trustCodexProject(homeRoot, nestedRoot, 'untrusted');
-      {
-        const trustConfig = fs.readFileSync(globalConfig, 'utf8');
-        const lastTrust = trustConfig.lastIndexOf('trust_level = "untrusted"');
-        assert(lastTrust >= 0, 'nested trust fixture must contain its exact untrusted decision');
-        fs.writeFileSync(globalConfig,
-          trustConfig.slice(0, lastTrust)
-          + '"trust_l\\u0065vel" = "untrusted"'
-          + trustConfig.slice(lastTrust + 'trust_level = "untrusted"'.length));
-      }
-      const nestedCodex = path.join(nestedRoot, '.codex');
-      fs.mkdirSync(nestedCodex, { recursive: true });
-      fs.writeFileSync(path.join(nestedCodex, 'config.toml'), '[features.multi_agent_v2]\nenabled = false\n');
-      normal = invoke(nestedRoot, homeRoot);
-      assert.strictEqual(normal.status, 0,
-        'exact nested untrusted excludes only that layer while trusted root remains active: '
-        + normal.stderr + normal.stdout);
-      normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.multi_agent_v2_enabled, true,
-        'ignored nested enabled=false cannot override trusted root enabled=true');
-      for (const keySpelling of ['"trust_level"', "'trust_level'"]) {
-        const trustConfig = fs.readFileSync(globalConfig, 'utf8');
-        fs.writeFileSync(globalConfig, trustConfig.replace(
-          /^"trust_l(?:\\u0065|e)vel"|^'trust_level'/m,
-          keySpelling));
-        const spellingResult = invoke(nestedRoot, homeRoot);
-        assert.strictEqual(spellingResult.status, 0,
-          `${keySpelling}: exact nested untrusted decision must outrank trusted root fallback: `
-          + spellingResult.stderr + spellingResult.stdout);
-      }
-      doctor = invoke(nestedRoot, homeRoot, true);
-      assert.strictEqual(doctor.status, 0,
-        'doctor applies the same per-layer trust precedence');
-      doctorJson = JSON.parse(doctor.stdout);
-      assert((doctorJson.scopes || []).some(scope =>
-        scope.codex_dir === nestedCodex
-        && scope.project_trust === 'untrusted'
-        && scope.config_layer_ignored === true),
-      'doctor reports exact nested layer as ignored without disabling trusted root');
-    } finally {
-      fs.rmSync(trustedParent, { recursive: true, force: true });
       fs.rmSync(homeRoot, { recursive: true, force: true });
     }
   }
@@ -2746,364 +961,8 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// Exact profile bytes are insufficient if a scope authority path can be redirected
-// after install. Normal preflight and doctor both reject symlinked scope/agent/profile
-// and manifest paths before reading through them.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-  const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-  const cases = [
-    {
-      label: 'Codex scope directory symlink',
-      expectedStatus: 'config_layer_unsafe',
-      redirect(homeRoot, outsideRoot) {
-        const source = path.join(homeRoot, '.codex');
-        const target = path.join(outsideRoot, 'codex-scope');
-        fs.renameSync(source, target);
-        fs.symlinkSync(target, source);
-      },
-    },
-    {
-      label: 'agents parent directory symlink',
-      expectedStatus: 'scope_authority_unsafe',
-      redirect(homeRoot, outsideRoot) {
-        const source = path.join(homeRoot, '.codex', 'agents');
-        const target = path.join(outsideRoot, 'agents');
-        fs.renameSync(source, target);
-        fs.symlinkSync(target, source);
-      },
-    },
-    {
-      label: 'managed agent directory symlink',
-      expectedStatus: 'scope_authority_unsafe',
-      redirect(homeRoot, outsideRoot) {
-        const source = path.join(homeRoot, '.codex', 'agents', 'kaola-workflow');
-        const target = path.join(outsideRoot, 'managed-agents');
-        fs.renameSync(source, target);
-        fs.symlinkSync(target, source);
-      },
-    },
-    {
-      label: 'required profile symlink',
-      expectedStatus: 'scope_authority_unsafe',
-      redirect(homeRoot, outsideRoot) {
-        const source = path.join(homeRoot, '.codex', 'agents', 'kaola-workflow',
-          'code-reviewer.toml');
-        const target = path.join(outsideRoot, 'code-reviewer.toml');
-        fs.renameSync(source, target);
-        fs.symlinkSync(target, source);
-      },
-    },
-    {
-      label: 'managed manifest symlink',
-      expectedStatus: 'scope_authority_unsafe',
-      redirect(homeRoot, outsideRoot) {
-        const source = path.join(homeRoot, '.codex', 'agents', 'kaola-workflow',
-          '.kaola-managed-profiles.json');
-        const target = path.join(outsideRoot, 'manifest.json');
-        fs.renameSync(source, target);
-        fs.symlinkSync(target, source);
-      },
-    },
-  ];
-
-  for (const fixture of cases) {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-project-'));
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-home-'));
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-outside-'));
-    try {
-      // spawn-class: environment
-      const install = spawnSync(process.execPath, [installerPath, '--global'], {
-        cwd: pluginRoot, env: { ...process.env, HOME: homeRoot }, encoding: 'utf8',
-      });
-      assert.strictEqual(install.status, 0, fixture.label + ': global fixture install');
-      fixture.redirect(homeRoot, outsideRoot);
-
-      // spawn-class: environment
-      const normal = spawnSync(process.execPath,
-        [preflightPath, '--project-root', projectRoot, '--home', homeRoot,
-          '--no-autofix', '--json'],
-        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(normal.status, 0,
-        fixture.label + ': normal preflight must reject redirected authority');
-      const normalJson = JSON.parse(normal.stdout);
-      assert.strictEqual(normalJson.status, fixture.expectedStatus,
-        fixture.label + ': normal typed authority refusal');
-      assert(!/\n\s+at /.test(normal.stderr), fixture.label + ': normal refusal has no Node stack');
-
-      // spawn-class: environment
-      const doctor = spawnSync(process.execPath,
-        [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(doctor.status, 0,
-        fixture.label + ': doctor must reject the same redirected authority');
-      const doctorJson = JSON.parse(doctor.stdout);
-      assert.strictEqual(doctorJson.status, 'stale', fixture.label + ': doctor typed stale result');
-      assert((doctorJson.scopes || []).some(scope =>
-        scope.config_layer_unsafe === true || scope.scope_authority_unsafe === true),
-      fixture.label + ': doctor identifies the unsafe authority scope');
-      assert(!/\n\s+at /.test(doctor.stderr), fixture.label + ': doctor refusal has no Node stack');
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      fs.rmSync(homeRoot, { recursive: true, force: true });
-      fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  }
-}
-
-// Reviewer profiles are generated contracts, not merely syntactically valid TOML. The installer
-// wall must reject contract/version/hash drift before any repository or installed-scope write.
-{
-  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
-  const reviewer = fs.readFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.toml'), 'utf8');
-
-  // A fixture regex that names the live contract version goes vacuous the moment the version
-  // moves: the replacement matches nothing, hands back the input unchanged, and its mutation case
-  // still runs and is still counted while asserting nothing. The version is matched as a digit run
-  // rather than a literal, and every substitution proves it landed on exactly one site and changed
-  // the text — so a pattern that stops matching fails here, naming itself, instead of surfacing as
-  // a puzzling downstream code mismatch.
-  function replaceOnce(source, pattern, replacement) {
-    const flags = pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g';
-    const matches = [...source.matchAll(new RegExp(pattern.source, flags))];
-    assert.strictEqual(matches.length, 1,
-      `reviewer fixture ${pattern} must match exactly one site; matched ${matches.length}`);
-    const mutated = source.replace(pattern, replacement);
-    assert.notStrictEqual(mutated, source,
-      `reviewer fixture ${pattern} substituted nothing and would test nothing`);
-    return mutated;
-  }
-
-  const cases = [
-    {
-      label: 'unsupported top-level reviewer metadata',
-      text: reviewer.replace(/^developer_instructions =/m,
-        'behavior_contract_version = 2\ndeveloper_instructions ='),
-      code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'foreign adapter field',
-      text: reviewer.replace(/^developer_instructions =/m,
-        'adapter_prompt = "foreign"\ndeveloper_instructions ='),
-      code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'foreign adapter field after instructions',
-      text: reviewer + '\nadapter_prompt = "foreign"\n',
-      code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'foreign adapter table after instructions',
-      text: reviewer + '\n[adapter]\nprompt = "foreign"\n',
-      code: 'codex_role_table_forbidden',
-    },
-    {
-      label: 'foreign dotted adapter field after instructions',
-      text: reviewer + '\nadapter.prompt = "foreign"\n',
-      code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'quoted retired reviewer metadata',
-      text: reviewer.replace(/^developer_instructions/m,
-        '"behavior_contract_version" = 2\ndeveloper_instructions'),
-      code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'indented model override',
-      text: reviewer.replace(/^developer_instructions/m,
-        '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
-      code: 'codex_role_top_level_field_duplicate',
-    },
-    {
-      label: 'commented foreign table before instructions',
-      text: reviewer.replace(/^developer_instructions/m,
-        '[shadow] # valid TOML table\ndeveloper_instructions'),
-      code: 'codex_role_table_forbidden',
-    },
-    {
-      label: 'duplicate canonical top-level field',
-      text: reviewer.replace(/^description/m,
-        'name = "code-reviewer"\ndescription'),
-      code: 'codex_role_top_level_field_duplicate',
-    },
-    {
-      label: 'invalid TOML escape inside reviewer instructions',
-      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
-      // (measured: `# Code Reviewer` in plugins/kaola-workflow/agents/code-reviewer.toml) — the
-      // old `## Prompt defense` heading no longer exists, so this mutation was a no-op.
-      text: reviewer.replace('# Code Reviewer',
-        '# Code Reviewer\n\n- invalid TOML escape: \\q'),
-      code: 'codex_role_instruction_toml_backslash_forbidden',
-    },
-    {
-      label: 'invalid TOML escape inside reviewer description',
-      text: reviewer.replace(/^description = .*$/m,
-        'description = "Bad \\q"'),
-      code: 'codex_role_toml_backslash_forbidden',
-    },
-    {
-      label: 'invalid TOML escape inside reviewer nickname array',
-      text: reviewer.replace(/^nickname_candidates = .*$/m,
-        'nickname_candidates = ["Bad \\q"]'),
-      code: 'codex_role_toml_backslash_forbidden',
-    },
-    {
-      label: 'raw control character in reviewer TOML comment',
-      text: `# raw control \u0001\n${reviewer}`,
-      code: 'codex_role_toml_control_character_forbidden',
-    },
-    {
-      label: 'bare carriage return inside reviewer instructions',
-      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
-      // (see "invalid TOML escape inside reviewer instructions" above).
-      text: reviewer.replace('# Code Reviewer', '# Code Reviewer\rX'),
-      code: 'codex_role_toml_line_endings_forbidden',
-    },
-  ];
-  for (const fixture of cases) {
-    const reasons = codexProfileInstaller.validateProfileText(fixture.text, 'code-reviewer');
-    assert(reasons.some(reason => reason.includes(fixture.code)),
-      fixture.label + ' must fail with ' + fixture.code + '; got ' + JSON.stringify(reasons));
-    const preflightReasons = codexPreflight.validateProfileText(fixture.text, 'code-reviewer');
-    assert(preflightReasons.some(reason => reason.includes(fixture.code)),
-      'preflight: ' + fixture.label + ' must fail with ' + fixture.code
-        + '; got ' + JSON.stringify(preflightReasons));
-  }
-
-  const reviewerEntry = agentGenerator.manifestProfileEntry('codex', 'code-reviewer', root, 'codex-github');
-  assert.strictEqual(agentGenerator.sha256(reviewer), reviewerEntry.resolved_profile_sha256,
-    'the Codex reviewer source must match its generated manifest sidecar digest');
-  assert.notStrictEqual(
-    agentGenerator.sha256(reviewer.replace('# Code Reviewer', '# Code reviewer')),
-    reviewerEntry.resolved_profile_sha256,
-    'one changed byte in a Codex profile body must break its sidecar digest');
-  assert(!/[0-9a-f]{64}/.test(reviewer) && !reviewer.includes('runtime-adapter'),
-    'the Codex reviewer profile carries no receipt hashes in agent-visible text');
-
-  const ordinary = fs.readFileSync(path.join(pluginRoot, 'agents', 'implementer.toml'), 'utf8');
-  const ordinaryMutations = [
-    ordinary.replace(/^developer_instructions/m, '"model" = "gpt-5.6-sol"\ndeveloper_instructions'),
-    ordinary.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
-    ordinary.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
-    ordinary.replace(/^description/m, 'name = "implementer"\ndescription'),
-    // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live opening heading (measured:
-    // `# Implementer` in plugins/kaola-workflow/agents/implementer.toml) — the old `## Your Role`
-    // heading no longer exists, so both mutations below were no-ops.
-    ordinary.replace('# Implementer',
-      '# Implementer\n\n- invalid TOML escape: \\q'),
-    ordinary.replace('# Implementer', '# Implementer\rX'),
-    `# raw control \u0001\n${ordinary}`,
-  ];
-  for (const [index, mutation] of ordinaryMutations.entries()) {
-    assert(codexProfileInstaller.validateProfileText(mutation, 'implementer').length > 0,
-      `ordinary managed role closed-schema mutation ${index + 1} must fail`);
-    assert(codexPreflight.validateProfileText(mutation, 'implementer').length > 0,
-      `preflight ordinary managed role closed-schema mutation ${index + 1} must fail`);
-  }
-  const sourceCheck = codexProfileInstaller.validateSourceProfiles(pluginRoot);
-  assert(sourceCheck.ok,
-    'repository reviewer profiles and config catalog must be reconciled before install: ' +
-    sourceCheck.errors.join('; '));
-
-  const catalogMutations = [
-    {
-      label: 'duplicate role entry',
-      expected: 'duplicate [agents.implementer] entry',
-      mutate(fixtureRoot, template) {
-        const block = template.match(/\[agents\.implementer\][\s\S]*?(?=\n\[agents\.|\s*$)/);
-        assert(block, 'duplicate-role fixture must find the implementer catalog block');
-        fs.appendFileSync(path.join(fixtureRoot, 'config', 'agents.toml'), `\n${block[0].trim()}\n`);
-      },
-    },
-    {
-      label: 'duplicate basename reference',
-      expected: 'duplicate config_file basename "implementer.toml" reference',
-      mutate(fixtureRoot, template) {
-        fs.writeFileSync(path.join(fixtureRoot, 'config', 'agents.toml'), template.replace(
-          'config_file = "./agents/kaola-workflow/code-explorer.toml"',
-          'config_file = "./agents/kaola-workflow/implementer.toml"'));
-      },
-    },
-    {
-      label: 'role and basename mismatch',
-      expected: '[agents.implementer] config_file basename must be "implementer.toml"',
-      mutate(fixtureRoot, template) {
-        fs.writeFileSync(path.join(fixtureRoot, 'config', 'agents.toml'), template.replace(
-          'config_file = "./agents/kaola-workflow/implementer.toml"',
-          'config_file = "./agents/kaola-workflow/renamed-implementer.toml"'));
-        fs.renameSync(
-          path.join(fixtureRoot, 'agents', 'implementer.toml'),
-          path.join(fixtureRoot, 'agents', 'renamed-implementer.toml'));
-      },
-    },
-  ];
-  for (const fixture of catalogMutations) {
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-catalog-bijection-'));
-    try {
-      fs.cpSync(path.join(pluginRoot, 'config'), path.join(fixtureRoot, 'config'), { recursive: true });
-      fs.cpSync(path.join(pluginRoot, 'agents'), path.join(fixtureRoot, 'agents'), { recursive: true });
-      const templatePath = path.join(fixtureRoot, 'config', 'agents.toml');
-      fixture.mutate(fixtureRoot, fs.readFileSync(templatePath, 'utf8'));
-
-      const installerCheck = codexProfileInstaller.validateSourceProfiles(fixtureRoot);
-      assert.strictEqual(installerCheck.ok, false,
-        fixture.label + ': installer source wall must reject the non-bijective catalog');
-      assert(installerCheck.errors.some(error => error.includes(fixture.expected)),
-        fixture.label + ': installer must report ' + fixture.expected
-        + '; got ' + JSON.stringify(installerCheck.errors));
-
-      const preflightCheck = codexPreflight.readTemplateRoles(path.join(fixtureRoot, 'scripts'));
-      assert((preflightCheck.sourceErrors || []).some(error => error.includes(fixture.expected)),
-        fixture.label + ': preflight source wall must report ' + fixture.expected
-        + '; got ' + JSON.stringify(preflightCheck.sourceErrors));
-    } finally {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-    }
-  }
-
-  const staleRepository = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-reviewer-source-drift-'));
-  try {
-    fs.cpSync(path.join(pluginRoot, 'config'), path.join(staleRepository, 'config'), { recursive: true });
-    fs.cpSync(path.join(pluginRoot, 'agents'), path.join(staleRepository, 'agents'), { recursive: true });
-    const stalePath = path.join(staleRepository, 'agents', 'code-reviewer.toml');
-    // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
-    // "description metadata drift" above).
-    fs.writeFileSync(stalePath, fs.readFileSync(stalePath, 'utf8').replace(
-      'Code reviewer. Independently examines', 'Code reviewer. Independently stale examines'));
-    const staleCheck = codexProfileInstaller.validateSourceProfiles(staleRepository);
-    assert(!staleCheck.ok, 'modified repository reviewer profile must fail source validation');
-    assert.strictEqual(staleCheck.repair,
-      'node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check',
-      'repository drift must carry the exact generator repair command');
-  } finally {
-    fs.rmSync(staleRepository, { recursive: true, force: true });
-  }
-}
-
-
 function readInstalledCommand(name) {
   return fs.readFileSync(path.join(tmp, '.claude', 'commands', name), 'utf8');
-}
-
-function parseCodexAgentMetadata(pluginRoot) {
-  const config = fs.readFileSync(path.join(pluginRoot, 'config', 'agents.toml'), 'utf8');
-  const out = new Map();
-  let current = null;
-  for (const line of config.split(/\r?\n/)) {
-    const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
-    if (head) {
-      current = { description: null, nicknameLine: null };
-      out.set(head[1], current);
-      continue;
-    }
-    if (!current) continue;
-    const desc = line.match(/^description\s*=\s*("[^"]*")\s*$/);
-    if (desc) current.description = desc[1];
-    const nick = line.match(/^nickname_candidates\s*=\s*(\[[^\]]*\])\s*$/);
-    if (nick) current.nicknameLine = nick[1];
-  }
-  return out;
 }
 
 try {
@@ -3119,37 +978,20 @@ try {
     }
   );
 
-  const finalize = readInstalledCommand('kaola-workflow-finalize.md');
+  // #1101: a fresh Claude install writes no subagent profile, no agent manifest and no model
+  // binding, and says nothing about installing agents. (Retiring what an earlier release installed
+  // is scripts/test-issue-1101-claude-agent-migration.js.)
+  const claudeAgentsDir = path.join(tmp, '.claude', 'agents');
+  assert(!fs.existsSync(claudeAgentsDir)
+    || fs.readdirSync(claudeAgentsDir).filter(name => name.endsWith('.md')).length === 0,
+  '#1101: a fresh install writes no Claude subagent profile');
+  assert(!fs.existsSync(path.join(claudeAgentsDir, '.kaola-workflow-agent-manifest')),
+    '#1101: a fresh install writes no agent manifest');
+  assert(!fs.existsSync(path.join(claudeAgentsDir, '.kaola-agent-models.json')),
+    '#1101: a fresh install writes no agent model binding');
+  assert(!/Installed agent|Verified managed Kaola-Workflow agents|runtime prompt loading/.test(installOutput),
+    '#1101: the installer reports no agent install');
 
-  // Installed Claude profiles deliberately use `model: inherit`, so a concrete finalize call
-  // names only the role — the named profile carries the single subagent binding. #1062 keeps
-  // Claude effort unpinned and keeps task-sensitive native overrides available.
-  assert(
-    // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
-    // finalize command was rewritten. The subject — blank-line preservation — is unchanged.
-    finalize.includes('\n\n## Card: validation, acceptance, and documentation\n\n'),
-    'installer rendering should preserve blank markdown lines'
-  );
-  assert.deepStrictEqual(claudeFinalizeDefaultGaps(finalize), [],
-    'installed Claude finalize calls must apply behavior-derived role defaults, omit Claude effort pins, and preserve task-sensitive overrides');
-
-  const missingRole = mutateAgentCall(finalize, 'implementer', block =>
-    block.replace(/subagent_type="implementer"/, 'subagent_type="unregistered-role"'));
-  assert(missingRole.changed
-    && claudeFinalizeDefaultGaps(missingRole.output).includes('implementer-call'),
-  '#1035 mutation: losing the routed implementer call from finalize is detected');
-
-  const addedModel = mutateAgentCall(finalize, 'implementer', block =>
-    block.replace(/(^\s*subagent_type\s*=.*$)/m, '$1\n  model="opus",'));
-  assert(addedModel.changed
-    && claudeFinalizeDefaultGaps(addedModel.output).includes('implementer-model-pin'),
-  '#1035 mutation: re-pinning a per-call model the named profile already binds is detected');
-
-  const pinnedEffort = mutateAgentCall(finalize, 'implementer', block =>
-    block.replace(/(^\s*subagent_type\s*=.*$)/m, '$1\n  effort="high",'));
-  assert(pinnedEffort.changed
-    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('implementer-claude-effort-pin'),
-  '#1035 mutation: adding an ADR-forbidden Claude effort pin is detected');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
     .filter(name => name.endsWith('.md'))
@@ -3157,118 +999,9 @@ try {
     .join('\n');
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
   // #610: the plan-column tier rename (opus/sonnet → reasoning/standard) is the PLAN vocabulary only —
-  // it must NOT leak into the Claude Agent(model=…) rendering, which stays the concrete Claude aliases
-  // (they feed the harness verbatim). A neutral token as an Agent model value would be a dispatch bug.
+  // it must NOT leak into any Agent(model=…) rendering (#1101: the commands pin no model at all).
   assert(!/model="(reasoning|standard|heavy)"/.test(allCommands),
     'installed commands must render concrete Claude model aliases, never the neutral plan-tier tokens');
-
-  const requiredAgents = [...agentGenerator.ROLES];
-  for (const agent of requiredAgents) {
-    const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
-    const fmEnd = installed.indexOf('\n---', 3);
-    const frontmatter = installed.slice(0, fmEnd === -1 ? installed.length : fmEnd);
-    assert(/\bmodel:\s*inherit\b/.test(frontmatter), agent+' installed frontmatter must be model: inherit');
-    assert(installed.includes('kaola-workflow-managed-agent: true'), agent+' installed file must keep managed marker');
-    if (agentGenerator.ROLES.includes(agent)) {
-      const baseSource = path.join(root, 'agents', agent + '.md');
-      const higherSource = path.join(root, 'agents', 'profiles', 'higher', agent + '.md');
-      const selectedSource = fs.existsSync(higherSource) ? higherSource : baseSource;
-      const expectedInstalled = renderClaudeInstalledReviewer(fs.readFileSync(selectedSource, 'utf8'));
-      assert.strictEqual(installed, expectedInstalled,
-        agent + ' installed bytes must equal the selected generated source after the documented inherit rewrite');
-      assert.strictEqual(agentGenerator.sha256(fs.readFileSync(selectedSource, 'utf8')),
-        agentGenerator.manifestProfileEntry('claude', agent, root).resolved_profile_sha256,
-        agent + ' source bytes must match its generated manifest sidecar digest');
-      assert(!/[0-9a-f]{64}/.test(installed),
-        agent + ' installed bytes must carry no receipt hashes in agent-visible text');
-      assert.strictEqual(agentGenerator.behaviorIdentityFromCore(installed).core,
-        agentGenerator.behaviorIdentityFromCore(fs.readFileSync(selectedSource, 'utf8')).core,
-      agent + ' installed behavior core must byte-match the generated source core');
-    }
-  }
-  const claudeManifestLines = fs.readFileSync(
-    path.join(tmp, '.claude', 'agents', '.kaola-workflow-agent-manifest'), 'utf8').trim().split('\n');
-  for (const role of agentGenerator.ROLES) {
-    const row = claudeManifestLines.find(line => line.startsWith(role + '.md\t'));
-    assert(row, 'Claude managed-agent manifest must carry ' + role);
-    const columns = row.split('\t');
-    assert(columns.length === 5
-      && /^[0-9a-f]{64}$/.test(columns[3]) && /^[0-9a-f]{64}$/.test(columns[4]),
-    'Claude managed-agent manifest must record installed sha, behavior version/hash, and resolved profile hash for ' + role);
-    // The version column is read from the generator, not pinned, so a contract bump carries it
-    // instead of leaving a hand-edit site here. It is not a restatement of the source profile:
-    // this column is what the INSTALLER recorded about the bytes it wrote, so a writer that
-    // reports a version it did not verify still reds.
-    const sidecar = agentGenerator.manifestProfileEntry('claude', role, root);
-    assert.strictEqual(columns[2], String(sidecar.behavior_contract_version),
-      'Claude managed-agent manifest must record the role behavior contract version for ' + role);
-    assert.strictEqual(columns[3], sidecar.behavior_sha256,
-      'Claude managed-agent manifest must record the role behavior digest for ' + role);
-    assert.strictEqual(columns[4], sidecar.resolved_profile_sha256,
-      'Claude managed-agent manifest must record the role source profile digest for ' + role);
-  }
-  assert(installOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
-    'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
-
-  // #794: the install-time model axis is retired. A fresh install must (a) write NO
-  // .kaola-agent-models.json, and (b) resolve EVERY registered role through the chain
-  // (frontmatter -> DEFAULT_AGENT_MODELS) to the pinned binding below — the surface the
-  // dispatch path actually reads.
-  //
-  // THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE, and its required value is FIXED by #1062:
-  // every surviving role renders the single Claude subagent binding (`sonnet`), and the seven
-  // retired role names resolve to nothing.
-  //
-  // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
-  // editing this table to match the resolver. The two agreeing is the whole assertion; if they
-  // disagree with no ruling behind the move, the resolver re-bound a role and that is the bug.
-  const EXPECTED_ROLE_MODELS = {
-    'code-explorer': 'sonnet',
-    'code-reviewer': 'sonnet',
-    'doc-updater': 'sonnet',
-    implementer: 'sonnet',
-    investigator: 'sonnet',
-    'knowledge-lookup': 'sonnet',
-    'tdd-guide': 'sonnet'
-  };
-  // The coverage half of the pin, in BOTH directions: a role registered with no entry here is a
-  // binding nothing asserts, and an entry here for a role the registry dropped is a pin guarding
-  // nothing. KEYS ONLY — comparing values would make the table a restatement of the resolver and
-  // destroy the independence the paragraphs above depend on.
-  assert.deepStrictEqual(
-    Object.keys(EXPECTED_ROLE_MODELS).sort(),
-    Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
-    'the pinned install-binding table must cover exactly the resolver role registry'
-  );
-  // spawn-class: environment
-  const resolveRole = (agentDir, role) => execFileSync('node',
-    [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), role, '--agent-dir', agentDir, '--raw'],
-    { cwd: root, encoding: 'utf8' }).trim();
-
-  {
-    const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
-    try {
-      // spawn-class: environment
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
-        { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const agentDir = path.join(dtmp, '.claude', 'agents');
-      assert(!fs.existsSync(path.join(agentDir, '.kaola-agent-models.json')),
-        'a fresh install must not write the retired .kaola-agent-models.json');
-      for (const [role, expected] of Object.entries(EXPECTED_ROLE_MODELS)) {
-        const got = resolveRole(agentDir, role);
-        assert(got === expected, 'fresh install must resolve ' + role + ' -> ' + expected + '; got ' + got);
-      }
-      // A planted manifest in the installed agent dir is INERT — precedence is provably two-step.
-      fs.writeFileSync(path.join(agentDir, '.kaola-agent-models.json'),
-        JSON.stringify({ implementer: 'opus', 'code-reviewer': 'haiku', investigator: 'haiku' }));
-      for (const role of ['implementer', 'code-reviewer', 'investigator']) {
-        const got = resolveRole(agentDir, role);
-        assert(got === EXPECTED_ROLE_MODELS[role],
-          'a planted .kaola-agent-models.json must not affect ' + role + ' (expected '
-            + EXPECTED_ROLE_MODELS[role] + '; got ' + got + ')');
-      }
-    } finally { fs.rmSync(dtmp, { recursive: true, force: true }); }
-  }
 
   // The retired flag fails LOUD at the operator's terminal on both former values.
   for (const flag of ['--profile=higher', '--profile=common']) {
@@ -3333,23 +1066,6 @@ try {
     }
   }
 
-  // #363: the manifest encoder must produce VALID JSON even when a model value contains a quote or
-  // backslash (the string-concat builder it replaced would emit corrupt JSON). Exercise the exact
-  // node encoding used in install.sh with a hostile value.
-  {
-    const etmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-quote-'));
-    try {
-      const out = path.join(etmp, 'manifest.json');
-      // spawn-class: environment
-      execFileSync('node',
-        ['-e', 'const fs=require("fs");const o2=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(o2,JSON.stringify(o,null,2)+"\\n");',
-         out, 'planner', 'op"us\\back'],
-        { encoding: 'utf8' });
-      const parsed = JSON.parse(fs.readFileSync(out, 'utf8')); // throws if the quote/backslash broke JSON
-      assert(parsed.planner === 'op"us\\back', '#363: quote/backslash in a model value round-trips through valid JSON; got ' + JSON.stringify(parsed.planner));
-    } finally { fs.rmSync(etmp, { recursive: true, force: true }); }
-  }
-
   // #447 AC1/AC5/AC2 + #571: codex installer positional-form invariant (claude chain).
   // #571 default is GLOBAL (--global targets ~/.codex); the POSITIONAL form (pass a path as
   // argv[2]) is an optional per-repo override that installs to that path's .codex/.
@@ -3400,57 +1116,20 @@ try {
       const projectHooksPath = path.join(cproj, '.codex', 'hooks.json');
       assert(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
 
-      // AC2: positional-form override installs agent profiles to the given project path.
-      // (#571: --global is the documented default for new installs; passing a path positionally
-      // is an optional per-repo override that installs to that path's .codex/.)
-      const projectAgentsDir = path.join(cproj, '.codex', 'agents', 'kaola-workflow');
-      assert(fs.existsSync(projectAgentsDir), '#447 AC2: positional-form override must create .codex/agents/kaola-workflow/ at the given path');
-      const tomlFiles = fs.readdirSync(projectAgentsDir).filter(f => f.endsWith('.toml'));
-      assert(tomlFiles.length > 0, '#447 AC2: positional-form override must write at least one agent profile .toml to the given path');
-      const metadata = parseCodexAgentMetadata(path.join(root, 'plugins', 'kaola-workflow'));
-      for (const file of tomlFiles) {
-        const role = file.replace(/\.toml$/, '');
-        const expected = metadata.get(role);
-        assert(expected, '#581: installed profile role must exist in config/agents.toml: ' + role);
-        const body = fs.readFileSync(path.join(projectAgentsDir, file), 'utf8');
-        assert(body.includes('description = ' + expected.description + '\n'),
-          '#581: installed ' + file + ' must carry config description metadata');
-        if (expected.nicknameLine !== null) {
-          assert(body.includes('nickname_candidates = ' + expected.nicknameLine + '\n'),
-            '#581: installed ' + file + ' must carry config nickname_candidates metadata');
-        } else {
-          assert(!/^nickname_candidates\s*=/m.test(body),
-            '#581: installed ' + file + ' must omit absent nickname metadata');
-        }
-      }
-      const installedProfileManifest = JSON.parse(fs.readFileSync(
-        path.join(projectAgentsDir, '.kaola-managed-profiles.json'), 'utf8'));
-      for (const role of agentGenerator.ROLES) {
-        const file = role + '.toml';
-        const sourceBytes = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', file));
-        const installedBytes = fs.readFileSync(path.join(projectAgentsDir, file));
-        assert(sourceBytes.equals(installedBytes),
-          '#reviewer-contract: installed ' + file + ' must byte-match its selected source');
-        assert.strictEqual(installedProfileManifest.files[file],
-          'sha256:' + agentGenerator.sha256(installedBytes),
-          '#agent-contract: manifest must record the installed file digest for ' + file);
-        assert(!('profile_contracts' in installedProfileManifest),
-          '#agent-contract: manifest must not carry retired in-body contract identity for ' + file);
-      }
-
-      // AC2: managed [agents.*] block in the positional-form project's .codex/config.toml
+      // #1101: the positional (project) form installs NO role profile and registers none; the
+      // scope's .codex only ever loses what an earlier release put there (the migration suite).
+      assert(!fs.existsSync(path.join(cproj, '.codex', 'agents', 'kaola-workflow')),
+        '#1101: the positional form must not create .codex/agents/kaola-workflow/');
       const projectConfigPath = path.join(cproj, '.codex', 'config.toml');
-      assert(fs.existsSync(projectConfigPath), '#447 AC2: positional-form override must write .codex/config.toml to the given path');
-      const configText = fs.readFileSync(projectConfigPath, 'utf8');
-      assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: positional-form config.toml must contain managed agents block');
+      assert(!fs.existsSync(projectConfigPath) || !fs.readFileSync(projectConfigPath, 'utf8').includes('# BEGIN kaola-workflow agents'),
+        '#1101: the positional form must not register a managed agents block');
+      fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
+      const configText = '';
       const codexPreflightPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-codex-preflight.js');
       // #775 (Codex 0.145 re-baseline): the MultiAgentV2 switch lives at
       // `features.multi_agent_v2.enabled`, NOT in the top-level [agents] table ([agents] has no
-      // `enabled` key). config/agents.toml's managed block opens with [agents.<role>] sub-tables,
-      // so there is nothing to strip/replace. This helper prepends a [features.multi_agent_v2]
-      // table ahead of the managed block, mirroring the codex_multi_agent_v2_required
-      // remediation's exact paste-able diff. The helper's NAME is historical: it enables V2 the
-      // way Codex actually reads it, not via [agents].
+      // `enabled` key). This helper prepends a [features.multi_agent_v2] table; its NAME is
+      // historical: it enables V2 the way Codex actually reads it, not via [agents].
       function configWithAgentsEnabled(extraLines) {
         return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + configText;
       }
@@ -3465,188 +1144,34 @@ try {
         });
       }
 
-      // --- #775: Codex version floor — checked before anything else in runPreflight. ---
-      // spawn-class: environment
-      const belowFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.144.9'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
-      });
-      assert.strictEqual(belowFloor.status, 7, '#775: a Codex version below the 0.145.0 floor must refuse with exit 7: ' + belowFloor.stderr + belowFloor.stdout);
-      const belowFloorJson = JSON.parse(belowFloor.stdout);
-      assert.strictEqual(belowFloorJson.status, 'codex_version_unsupported', '#775: below-floor refusal is codex_version_unsupported');
-      assert.strictEqual(belowFloorJson.detected_version, '0.144.9', '#775: refusal reports the detected version');
-      assert.strictEqual(belowFloorJson.detected_version_source, 'flag', '#775: --codex-version is the highest-precedence source');
-      assert.strictEqual(belowFloorJson.required_version, '0.145.0', '#775: refusal names the required floor version');
-      assert(/upgrade the codex cli/i.test(belowFloorJson.repair), '#775: refusal repair tells the operator to upgrade: ' + belowFloorJson.repair);
+      // (#1101: the preflight's Codex version floor and its codex_version_unsupported refusal were
+      // dropped with the roles it guarded, so their pins went with them.)
 
-      // spawn-class: environment
-      const envBelowFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8',
-        env: { ...process.env, KAOLA_CODEX_VERSION: '0.140.0' },
-      });
-      assert.strictEqual(JSON.parse(envBelowFloor.stdout).status, 'codex_version_unsupported', '#775: KAOLA_CODEX_VERSION env fallback also gates the version floor');
-      assert.strictEqual(JSON.parse(envBelowFloor.stdout).detected_version_source, 'env', '#775: env override is the reported source when no flag is passed');
-
-      // spawn-class: environment
-      const atFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.145.0'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
-      });
-      assert.notStrictEqual(JSON.parse(atFloor.stdout).status, 'codex_version_unsupported', '#775: exactly the floor version passes the version check');
-
-      // spawn-class: environment
-      const aboveFloor = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json', '--codex-version', '0.146.2'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
-      });
-      assert.notStrictEqual(JSON.parse(aboveFloor.stdout).status, 'codex_version_unsupported', '#775: a version above the floor passes the version check');
-
-      // #1036 R1: a hermetic no-override child must reach the live `codex --version` probe.
-      // The fake binary exits successfully but emits no version triplet, so the final fallback
-      // classification is the typed `unavailable` source rather than a suite-global env source.
-      const fakeCodexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-fake-codex-'));
-      const fakeCodexPath = path.join(fakeCodexDir, 'codex');
-      const probeMarker = path.join(fakeCodexDir, 'probe.marker');
-      fs.writeFileSync(fakeCodexPath,
-        '#!/bin/sh\n'
-        + 'printf \'probed\\n\' > "$KAOLA_TEST_CODEX_PROBE_MARKER"\n'
-        + 'printf \'codex development build\\n\'\n');
-      fs.chmodSync(fakeCodexPath, 0o755);
-      try {
-        const noOverrideEnv = {
-          ...process.env,
-          HOME: chome,
-          PATH: fakeCodexDir + path.delimiter + '/usr/bin:/bin',
-          KAOLA_TEST_CODEX_PROBE_MARKER: probeMarker,
-        };
-        delete noOverrideEnv.KAOLA_CODEX_VERSION;
-        assert.strictEqual(noOverrideEnv.KAOLA_CODEX_VERSION, undefined,
-          '#1036 R1: no-override probe fixture must remove KAOLA_CODEX_VERSION from the child');
-        // spawn-class: environment
-        const noOverride = spawnSync(process.execPath,
-          [codexPreflightPath, '--project-root', cproj, '--home', chome,
-            '--no-autofix', '--json'],
-          { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: noOverrideEnv });
-        assert.strictEqual(noOverride.status, 7,
-          '#1036 R1: no-override probe fixture must stop at the unsupported-version gate: '
-          + noOverride.stderr + noOverride.stdout);
-        const noOverrideJson = JSON.parse(noOverride.stdout);
-        assert.strictEqual(noOverrideJson.detected_version, null,
-          '#1036 R1: unparsable fake codex output reports no detected version');
-        assert.strictEqual(noOverrideJson.detected_version_source, 'unavailable',
-          '#1036 R1: no-env fallback reports the unavailable source after probing codex');
-        assert.strictEqual(fs.readFileSync(probeMarker, 'utf8'), 'probed\n',
-          '#1036 R1: no-env fallback actually invokes the hermetic codex binary');
-      } finally {
-        fs.rmSync(fakeCodexDir, { recursive: true, force: true });
-      }
-
-      // --- #775: codex_multi_agent_v2_required (owner decision D2: Kaola never writes the flag
-      //     for the user — the refusal must carry the exact minimal paste-able diff). ---
+      // #1101: multi_agent_v2 disabled is a reported host fact, never a refusal (the
+      // codex_multi_agent_v2_required status retired with the roles).
       const noV2 = runPreflightForConfig(configText);
-      assert.strictEqual(noV2.status, 7, '#775: absent [agents] enabled=true must refuse with exit 7: ' + noV2.stderr + noV2.stdout);
+      assert.strictEqual(noV2.status, 0, '#1101: v2 disabled must not fail preflight: ' + noV2.stderr + noV2.stdout);
       const noV2Json = JSON.parse(noV2.stdout);
-      assert.strictEqual(noV2Json.status, 'codex_multi_agent_v2_required', '#775: absent config refuses codex_multi_agent_v2_required');
-      assert.strictEqual(noV2Json.multi_agent_v2_enabled, false, '#775: refusal reports multi_agent_v2_enabled:false');
-      assert.strictEqual(noV2Json.max_concurrent_threads_per_session, null, '#775: refusal reports null concurrency bounds (not_applicable)');
-      assert.strictEqual(noV2Json.max_concurrent_threads_per_session_source, 'not_applicable', '#775: refusal reports not_applicable bounds source');
-      assert.strictEqual(noV2Json.effective_subagent_width, null, '#775: refusal reports null effective_subagent_width');
-      assert(noV2Json.repair.includes('[features.multi_agent_v2]\nenabled = true'), '#775: refusal repair carries the exact minimal [agents] enabled=true diff: ' + noV2Json.repair);
-      assert(noV2Json.repair.includes('does not write this flag for you'), '#775: refusal repair states Kaola never writes this flag for the user');
-      assert(!/tool_namespace\s*=|hide_spawn_agent_metadata\s*=|non_code_mode_only\s*=/.test(noV2Json.repair),
-        '#775: refusal repair must not prescribe the retired 0.142/0.144 transport fields as an active directive: ' + noV2Json.repair);
-      assert(/opt-?in/i.test(noV2Json.repair) && /off by default/i.test(noV2Json.repair),
-        'refusal repair states the load-bearing fact: multi_agent_v2 is opt-in and off by default, so it must be written: ' + noV2Json.repair);
-      assert(!/\[agents\]\nenabled = true/.test(noV2Json.repair),
-        'refusal repair must NOT prescribe [agents] enabled = true — measured on Codex 0.145.0, that '
-        + 'config loads clean and leaves multi_agent_v2 OFF, so prescribing it sends the operator to a '
-        + 'setting that does not turn MultiAgentV2 on: ' + noV2Json.repair);
-      assert(noV2Json.repair.includes('default_subagent_model') && noV2Json.repair.includes('default_subagent_reasoning_effort'),
-        '#775: refusal repair states Kaola never writes/overrides the sub-agent model/effort defaults');
-
-      // Enabling [agents] clears the gate.
+      assert.strictEqual(noV2Json.multi_agent_v2_enabled, false, '#1101: v2-disabled config reports multi_agent_v2_enabled:false');
+      assert.strictEqual(noV2Json.dispatch_mode, null, '#1101: v2-disabled config reports no dispatch mode');
+      assert(/neither requires nor writes/.test(noV2Json.dispatch_posture_warning || ''),
+        '#1101: the report states that Kaola-Workflow neither requires nor writes the setting: ' + noV2Json.dispatch_posture_warning);
       const withV2 = runPreflightForConfig(configWithAgentsEnabled());
-      assert.notStrictEqual(JSON.parse(withV2.stdout).status, 'codex_multi_agent_v2_required',
-        '#775: [agents] enabled=true clears the required-v2 gate: ' + withV2.stdout);
+      assert.strictEqual(withV2.status, 0, '#775: enabled config passes preflight: ' + withV2.stderr + withV2.stdout);
       assert.strictEqual(JSON.parse(withV2.stdout).multi_agent_v2_enabled, true, '#775: enabled config reports multi_agent_v2_enabled:true');
       assert.strictEqual(JSON.parse(withV2.stdout).dispatch_mode, 'v2-task-name', '#775: enabled config reports the v2-task-name dispatch mode');
 
-      let preflight = runPreflightForConfig(configWithAgentsEnabled());
-      assert.strictEqual(preflight.status, 0, '#581: preflight over fresh project profiles must pass: ' + preflight.stderr + preflight.stdout);
-      let preflightJson = JSON.parse(preflight.stdout);
-      assert.strictEqual(preflightJson.dispatch_mode, 'v2-task-name', '#775: preflight reports v2-task-name once [agents] enabled=true');
-      const reviewerProfilePath = path.join(projectAgentsDir, 'code-reviewer.toml');
-      const reviewerProfileBeforeDrift = fs.readFileSync(reviewerProfilePath, 'utf8');
-      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
-      // "description metadata drift" above).
-      fs.writeFileSync(reviewerProfilePath, reviewerProfileBeforeDrift.replace(
-        'Code reviewer. Independently examines', 'Code reviewer. Independently modified examines'));
-      // spawn-class: environment
-      const reviewerDrift = spawnSync(process.execPath,
-        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(reviewerDrift.status, 0,
-        '#reviewer-contract: modified installed project profile must fail preflight');
-      const reviewerDriftJson = JSON.parse(reviewerDrift.stdout);
-      assert.strictEqual(reviewerDriftJson.status, 'profiles_stale',
-        '#reviewer-contract: exact-byte drift must be classified profiles_stale');
-      assert.strictEqual(reviewerDriftJson.repair, `node ${codexInstallerPath} ${cproj}`,
-        '#reviewer-contract: project drift must name the exact scoped installer command');
-      // spawn-class: environment
-      const repairedReviewer = spawnSync(process.execPath,
-        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.strictEqual(repairedReviewer.status, 0,
-        '#reviewer-contract: project drift autofix must reinstall exact source bytes: ' + repairedReviewer.stderr);
-      assert(fs.readFileSync(reviewerProfilePath).equals(
-        fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'))),
-      '#reviewer-contract: project autofix must restore exact selected source bytes');
-      const legacyProfilePath = path.join(projectAgentsDir, 'implementer.toml');
-      const currentProfile = fs.readFileSync(legacyProfilePath, 'utf8');
-      fs.writeFileSync(legacyProfilePath, currentProfile
-        .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
-        .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"'));
-      const configBeforeMigration = fs.readFileSync(projectConfigPath, 'utf8');
-      // spawn-class: environment
-      const staleLegacy = spawnSync(process.execPath,
-        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.notStrictEqual(staleLegacy.status, 0, 'legacy pinned project profile must not satisfy preflight');
-      const staleLegacyJson = JSON.parse(staleLegacy.stdout);
-      assert.strictEqual(staleLegacyJson.status, 'profiles_stale', 'legacy full pin has the stale migration status');
-      assert(Array.isArray(staleLegacyJson.stale_profiles)
-        && staleLegacyJson.stale_profiles.some(p => p.role === 'implementer'), 'stale result names the legacy profile');
-      // spawn-class: environment
-      const migratedLegacy = spawnSync(process.execPath,
-        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
-      assert.strictEqual(migratedLegacy.status, 0, 'default project preflight migrates a legacy full pin: ' + migratedLegacy.stderr);
-      assert.strictEqual(JSON.parse(migratedLegacy.stdout).autofixed, true, 'legacy migration reports autofixed');
-      const migratedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
-      assert.strictEqual(migratedProfile, currentProfile,
-        'legacy migration restores the current pinned-binding source bytes');
-      assert(/^model\s*=\s*"gpt-6-luna"$/m.test(migratedProfile)
-        && /^model_reasoning_effort\s*=\s*"max"$/m.test(migratedProfile),
-        'legacy migration installs the single gpt-6-luna/max subagent binding');
-      assert.strictEqual(fs.readFileSync(projectConfigPath, 'utf8'), configBeforeMigration,
-        'profile migration does not rewrite the root-level user-owned dispatch posture');
       // #775 (Codex 0.145 re-baseline): dispatch mode is binary now — the whole 0.142/0.144
       // transport-mode grammar (tool_namespace / hide_spawn_agent_metadata / non_code_mode_only,
       // quoted/dotted/array-of-table edge cases, the codex_v2_*_transport_unsafe refusals) is
       // retired along with the [features.multi_agent_v2] table shape; the ONLY question left is
-      // whether the top-level [agents] table's `enabled` is true (v2-task-name) or not (the
-      // codex_multi_agent_v2_required refusal proven above — there is no v1 fallback dispatch_mode).
+      // whether the top-level [agents] table's `enabled` is true (v2-task-name) or not 
       function assertDispatchModeForConfig(body, expectedEnabled, label) {
         const result = runPreflightForConfig(body);
-        if (!expectedEnabled) {
-          assert.strictEqual(result.status, 7, label + ': v2-disabled config must refuse with exit 7: ' + result.stderr + result.stdout);
-          const json = JSON.parse(result.stdout);
-          assert.strictEqual(json.status, 'codex_multi_agent_v2_required', label + ': v2-disabled config refuses codex_multi_agent_v2_required');
-          assert.strictEqual(json.multi_agent_v2_enabled, false, label + ': multi_agent_v2_enabled');
-          assert.strictEqual(json.dispatch_mode, null, label + ': dispatch_mode is null when v2 is disabled (no v1 fallback)');
-          return;
-        }
-        assert.strictEqual(result.status, 0, label + ': v2-enabled config must pass preflight: ' + result.stderr + result.stdout);
+        assert.strictEqual(result.status, 0, label + ': preflight reports, never refuses, on the v2 setting: ' + result.stderr + result.stdout);
         const json = JSON.parse(result.stdout);
-        assert.strictEqual(json.dispatch_mode, 'v2-task-name', label + ': dispatch_mode');
-        assert.strictEqual(json.multi_agent_v2_enabled, true, label + ': multi_agent_v2_enabled');
+        assert.strictEqual(json.multi_agent_v2_enabled, expectedEnabled, label + ': multi_agent_v2_enabled');
+        assert.strictEqual(json.dispatch_mode, expectedEnabled ? 'v2-task-name' : null, label + ': dispatch_mode (no v1 fallback)');
       }
       assertDispatchModeForConfig(configText, false, '#775 no [agents] table at all');
       assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + configText, false, '#775 [agents] table present but enabled=false');
@@ -3658,11 +1183,8 @@ try {
 
       // #598 AC2: effort-gated MultiAgentMode dispatch-POSTURE E2E coverage (distinct from
       // dispatch_mode above — posture reflects whether the runtime will REFUSE a spawn, not
-      // just whether the tools are exposed). #775: 'none' now ALWAYS coincides with the
-      // codex_multi_agent_v2_required refusal (proven above, including its reported
-      // dispatch_posture:'none' field) — every case exercised here therefore uses a v2-enabled
-      // config and must still exit 0 (a non-proactive posture is a WARN, never a preflight
-      // failure once v2 itself is enabled).
+      // just whether the tools are exposed). A non-proactive posture is a reported fact, never a
+      // preflight failure.
       function assertDispatchPostureForConfig(body, expectedPosture, label) {
         const result = runPreflightForConfig(body);
         assert.strictEqual(result.status, 0, label + ': dispatch-posture WARN must never fail preflight once v2 is enabled: ' + result.stderr + result.stdout);
@@ -3743,10 +1265,8 @@ try {
       }, '#775 non-positive configured threads value falls back to the observed default (Codex itself rejects < 1)');
 
       // AC1 (#775): installer REPORT step — a fresh install must print the effective dispatch
-      // posture and (non-proactive) the exact remediation, and this must NEVER change the
-      // installer's own exit code: the installer ALWAYS succeeds (profile install is unconditional
-      // per D2 — Kaola never writes [agents] enabled=true itself); only the later PREFLIGHT
-      // dispatch-time check refuses via codex_multi_agent_v2_required.
+      // posture it reads, and this must NEVER change the installer's own exit code (#1101: Kaola
+      // neither requires nor writes multi_agent_v2, and the preflight only reports it).
       const codexInstallerPathForPosture = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
       const postureProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-775-proj-'));
       const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-775-home-'));
@@ -3759,17 +1279,16 @@ try {
         });
         assert.strictEqual(freshInstall.status, 0, '#775 AC1: dispatch-posture report must never fail an otherwise-good install: ' + freshInstall.stderr);
         assert(/status: ok/.test(freshInstall.stdout), '#775 AC1: existing "status: ok" output must be unchanged (install always succeeds)');
-        assert(/Kaola-Workflow Codex multi_agent_v2: NOT enabled \(see codex_multi_agent_v2_required at preflight\)/.test(freshInstall.stdout),
+        assert(/Kaola-Workflow Codex multi_agent_v2: not enabled$/m.test(freshInstall.stdout),
           '#775 AC1: a fresh install (no [agents] enabled=true; Kaola never writes it per D2) must report multi_agent_v2 not enabled: ' + freshInstall.stdout);
         assert(/Kaola-Workflow Codex dispatch posture: none/.test(freshInstall.stdout),
           '#775 AC1: a fresh install with no [agents] enabled=true must report posture none: ' + freshInstall.stdout);
         assert(/0\.145\.0/.test(freshInstall.stdout), '#775 AC1: report must carry the version-guard note (0.145.0): ' + freshInstall.stdout);
-        assert(!/effective subagent width/.test(freshInstall.stdout),
-          '#775 AC1: v2 not enabled -> must NOT print a concrete effective-width line: ' + freshInstall.stdout);
-        assert(/Recommended \[features\.multi_agent_v2\] config for Kaola-Workflow dispatch/.test(freshInstall.stdout),
-          'AC1: fresh install must document the recommended [features.multi_agent_v2] config: ' + freshInstall.stdout);
-        assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /max_wait_timeout_ms/.test(freshInstall.stdout),
-          '#775 AC1: recommended config note must name both knobs: ' + freshInstall.stdout);
+        assert(/How Codex bounds \[features\.multi_agent_v2\] when the user enables it/.test(freshInstall.stdout)
+          && /neither requires nor writes/.test(freshInstall.stdout),
+          '#1101: a fresh install documents how Codex bounds [features.multi_agent_v2] as a host fact, recommending nothing: ' + freshInstall.stdout);
+        assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /wait_timeout_ms/.test(freshInstall.stdout),
+          '#775 AC1: the bounds note must name both knobs: ' + freshInstall.stdout);
         // #842: the note keeps its ADVICE about agents.max_threads and loses its false MECHANISM.
         // Measured on the installed codex-cli 0.145.0, isolated CODEX_HOME, read-only probes:
         //   * `[features.multi_agent_v2] enabled = true` + `[agents] max_threads = 6` loads clean —
@@ -3795,10 +1314,12 @@ try {
           + 'key and NOT an alias for the V2 budget, which comes from '
           + 'features.multi_agent_v2.max_concurrent_threads_per_session alone: ' + freshInstall.stdout);
 
-        // Enable [agents] with effort=ultra ahead of the managed block, then re-run (idempotent
+        // Enable multi_agent_v2 with effort=ultra, then re-run (idempotent
         // update) — the posture must flip to 'proactive' and multi_agent_v2 must report enabled.
         const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
-        const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
+        // #1101: the install writes no config.toml (no registration block); the user's own starts empty.
+        fs.mkdirSync(path.dirname(postureConfigPath), { recursive: true });
+        const beforeUltra = fs.existsSync(postureConfigPath) ? fs.readFileSync(postureConfigPath, 'utf8') : '';
         fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
         // spawn-class: environment
         const reinstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
@@ -3862,6 +1383,7 @@ try {
     }
   }
 
+
   // #775 (Codex 0.145 re-baseline): the "root dotted [features] assignment" and "root inline
   // features" authority-preservation tests are retired wholesale — [features] is not read at all
   // anymore (config/agents.toml's managed block carries only [agents.<role>] entries), so there
@@ -3884,29 +1406,7 @@ try {
     const preflightMod = require(preflightModulePath);
     const installerMod = require(installerModulePath);
 
-    const mixedLegacyScope = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-mixed-legacy-profile-'));
-    try {
-      const mixedAgentsDir = path.join(mixedLegacyScope, 'agents', 'kaola-workflow');
-      fs.mkdirSync(mixedAgentsDir, { recursive: true });
-      const sourceProfile = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'implementer.toml'), 'utf8');
-      const mixedProfile = sourceProfile
-        .replace(/^name = "implementer"$/m, 'name = "wrong-role"')
-        .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
-        .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
-      fs.writeFileSync(path.join(mixedAgentsDir, 'implementer.toml'), mixedProfile);
-      const inspection = preflightMod.inspectScope({
-        codexDir: mixedLegacyScope,
-        templateRoles: ['implementer'],
-        templateEntries: []
-      });
-      assert.strictEqual(inspection.legacyPinnedProfiles.length, 0,
-        'legacy pair is safely migratable only when the remaining profile schema is valid');
-      assert(inspection.malformed.some(item => item.role === 'implementer'
-        && item.reasons.some(reason => reason.includes('must equal the role "implementer"'))),
-      'legacy pin plus invalid role metadata remains profiles_malformed');
-    } finally {
-      fs.rmSync(mixedLegacyScope, { recursive: true, force: true });
-    }
+    // (#1101: the legacy-pin / malformed-profile inspectScope case retired with the profiles.)
 
     const postureFixtures = [
       { label: 'no agents table at all', cfg: '', expected: 'none' },
@@ -3985,10 +1485,8 @@ try {
       'bounds note must name agents.max_threads — the advice to leave it out is correct');
     // #842, on the note CONSTANT rather than on installer stdout, so the negatives are scoped to
     // the exact string both surfaces print. The guidance stays; only the mechanism was false.
-    assert(/(do not|don't|leave it out|omit)/i.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
-      '#842: the note must KEEP telling the operator not to set agents.max_threads — the advice was '
-      + 'never the defect. Deleting the sentence would leave a reader who has already set it with '
-      + 'nothing: ' + installerMod.MULTI_AGENT_V2_BOUNDS_NOTE);
+    // (#1101: the note no longer ADVISES a subagent configuration — Kaola-Workflow neither requires nor
+    // writes multi_agent_v2 — so the #842 keep-the-advice pin retired; the mechanism pins stay.)
     assert(!/\breject(s|ed|ion)?\b/i.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
       '#842: the note must NOT claim Codex rejects agents.max_threads. Measured on codex-cli 0.145.0 '
       + '(isolated CODEX_HOME): v2-enabled + [agents] max_threads = 6 loads clean under both '
@@ -4026,58 +1524,8 @@ try {
         + '("does not raise the cap") and stop there: ' + note);
     }
 
-    // #842 — CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION carries the SAME claim and, until now, was
-    // pinned by nothing at all. It is a live operator-facing string: it is the `repair` field of the
-    // codex_multi_agent_v2_required refusal, which fires whenever features.multi_agent_v2.enabled is
-    // absent or false — the single most likely refusal a new Codex user meets.
-    const v2Required = preflightMod.CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION;
-    assert(typeof v2Required === 'string' && /agents\.max_threads/.test(v2Required),
-      '#842: the multi_agent_v2-required remediation names agents.max_threads (the advice stays)');
-    assert(!/\breject(s|ed|ion)?\b/i.test(v2Required),
-      '#842: ...and must not claim Codex rejects it — measured accepted on 0.145.0: ' + v2Required);
-    assert(!/codex[^.]{0,40}\b(ignor\w*|discard\w*|drop\w*)\b/i.test(v2Required),
-      '#842: ...and must not overclaim the discard either: ' + v2Required);
-    assert(/not an alias/i.test(v2Required),
-      '#842: ...and states the accurate relationship, the same one the bounds note states — one '
-      + 'claim, one wording, across both strings: ' + v2Required);
-
-    // #842 — THE SAME DEFECT, THIRD INSTANCE: a true observation welded to an unmeasured mechanism.
-    // The OBSERVATION is measured and stays: `[agents] enabled = true` does not enable MultiAgentV2
-    // (isolated CODEX_HOME, that config alone -> `codex features list` exit 0, multi_agent_v2 stable
-    // FALSE). The MECHANISM offered for it — "[agents] has no `enabled` key", "Codex parses it and
-    // applies nothing" — is false and unmeasured respectively:
-    //   * `[agents]` is a strictly typed role map plus recognized scalars. An unrecognized name is
-    //     refused there, and it is refused for a BOOLEAN exactly as for an integer (`bogus_key = true`
-    //     and `bogus_key = 6` both fail config load; the second control is impl842's, and it is what
-    //     rules out "the boolean survived because of its TYPE" as an alternative reading). So
-    //     `enabled` is a RECOGNIZED name that simply does not gate V2.
-    //   * "applies nothing" is broader than anything measured: what was observed is that V2 stays
-    //     off, not that the value has no effect anywhere.
-    // Pinned NARROWLY on purpose — the positive keeps the advice, the negatives forbid only the two
-    // unmeasured explanations, and nothing here pins what `enabled` positively does, because nobody
-    // measured that either.
-    assert(/\[agents\]/.test(v2Required) && /does\s+not\s+enable/i.test(v2Required),
-      '#842: the remediation must keep the MEASURED claim — a top-level [agents] enabled = true does '
-      + 'NOT enable MultiAgentV2: ' + v2Required);
-    assert(!/\[?agents\]?[^.]{0,40}\b(has no|no such|lacks)\b[^.]{0,25}enabled/i.test(v2Required),
-      '#842: ...and must NOT explain it with "[agents] has no enabled key". It has one: an '
-      + 'unrecognized [agents] name is refused for a boolean just as for an integer, while '
-      + 'enabled = true loads clean. Right conclusion, invented mechanism: ' + v2Required);
-    assert(!/applies nothing/i.test(v2Required),
-      '#842: ...and must not claim Codex "applies nothing" either — what was measured is that V2 '
-      + 'stays OFF, not that the value has no effect anywhere: ' + v2Required);
-    // ...and the correction must not NARROW what ships. Naming one literal key as "the flag Kaola
-    // reads" would be a fresh inaccuracy of the same family, pointed at our own product this time:
-    // the detector accepts THREE shapes (the [features.multi_agent_v2] sub-table, the inline
-    // multi_agent_v2 = { enabled = ... } under [features], and a bare multi_agent_v2 = true) plus
-    // the dotted-root equivalents. An operator who wrote a legal shape and is then told the flag is
-    // something else goes looking for a bug that is not there. GREEN today — the shipped text
-    // already enumerates them — so this is a preservation pin against a rewrite that trims.
-    assert(/inline form|multi_agent_v2 = \{/.test(v2Required) && /bare .?multi_agent_v2/.test(v2Required),
-      '#842: the remediation must keep naming the OTHER accepted shapes (inline under [features], '
-      + 'and the bare form) — the detector reads three plus dotted-root equivalents, so a correction '
-      + 'that collapses them to one literal key trades a vendor overclaim for a product one: '
-      + v2Required);
+    // (#1101: CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION and its refusal retired with the roles; the
+    // #842 mechanism pins on the bounds note above cover the one string that still ships.)
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by
@@ -4147,6 +1595,135 @@ try {
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// #1104 (carried through #1101's rebase): the live cached preflight keeps its plugin identity check
+// when --home reaches the cache through a symlink, stays ok for a matching manifest under either
+// --home form, and a lexical scriptDir through a symlinked cache layer keeps its non-symlink
+// refusal. The fixture helpers are the base suite's, minus the retired agents/ copy.
+{
+  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
+  const pluginIdentity = JSON.parse(fs.readFileSync(
+    path.join(pluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
+  const marketplace = 'kaola-test-marketplace';
+
+  function cacheFixture() {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-project-'));
+    const versionRoot = path.join(homeRoot, '.codex', 'plugins', 'cache', marketplace,
+      pluginIdentity.name, pluginIdentity.version);
+    fs.mkdirSync(versionRoot, { recursive: true });
+    fs.cpSync(path.join(pluginRoot, 'config'), path.join(versionRoot, 'config'), { recursive: true });
+    fs.cpSync(path.join(pluginRoot, '.codex-plugin'), path.join(versionRoot, '.codex-plugin'),
+      { recursive: true });
+    fs.mkdirSync(path.join(versionRoot, 'scripts'));
+    return { homeRoot, projectRoot, versionRoot };
+  }
+
+  function doctor(fixture, liveCachedSource = false) {
+    return codexPreflight.runDoctor({
+      projectRoot: fixture.projectRoot,
+      home: fixture.homeRoot,
+      scriptDir: liveCachedSource
+        ? path.join(fixture.versionRoot, 'scripts')
+        : path.join(pluginRoot, 'scripts'),
+    });
+  }
+
+  // #1104: the CLI's __dirname is realpath-resolved, so the live cache copy must
+  // keep its manifest/path identity check when --home reaches it through a symlink.
+  {
+    const fixture = cacheFixture();
+    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
+    try {
+      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
+        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
+          path.join(fixture.versionRoot, 'scripts', script));
+      }
+      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.version = '0.0.0';
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+      const realHome = fs.realpathSync(fixture.homeRoot);
+      const linkedHome = path.join(linkRoot, 'home');
+      fs.symlinkSync(realHome, linkedHome);
+      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
+        // spawn-class: environment
+        const run = spawnSync(process.execPath,
+          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
+            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
+          { encoding: 'utf8', env: process.env });
+        assert.strictEqual(run.status, 2,
+          `live cached CLI doctor with a ${label} --home rejects manifest version drift: `
+            + run.stdout + run.stderr);
+        const report = JSON.parse(run.stdout);
+        assert.strictEqual(report.status, 'plugin_identity_invalid',
+          `live cached CLI doctor with a ${label} --home has a typed identity refusal`);
+        assert(report.error.includes('plugin_manifest_version_mismatch'),
+          `live cached CLI doctor with a ${label} --home names the manifest version mismatch`);
+      }
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(linkRoot, { recursive: true, force: true });
+    }
+  }
+
+  // #1104: the same live cache copy with a matching manifest stays ok under
+  // either --home form.
+  {
+    const fixture = cacheFixture();
+    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
+    try {
+      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
+        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
+          path.join(fixture.versionRoot, 'scripts', script));
+      }
+      const realHome = fs.realpathSync(fixture.homeRoot);
+      const linkedHome = path.join(linkRoot, 'home');
+      fs.symlinkSync(realHome, linkedHome);
+      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
+        // spawn-class: environment
+        const run = spawnSync(process.execPath,
+          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
+            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
+          { encoding: 'utf8', env: process.env });
+        assert.strictEqual(run.status, 0,
+          `live cached CLI doctor with a ${label} --home accepts a matching manifest: `
+            + run.stdout + run.stderr);
+        assert.strictEqual(JSON.parse(run.stdout).status, 'ok',
+          `live cached CLI doctor with a ${label} --home reports ok for a matching manifest`);
+      }
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(linkRoot, { recursive: true, force: true });
+    }
+  }
+
+  // #1104: a lexical scriptDir reaching the live cache through a symlinked cache
+  // layer keeps the lexical containment check and its non-symlink refusal.
+  for (const layer of ['.codex', 'version']) {
+    const fixture = cacheFixture();
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-layer-'));
+    try {
+      const linked = layer === '.codex' ? path.join(fixture.homeRoot, '.codex') : fixture.versionRoot;
+      const outside = path.join(outsideRoot, 'target');
+      fs.renameSync(linked, outside);
+      fs.symlinkSync(outside, linked);
+      const result = doctor(fixture, true);
+      assert.strictEqual(result.exitCode, 2,
+        `live installed-source doctor rejects a symlinked ${layer} cache layer reached lexically`);
+      assert.strictEqual(result.result.status, 'plugin_identity_invalid',
+        `symlinked ${layer} cache layer has a typed identity refusal`);
+      assert(result.result.error.includes('plugin_cache_path_unsafe'),
+        `symlinked ${layer} cache layer refusal names plugin_cache_path_unsafe`);
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  }
 }
 
 console.log('Install model rendering tests passed');

@@ -121,6 +121,22 @@ function seedConfig(home) {
 }
 
 const exists = (home, rel) => fs.existsSync(path.join(home, rel));
+// #1101: no Codex install writes role profiles or their registration any more, so the removal
+// sections start from the real 46fbe12d install frozen under scripts/fixtures/issue-1101 (leading-dot
+// names stored as dot-<name>; @@HOME@@ rewritten to the sandbox home).
+function plantCodexFixture(sub, home, destRoot) {
+  const src = path.join(__dirname, 'fixtures', 'issue-1101', 'v12.2.6-46fbe12d', 'home', sub);
+  const walk = (s, d) => {
+    for (const e of fs.readdirSync(path.join(src, s), { withFileTypes: true })) {
+      const name = e.name.startsWith('dot-') ? '.' + e.name.slice(4) : e.name;
+      if (e.isDirectory()) { walk(path.join(s, e.name), path.join(d, name)); continue; }
+      fs.mkdirSync(path.join(destRoot, d), { recursive: true });
+      fs.writeFileSync(path.join(destRoot, d, name),
+        fs.readFileSync(path.join(src, s, e.name), 'utf8').split('@@HOME@@').join(home));
+    }
+  };
+  walk('', '.codex');
+}
 
 try {
   // ---- 1. registry contract, in-process against fixture homes ---------------------------------
@@ -237,6 +253,7 @@ try {
     const home = makeHome('codex');
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=github', '--no-settings-merge'], home, 'install.sh');
     runOk('node', [CODEX_INSTALLER, '--global'], home, 'codex install');
+    plantCodexFixture('dot-codex', home, home); // what the pre-#1101 release installed
     const hooksFile = path.join(home, '.codex', 'hooks.json');
     const hooks = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     hooks.description = 'user description';
@@ -263,7 +280,8 @@ try {
     const toml = fs.readFileSync(configToml, 'utf8');
     check(!toml.includes('# BEGIN kaola-workflow agents') && toml.includes('model = "user-model"'), 'codex --uninstall stripped only the managed config block');
     check(fs.readdirSync(agentsDir).join() === profiles[0], 'codex --uninstall removed unmodified profiles and preserved the modified one');
-    check(/preserved modified profile/.test(r.stdout), 'codex --uninstall reports the preserved profile');
+    check(r.stdout.includes('Preserved retired Kaola-Workflow agent (modified_since_install): ' + path.join(agentsDir, profiles[0])),
+      'codex --uninstall reports the preserved profile');
     check(fs.readFileSync(path.join(home, CONFIG_REL)).equals(config), '(ii) config.json byte-identical while claude holds a reference');
     check(JSON.stringify(snapshot(path.join(home, '.claude'))) === JSON.stringify(claudeBefore), '(ii) Claude surfaces untouched by codex --uninstall');
     check(carrierStripped(home, path.join('.codex', 'AGENTS.md'), ['codex-local']),
@@ -280,6 +298,7 @@ try {
     const projectDir = path.join(proj, 'repo');
     fs.mkdirSync(projectDir);
     runOk('node', [CODEX_INSTALLER, projectDir], proj, 'codex project install');
+    plantCodexFixture(path.join('proj', 'dot-codex'), projectDir, projectDir);
     refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'codex', { scope: 'global' }, { home: proj });
     refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'codex', { scope: 'project:' + projectDir }, { home: proj });
     const globalHooks = fs.readFileSync(path.join(proj, '.codex', 'hooks.json'));

@@ -7,7 +7,7 @@
 // TEST INFRASTRUCTURE ONLY. Nothing here is shipped, installed, or imported by a production
 // script.
 //
-// THE FAULT, measured at 51db5d2d. Eight shell installer sites (install.sh bootstrap +
+// THE FAULT, measured at 51db5d2d (the install.sh agent sites below retired with #1101). Eight shell installer sites (install.sh bootstrap +
 // install_managed_agent + two manifest snapshots; install-opencode.sh two manifest snapshots +
 // seed_config render; the then-current install-kimi.sh hooks backup) rely on mktemp's OWN TMPDIR
 // consultation —
@@ -364,7 +364,12 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
 (async () => {
   // -------------------------------------------------------------------------------------------
   // A. `bash install.sh --yes --forge=github` from the copied checkout, GNU-shaped mktemp,
-  //    TMPDIR=. — the agent-manifest snapshots and the 14 per-agent frontmatter rewrites.
+  //    TMPDIR=. — #1101 retired the agent deploy whose manifest snapshots and per-agent frontmatter
+  //    rewrites were this leg's mktemp sites, so a local install makes NO mktemp call. The one
+  //    site left is the curl|bash bootstrap clone, which must go through the absolute KW_TMPDIR
+  //    guard. The leg pins both facts (a silent shim is then a confirmed property, not a bypassed
+  //    instrument) and keeps the run: a green install under a relative TMPDIR must still deploy
+  //    the command payload and leave nothing in the checkout.
   // -------------------------------------------------------------------------------------------
   {
     const home = path.join(sandbox, 'home-a');
@@ -378,24 +383,22 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     assertObservation('install.sh', r);
     const lines = shimLinesFrom(at);
     const inside = lines.filter(insideCheckout);
-    assert(lines.length > 0,
-      'install.sh: the shim observed ZERO mktemp calls during the install. Either the installer '
-        + 'no longer uses mktemp at all — in which case this scenario\'s instrument must be '
-        + 're-derived around whatever replaced it, not deleted — or the shim was bypassed '
-        + '(absolute mktemp path, sanitised PATH), and every location verdict below is vacuous.');
+    const mktempSites = fs.readFileSync(path.join(checkout, 'install.sh'), 'utf8')
+      .split('\n').filter(l => !l.trim().startsWith('#') && /(^|[^"'\w])mktemp([ \t]|$)/.test(l));
+    assert(mktempSites.length === 1 && mktempSites[0].includes('"$KW_TMPDIR/kaola-workflow-bootstrap.'),
+      'install.sh (#1101): the only mktemp site is the bootstrap clone under the absolute KW_TMPDIR '
+        + 'guard, so a silent shim log in a local install is a property, not a bypassed instrument; '
+        + 'found: ' + JSON.stringify(mktempSites));
     assert(inside.length === 0,
       'install.sh: ' + inside.length + ' of ' + lines.length + ' mktemp-created paths landed '
-        + 'INSIDE the copied checkout: ' + JSON.stringify(inside.slice(0, 6)) + '. On a GNU '
-        + 'system a bare `bash install.sh` does this to the real checkout and cleans up after '
-        + 'itself, so nothing that looks afterwards can see it. ' + MECHANISM);
+        + 'INSIDE the copied checkout: ' + JSON.stringify(inside.slice(0, 6)) + '. ' + MECHANISM);
     assert(r.newEntries.length === 0, escapeMessage('install.sh', r, MECHANISM));
     assert(r.code === 0,
-      'install.sh: exits ' + r.code + ' under a relative TMPDIR — the temp files must move out '
-        + 'of the checkout without the install losing what it does. Output (tail):\n'
-        + r.out.slice(-2000));
-    const manifest = path.join(home, '.claude', 'agents', '.kaola-workflow-agent-manifest');
-    assert(fs.existsSync(manifest) && fs.readFileSync(manifest, 'utf8').trim().length > 0,
-      'install.sh: no agent manifest landed at ' + manifest + ' — a green exit that installed '
+      'install.sh: exits ' + r.code + ' under a relative TMPDIR — the install must not lose what it '
+        + 'does. Output (tail):\n' + r.out.slice(-2000));
+    const command = path.join(home, '.claude', 'commands', 'workflow-next.md');
+    assert(fs.existsSync(command) && fs.readFileSync(command, 'utf8').trim().length > 0,
+      'install.sh: no command landed at ' + command + ' — a green exit that installed '
         + 'nothing is not a pass.');
   }
 
