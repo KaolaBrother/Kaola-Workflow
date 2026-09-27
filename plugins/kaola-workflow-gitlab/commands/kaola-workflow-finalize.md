@@ -236,6 +236,10 @@ checkout only when git can fast-forward it without touching your modifications, 
 reports `cleanup.main_checkout`. Then clean up after the sink; never touch another session's
 branch/worktree/folder, and ask on real content conflict. If the sink reported that it did not
 complete, the step it names is where to resume; receipts keep retry idempotent.
+A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there — the run's archive
+rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+`watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+the mainline, and leaving manual closure of any remaining members to you only once verified.
 <!-- /PIN -->
 
 <!-- PIN: closure-audit -->
