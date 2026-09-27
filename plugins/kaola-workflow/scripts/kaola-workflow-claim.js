@@ -5791,18 +5791,15 @@ function unclaimedDerivedDirs(root, projectName, branch, claimTs) {
 // 57fc4c67 and from the lane arm since #1100.)
 // #1102: `runDirs`, when the lane arm passes them (laneReceiptDirs), are the ONLY folders read —
 // never every folder sharing a name, so an old run's leftover receipt cannot pin a new run's worktree.
-// #1103: when `runDirs` is absent the base read is no longer two literal paths. `archiveProjectDir`
+// #1103: when `runDirs` is absent the default set is no longer two literal paths. `archiveProjectDir`
 // renames a colliding archive destination to `archive/<project>.archived-<ts>/`, so a run whose
-// closure already moved the folder has its receipt there and nowhere else. Widening the folder SET
-// cannot widen the pin's identity: the ambiguous and older-run rules stay #1102's, because this
-// default set is only reached when no record resolved an owner, and a record-free run has no second
-// run to confuse it with. The suffix convention (`<project>.archived-`) is the one the rest of this
-// file already matches on.
+// closure already moved the folder has its receipt there and nowhere else. The default set therefore
+// reads the live `.cache` first and then the ONE archive the SINK itself would resume from; when the
+// sink cannot name a single archive it reads NO archive receipt. Reading every suffixed sibling would
+// let an older abandoned run's mid-flight receipt pin a newer run's garbage forever — a folder the
+// sink itself never resumes, because `currentArchiveDir` throws `archive_authority_ambiguous` there.
 function sinkReceiptResumable(root, projectName, runDirs) {
-  for (const dir of runDirs || [
-    path.join(root, 'kaola-workflow', projectName),
-    ...archivedReceiptDirs(root, projectName),
-  ]) {
+  for (const dir of runDirs || defaultReceiptDirs(root, projectName)) {
     let receipt = null;
     try { receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8')); } catch (_) { receipt = null; }
     if (!receipt || !receipt.steps || typeof receipt.steps !== 'object') continue;
@@ -5811,20 +5808,64 @@ function sinkReceiptResumable(root, projectName, runDirs) {
   return false;
 }
 
-// #1103: the archive folders that can carry a run's receipt: the exact `archive/<project>` first, as
-// the base read had it, then every collision-renamed `archive/<project>.archived-<ts>/` sibling. The
-// suffix is a sortable timestamp, so the newest archive is read first — the same discipline as the
-// sink's own #429 `resolveSinkReceiptPath` scan. A project name that is not a safe name is read
-// exactly (no sibling scan), so a traversal-shaped name can never widen the directory set.
-function archivedReceiptDirs(root, projectName) {
-  const archiveBase = path.join(root, 'kaola-workflow', 'archive');
-  const dirs = [path.join(archiveBase, projectName)];
-  if (!isSafeName(projectName)) return dirs;
-  let names = [];
-  try { names = fs.readdirSync(archiveBase); } catch (_) { return dirs; }
-  const suffixed = names.filter((name) => name.startsWith(projectName + '.archived-')).sort().reverse();
-  for (const name of suffixed) dirs.push(path.join(archiveBase, name));
+// #1103: the default receipt folders the sink would actually resume from. The live project `.cache`
+// first — and the plain `archive/<project>` with it, since `resolveSinkReceiptPath` falls back to it
+// whenever the live folder is absent — then the single archive `currentArchiveDir` resolves:
+//   * exactly one archive carrying the run's claim_ts (the live `claim_ts`, or the unique stamped
+//     archive with no live state) is the current one, AND
+//   * when several carry it, exactly one receipt-anchored archive breaks the tie —
+//     `receipt.claim_ts` equal to that folder's `claim_ts` and `receipt.archive_dest` equal to that
+//     folder (the shape the finalize step really writes).
+// Anything else is ambiguous, and ambiguity must read nothing: the pin then falls back to
+// `(isClosed || isArchived) && !inActiveSet`, which for a sweep means "not pinned". This is the
+// claim.js port of sink-merge.js's `currentArchiveDir`; the two must stay in step, and a divergence
+// is a bug. The exact `archive/<project>` is always read as a candidate, so the pre-#1103 behavior
+// survives whenever that folder alone exists.
+function defaultReceiptDirs(root, projectName) {
+  const liveDir = path.join(root, 'kaola-workflow', projectName);
+  const plainArchive = path.join(root, 'kaola-workflow', 'archive', projectName);
+  const dirs = [liveDir, plainArchive];
+  const current = currentArchiveDir(root, projectName);
+  if (current && path.resolve(current) !== path.resolve(plainArchive)) dirs.push(current);
   return dirs;
+}
+
+// The claim.js copy of sink-merge.js's `currentArchiveDir` (#429/#694/#931). Returns the ONE archive
+// directory carrying the current claim, or null when that cannot be determined. `projectName` is
+// already a safe name at every call site; the guard keeps a traversal-shaped name from ever reaching
+// a path join.
+function currentArchiveDir(root, projectName) {
+  if (!isSafeName(projectName)) return null;
+  const candidates = findArchiveAuthorities(root, projectName);
+  if (candidates.length === 0) return null;
+  let liveClaim = null;
+  try { liveClaim = field(fs.readFileSync(path.join(root, 'kaola-workflow', projectName, 'workflow-state.md'), 'utf8'), 'claim_ts') || null; } catch (_) {}
+  const stamped = [];
+  for (const dir of candidates) {
+    try {
+      if (!fs.lstatSync(dir).isDirectory()) return null;
+      if (!fs.lstatSync(path.join(dir, 'workflow-state.md')).isFile()) return null;
+      const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+      const ts = field(state, 'claim_ts');
+      if (ts && (!liveClaim || ts === liveClaim)) stamped.push(dir);
+    } catch (error) { if (error.code !== 'ENOENT') return null; }
+  }
+  // With no surviving live state, two claimed histories remain ambiguous. Timestamps do not
+  // authorize choosing one simply because it is later.
+  if (stamped.length === 1) return stamped[0];
+  if (stamped.length > 1) {
+    const anchored = stamped.filter((dir) => {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8'));
+        const ts = field(fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'), 'claim_ts');
+        return receipt.project === projectName && ts && receipt.claim_ts === ts
+          && receipt.archive_dest === path.relative(root, dir).split(path.sep).join('/');
+      } catch (_) { return false; }
+    });
+    return anchored.length === 1 ? anchored[0] : null;
+  }
+  if (liveClaim) return null;
+  return candidates.length === 1 && path.basename(candidates[0]) === projectName ? candidates[0] : null;
 }
 
 function collectStale(root) {
