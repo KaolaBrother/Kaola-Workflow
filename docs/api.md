@@ -1400,15 +1400,21 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   the only run record, and reopening is the orchestrator's call). Re-entry is idempotent: the `## Sink`
   block is rewritten line-wise and only when its bytes change, the summary skips a PR URL it already
   holds, and the durable record is not rewritten when unchanged.
+- **Postures, defined once.** The sink resolves its root to the MAIN root (`resolveMainRoot`), and the
+  two postures below are distinguished by the checkout the sink RUNS IN, not by which branch that
+  checkout has out. **Non-linked** means the checkout the sink runs in IS the main root — a single
+  checkout, whether or not its HEAD happens to be the run branch. **Linked** means the sink runs in a
+  worktree other than the main root, so `root` is the shared main checkout.
 - **Contract**: push the branch only on the create path, create the PR/MR (`gh pr create` /
   `glab mr create` / `tea pr create`), record `pr_url`/`pr_number` (or `mr_url`/`mr_iid`) in the
-  `## Sink` block, then publish the run's archive. In the non-linked posture (main checkout HEAD is
-  the run branch) the archive is staged and committed on HEAD as before. In the linked posture the
-  archive commit is built from the main checkout's working tree through the kernel's private index
-  onto the branch tip (`commitPathsOntoCandidate`), the local branch is advanced ff-only in the
-  worktree that holds it or by compare-and-swap `update-ref` otherwise, then pushed. The main
-  checkout's index and HEAD are never touched, the default branch is never pushed, and a push is
-  never forced.
+  `## Sink` block, then publish the run's archive. In the non-linked posture the archive is staged and
+  committed on HEAD as before. In the linked posture the archive commit is built from the main
+  checkout's working tree through the kernel's private index onto the branch tip
+  (`commitPathsOntoCandidate`), the local branch is advanced ff-only in the worktree that holds it or
+  by compare-and-swap `update-ref` otherwise, then pushed. In the linked posture only
+  `kaola-workflow/archive/<project>/` is published — a live run folder never rides a request — and the
+  main checkout's index and HEAD are not touched by this publish. The default branch is never pushed
+  and a push is never forced.
 - **Output**: all three sinks disclose the lane on a machine-readable first stdout line — the GitHub
   sink prints `sink_pr: created` / `sink_pr: reused` / `sink_pr: already_merged`, and GitLab and Gitea
   print the same shape as `sink_mr: …` / `sink_pr: …` followed by their existing `MR URL:` /
@@ -1423,10 +1429,12 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
 - **Exit codes**: `0` created/reused/already-merged and recorded · `1` push, creation, probe failure
   (`pr_probe_failed` / `mr_probe_failed` on a durable record), or a reuse/closed-unmerged refusal.
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` record instead of real
-  metadata, and changes no git history in the linked posture — when the sink runs from a linked
-  worktree, `root` is the shared main checkout and its index and HEAD stay untouched. Only in the
-  non-linked posture (the checkout the sink runs in IS the main root) does the legacy local metadata
-  commit still happen. A placeholder is never treated as an identity by the reuse lookup.
+  metadata. Its git behavior is the pre-#1098 behavior, unchanged, and follows the postures above: in
+  the NON-linked posture the sink stages and commits the metadata follow-up locally, exactly as before
+  #1098 — so an OFFLINE run started from the main checkout itself commits onto the checkout's own
+  branch even when the run branch is checked out in a linked dev worktree. In the LINKED posture the
+  sink runs from a dev worktree and `root` is the shared main checkout, which is left untouched. An
+  `OFFLINE_PLACEHOLDER` is never treated as an identity by the reuse lookup.
 - The PR sink emits no closure receipt — the authoritative receipt for a `sink: pr` project is
   emitted by the watcher at merge. This is documented behavior, not a gap.
 

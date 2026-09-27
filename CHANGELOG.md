@@ -36,10 +36,15 @@
   re-create a live folder or bypass the keep-open guard. Writes are idempotent: the `## Sink` block is
   rewritten line-wise only when its bytes change, the summary no longer appends a duplicate PR URL, and
   the durable record is left alone when unchanged. The run's archive now rides the request: in the
-  linked posture the archive commit is built from the main checkout's working tree onto the branch tip
-  through the kernel's private index (`commitPathsOntoCandidate`), the local branch is advanced
-  ff-only in its holder or by compare-and-swap `update-ref`, and only then pushed — never the default
-  branch, never a force, and never touching the main checkout's index or HEAD. All three sinks now
+  linked posture — the sink runs in a worktree other than the main root — the archive commit is built
+  from the main checkout's working tree onto the branch tip through the kernel's private index
+  (`commitPathsOntoCandidate`), the local branch is advanced ff-only in its holder or by
+  compare-and-swap `update-ref`, and only then pushed — never the default branch, never a force, and
+  only `kaola-workflow/archive/<project>/` is published, so the publish itself does not touch the main
+  checkout's index or HEAD. OFFLINE keeps its pre-#1098 behavior: in the non-linked posture — the sink
+  runs in the main root itself — the metadata follow-up is still staged and committed locally, which
+  includes an OFFLINE run started from the main checkout while the run branch lives in a linked dev
+  worktree. All three sinks now
   disclose their lane on a machine-readable first stdout line (`sink_pr: created | reused |
   already_merged`; GitLab and Gitea print `sink_mr:` / `sink_pr:` above their existing URL lines and
   also return `already_merged` from their ensure functions). Keep-open stays
