@@ -104,6 +104,13 @@ scope (see [Upgrading from earlier releases](#upgrading-from-releases-that-insta
 It then installs the global compact hook (`~/.codex/hooks.json`), its version-less hook home
 (`~/.codex/kaola-workflow/`), and the `~/.codex/AGENTS.md` global-contract carrier. It also reports
 the dispatch posture and `multi_agent_v2` state it reads from `config.toml` but never writes them.
+While it replaces an existing `hooks.json`, it keeps the prior file as
+`~/.codex/hooks.json.kaola-backup-<pid>-<hex>` and removes that backup once the update succeeds.
+If the update fails, the installer restores `hooks.json` from the backup. A backup that no longer
+holds the original bytes is kept. Releases through 12.3.0 left one backup after every successful
+update. The installer never deletes these leftovers. Each one is a copy of an earlier
+`hooks.json`, so after you confirm the live `hooks.json` is correct, remove them by hand with
+`rm ~/.codex/hooks.json.kaola-backup-*`.
 The doctor is a read-only diagnostic:
 
 ```bash

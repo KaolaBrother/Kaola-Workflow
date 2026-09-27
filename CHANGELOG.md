@@ -6,6 +6,15 @@
 
 - **`docs/api.md` claimed `--tag` creates an annotated tag (#1107).** `kaola-workflow-release.js` creates a lightweight tag ref — an atomic zero-old `git update-ref refs/tags/<tag> <candidate> 0000…` with no tag object, no tagger, and no tag message — and `docs/conventions.md` already said so. The `docs/api.md` release sentence now states the actual behavior, so an operator or reviewer no longer expects a tagger identity and rejects a correctly cut release. Tool behavior is unchanged and no published tag is rewritten.
 
+- **A successful Codex `hooks.json` update no longer leaves a `.kaola-backup-*` file behind
+  (#1108).** `install-codex-agent-profiles.js` backs up an existing `~/.codex/hooks.json` as a hard
+  link. Promoting the new file changed the backup's ctime, so the ownership check refused the
+  cleanup, and every successful update left one `~/.codex/hooks.json.kaola-backup-<pid>-<hex>`
+  file. Before it deletes the backup, the installer now checks that it is still the same file, with
+  the same size and mtime and the original bytes. A replaced or rewritten backup is still kept,
+  and every rollback path still restores from it. Backups that earlier installs left are not
+  deleted automatically; [docs/installation.md](docs/installation.md) explains how to remove them.
+
 ## [12.3.0] - 2026-09-27
 
 ### Added
