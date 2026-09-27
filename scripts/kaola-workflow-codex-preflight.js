@@ -2893,13 +2893,16 @@ function realpathOrResolved(target) {
 }
 
 function readPluginIdentity(scriptDir, home) {
-  // #1104: the CLI's __dirname is already realpath-resolved, so resolve both
-  // sides of the cache-containment comparison the same way.
-  const pluginRoot = path.resolve(realpathOrResolved(scriptDir), '..');
+  const pluginRoot = path.resolve(scriptDir, '..');
   const manifestDir = path.join(pluginRoot, '.codex-plugin');
   const manifestPath = path.join(manifestDir, 'plugin.json');
-  const cacheRoot = path.resolve(realpathOrResolved(home), '.codex', 'plugins', 'cache');
-  const relativeRoot = path.relative(cacheRoot, pluginRoot);
+  const cacheRoot = path.resolve(home, '.codex', 'plugins', 'cache');
+  let relativeRoot = path.relative(cacheRoot, pluginRoot);
+  // #1104: the CLI's __dirname is realpath-resolved while home may be reached
+  // through a symlink, so fall back to comparing the resolved paths.
+  if (!pathIsWithin(cacheRoot, pluginRoot)) {
+    relativeRoot = path.relative(realpathOrResolved(cacheRoot), realpathOrResolved(pluginRoot));
+  }
   const insideCache = relativeRoot !== '' && relativeRoot !== '..'
     && !relativeRoot.startsWith('..' + path.sep) && !path.isAbsolute(relativeRoot);
   const cacheParts = insideCache ? relativeRoot.split(path.sep) : null;

@@ -45,9 +45,13 @@
   (#1104).** `readPluginIdentity` compared the realpath-resolved script directory against an
   unresolved `<home>/.codex/plugins/cache`, so a `--home`/HOME given through a symlink (macOS
   `/tmp` → `/private/tmp`) put the live cache copy "outside" the cache and silently skipped the
-  manifest name/version-vs-path check. Both sides are now realpath-resolved (falling back to the
-  lexical path when resolution fails), and `--doctor` refuses the drift with exit 2
-  `plugin_identity_invalid` for either `--home` form. All four preflight copies carry the fix.
+  manifest name/version-vs-path check. The lexical comparison stays primary; when it finds the
+  plugin outside the cache, containment is re-checked on the realpath-resolved cache root and
+  plugin root (each falling back to its lexical path when resolution fails), so `--doctor` refuses
+  the drift with exit 2 `plugin_identity_invalid` for either `--home` form. The installed CLI now
+  also reaches the non-symlink layer check for a symlinked `~/.codex`, which fails earlier with
+  exit 2 `plugin_cache_path_unsafe` instead of exit 1 `stale`. All four preflight copies carry the
+  fix.
 
 ## [12.2.6] - 2026-09-24
 
