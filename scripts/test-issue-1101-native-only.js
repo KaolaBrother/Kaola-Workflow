@@ -284,6 +284,46 @@ for (const statement of NATIVE_ONLY_STATEMENTS) {
   if (!contract.includes(statement)) failures.push(`dispatch-contract.md lacks ${JSON.stringify(statement)}`);
 }
 
+// Test custody and repair custody survive as task/result constraints, not as roles (AC4). Before
+// #1101 these sentences named the retired test-author and implementer roles.
+const CUSTODY = Object.freeze([
+  ['next', 'When someone other than the implementing context holds the acceptance tests, the implementation\ndoes not delete, weaken, or reinterpret them to pass'],
+  ['finalize', 'A repair may change acceptance meaning only where you hold that meaning'],
+  ['finalize', 'a fix that\nfollows a review finding waits for your own verdict on the finding'],
+]);
+for (const row of routing.GENERATED_SURFACES) {
+  for (const [topic, sentence] of CUSTODY) {
+    if (row.topic === topic && !surfaces.get(row.path).includes(sentence)) {
+      failures.push(`${row.path}: lost the custody constraint ${JSON.stringify(sentence.split('\n')[0])}`);
+    }
+  }
+}
+
+// Compact-recovery carrier dedupe (moved here from the retired test-issue-1054-role-redesign.js
+// Group F, whose remaining groups pinned role bodies that no longer exist). Claude and Codex
+// recovery reloads the full Next/Finalize prompt, which already carries dispatch, so their recovery
+// render points there instead of repeating it; the always-loaded carriers keep it exactly once.
+{
+  const full = routing.RECOVERY_FULL_DISPATCH_RUNTIMES;
+  if (full.includes('claude') || full.includes('codex')) failures.push('claude/codex must not be always-loaded dispatch carriers');
+  for (const row of routing.RUNTIME_RECOVERY_SURFACES) {
+    const rendered = routing.renderCompactRecoveryPrompt(row.runtime, row.forge);
+    const keeps = full.includes(row.runtime);
+    if (rendered.includes('KW-RUNTIME-DISPATCH-START') !== keeps
+        || /Runtime adapter facts/.test(rendered) !== keeps) {
+      failures.push(`recovery ${row.runtime}/${row.forge}: dispatch embed does not match its carrier role`);
+    }
+    if (!keeps && !/does not restate/.test(rendered)) failures.push(`recovery ${row.runtime}/${row.forge}: no deferred-dispatch pointer`);
+  }
+  for (const runtime of full) {
+    const rendered = routing.renderCompactRecoveryPrompt(runtime, 'github', { globalContract: 'placeholder contract text' });
+    const starts = (rendered.match(/KW-RUNTIME-DISPATCH-START/g) || []).length;
+    if (starts !== 1 || !/Runtime adapter facts/.test(rendered)) {
+      failures.push(`recovery ${runtime}: the always-loaded carrier must hold the dispatch block exactly once`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 3. Data authorities.
 // ---------------------------------------------------------------------------
