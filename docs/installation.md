@@ -267,8 +267,9 @@ edition tree or an older plugin source still contains profiles.
 Per runtime:
 
 - **Claude Code**: `install.sh` and `uninstall.sh` retire `${KAOLA_AGENT_DIR:-~/.claude/agents}`
-  against `.kaola-workflow-agent-manifest`, on the record proof only: there is no Claude
-  released-render catalog, so without that manifest nothing is deleted. The agent model manifest
+  against `.kaola-workflow-agent-manifest`, or by the released-render proof: a file whose bytes are
+  a Claude profile some release tracked or installed (for example a `docs-lookup.md` left with no
+  manifest row by an install between 2026-06-09 and 2026-07-25) is removed. The agent model manifest
   `.kaola-agent-models.json` that older installs wrote is deleted, reported as
   `Removed retired agent model manifest: <path>` on install and
   `Removed agent model manifest: <path>` on uninstall.
@@ -287,7 +288,12 @@ Per runtime:
   Codex adds these reasons: `referenced_by_user_config` (a `config_file` entry left in that
   `config.toml` still points at the profile, so it is kept), `unsupported_record` (the record is
   unparseable or has a newer schema), `ambiguous_markers` (the marker lines are not one well-formed
-  pair), and `mixed_managed_block` (the block's body is not one a release wrote). Pre-rename
+  pair), `mixed_managed_block` (the block's body is not one a release wrote), and `not_writable`
+  (the block would be removed, but `config.toml` cannot be written; every profile it still
+  registers is kept with it). `config.toml` is always written before any profile is deleted. A
+  scope whose `.codex` (or any directory between the scope root and it) is a symlink is kept
+  whole and reported as `non_regular`; a symlinked `~/.codex` makes `--global` refuse with
+  `install_target_unsafe` before touching anything. Pre-rename
   `codex-workflow` leftovers (`.codex/agents/codex-workflow/*.toml` and a
   `# BEGIN codex-workflow agents` block) are only reported, as `no_ownership_record`. Files under
   `CODEX_HOME` are not a retirement target and are left untouched.
