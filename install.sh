@@ -44,15 +44,12 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMMANDS_DIR="$HOME/.claude/commands"
+# Where earlier releases installed subagent profiles, and their ownership record (#1101 retires both).
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
-SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
-MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "code-reviewer" "doc-updater" "implementer" "investigator" "knowledge-lookup" "tdd-guide")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
-# There is no install-time model axis: the agent tree ships one subagent binding per runtime.
 
 usage() {
   echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
@@ -233,265 +230,30 @@ if [[ -d "$SUPPORT_SCRIPTS_DIR" ]]; then
   done
 fi
 
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-agent_manifest_metadata() {
-  local role="$1"; local source="$2"; local dest="$3"
-  node - "$SCRIPT_DIR/scripts/generate-agent-profiles.js" "$role" "$source" "$dest" <<'NODE'
-const fs = require('fs');
-const generator = require(process.argv[2]);
-const role = process.argv[3];
-const source = fs.readFileSync(process.argv[4], 'utf8');
-const installed = fs.readFileSync(process.argv[5], 'utf8');
-if (generator.behaviorIdentityFromCore(source).role !== role) {
-  throw new Error(`agent_role_mismatch: expected ${role}`);
-}
-const entry = generator.manifestProfileEntry('claude', role);
-if (generator.sha256(source) !== entry.resolved_profile_sha256) {
-  throw new Error(`agent_source_digest_mismatch: ${role}`);
-}
-const expected = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
-if (installed !== expected) {
-  throw new Error(`agent_installed_bytes_mismatch: ${role}`);
-}
-process.stdout.write([
-  entry.behavior_contract_version,
-  entry.behavior_sha256,
-  entry.resolved_profile_sha256,
-].join('\t'));
-NODE
-}
-
-manifest_lookup() {
-  local file_name="$1"
-  [[ -f "$AGENT_MANIFEST_FILE" ]] || return 0
-  awk -F '\t' -v name="$file_name" '$1 == name { value = $2 } END { if (value) print value }' "$AGENT_MANIFEST_FILE"
-}
-
-# True when `$1` is a plain file name: non-empty, no path separator, not `.`/`..`,
-# not absolute. A deploy manifest records BASENAMES only, so anything else is
-# corruption or tampering and must never be turned into a filesystem path.
-is_plain_basename() {
-  local n="${1-}"
-  [[ -n "$n" ]] || return 1
-  case "$n" in
-    */*|*\\*|.|..) return 1 ;;
-  esac
-  return 0
-}
-
-# Print the hash the given manifest file records for `$1`, and return 0, when the
-# manifest lists that exact name; return 1 (printing nothing) otherwise. The
-# comparison is a literal string compare — the name is never interpolated into a
-# pattern, a path, or an awk assignment.
-manifest_row_hash() {
-  local want="$1" file="$2" row_name row_hash row_rest
-  [[ -f "$file" ]] || return 1
-  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
-    [[ -n "${row_name:-}" ]] || continue
-    [[ "$row_name" == "$want" ]] || continue
-    printf '%s\n' "${row_hash:-}"
-    return 0
-  done < "$file"
-  return 1
-}
-
-# Warn once per manifest row that is not a plain file name. Such a row can never
-# describe a file this installer deployed into the agents dir, so it is reported
-# and then ignored — it never reaches a delete decision.
-warn_unsafe_manifest_names() {
-  local file="$1" row_name row_rest
-  [[ -f "$file" ]] || return 0
-  while IFS=$'\t' read -r row_name row_rest || [[ -n "${row_name:-}" ]]; do
-    [[ -n "${row_name:-}" ]] || continue
-    if ! is_plain_basename "$row_name"; then
-      echo "warning: ignoring agent manifest entry that is not a plain file name: $row_name" >&2
-    fi
-  done < "$file"
-  return 0
-}
-
-# Remove agents this installer deployed on a PREVIOUS run that the current tree no
-# longer ships (a retired role). Mirrors the stale-command and stale-script sweeps
-# above, but ~/.claude/agents/ is SHARED with user-authored agents and the file
-# names are not namespaced (bare `code-explorer.md`), so a blind prune is not
-# available — the sweep is manifest-driven and deletes ONLY what the previous
-# manifest proves this installer wrote, unmodified since.
-#
-# The sweep ENUMERATES THE AGENTS DIRECTORY and intersects it against the previous
-# manifest (the same shape as pruneStaleProfiles() in the Codex profile installer).
-# It never CONSTRUCTS a path from a manifest-supplied name, so a manifest row
-# holding `../…`, an absolute path, or a separator can only fail to match a real
-# directory entry — it can never escape $AGENTS_DIR. Such rows are reported on
-# stderr and skipped.
-#
-# Four fail-closed conditions, all required before any rm:
-#   1. the name is recorded in the PREVIOUS manifest (never touch an unlisted file
-#      — an unlisted file is user-authored, which is the whole point of a manifest);
-#   2. the name is NOT in REQUIRED_AGENTS (a required agent missing from the new
-#      manifest was SKIPPED as user-owned/modified, not retired — never sweep it);
-#   3. the installed file still carries the managed marker;
-#   4. its current sha256 still equals the hash the previous manifest recorded, so
-#      an agent the user edited after install is their work and stays.
-# An absent/empty previous manifest sweeps NOTHING (no directory entry matches).
-sweep_retired_agents() {
-  local prev_manifest="$1"
-  local dest base prev_hash current_hash agent is_required
-  [[ -f "$prev_manifest" ]] || return 0
-  warn_unsafe_manifest_names "$prev_manifest"
-  for dest in "$AGENTS_DIR"/*.md; do
-    [[ -f "$dest" ]] || continue
-    base="$(basename "$dest")"
-    is_required=0
-    for agent in "${REQUIRED_AGENTS[@]}"; do
-      if [[ "$agent.md" == "$base" ]]; then is_required=1; break; fi
-    done
-    [[ "$is_required" -eq 0 ]] || continue
-    prev_hash=""
-    if ! prev_hash="$(manifest_row_hash "$base" "$prev_manifest")"; then continue; fi
-    [[ -n "$prev_hash" ]] || continue
-    grep -Fq "$MANAGED_AGENT_MARKER" "$dest" || continue
-    current_hash="$(sha256_file "$dest")"
-    [[ "$current_hash" == "$prev_hash" ]] || continue
-    rm -f "$dest"
-    echo "Removed retired agent: $dest"
-  done
-  return 0
-}
-
-agent_source_file() {
-  local agent="$1"
-  printf '%s\n' "$SOURCE_AGENTS_DIR/$agent.md"
-}
-
-install_managed_agent() {
-  local source="$1"; local dest="$2"
-  cp "$source" "$dest"
-  local tmp; tmp="$(mktemp "$KW_TMPDIR/kaola-workflow-agent.XXXXXX")"
-  awk '
-    BEGIN { in_fm=0; closed=0; replaced=0 }
-    NR==1 && $0=="---" { in_fm=1; print; next }
-    in_fm && !closed && $0=="---" { closed=1; in_fm=0; print; next }
-    in_fm && !closed && !replaced && $0 ~ /^[[:space:]]*model[[:space:]]*:/ {
-      match($0, /^[[:space:]]*model[[:space:]]*:[[:space:]]*/)
-      print substr($0,1,RLENGTH) "inherit"; replaced=1; next
-    }
-    { print }
-  ' "$dest" > "$tmp" && mv "$tmp" "$dest" || { rm -f "$tmp"; echo "Failed to rewrite frontmatter: $dest" >&2; exit 1; }
-}
-
-install_agent_files() {
-  if [[ ! -d "$SOURCE_AGENTS_DIR" ]]; then
-    echo "Agents directory not found: $SOURCE_AGENTS_DIR" >&2
+# Kaola-Workflow ships no Claude Code subagent profiles (#1101). Earlier releases installed role
+# profiles into $AGENTS_DIR — shared with user-authored agents — and recorded them in
+# $AGENT_MANIFEST_FILE. Retire them with that proof: a file the record lists, still carrying the
+# managed marker and still hashing to the recorded digest, is removed; every other file with a Kaola
+# role name is preserved and reported (edited, unrecorded, or not a regular file), and names that
+# were never Kaola's are not touched. The record itself is retired once read. A symlinked or
+# non-directory carrier is reported, never followed, and does not block the rest of the install.
+retire_claude_agents() {
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime claude \
+    --dir "$AGENTS_DIR" --record "$AGENT_MANIFEST_FILE" || {
+    echo "Install error: retired Claude agent sweep failed for $AGENTS_DIR" >&2
     exit 1
-  fi
-
-  if ! node "$SCRIPT_DIR/scripts/generate-agent-profiles.js" --check; then
-    echo "Agent source profile verification failed." >&2
-    echo "Repair: node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check" >&2
-    exit 1
-  fi
-
-  mkdir -p "$AGENTS_DIR"
-
-  local manifest_tmp
-  manifest_tmp="$(mktemp "$KW_TMPDIR/kaola-workflow-manifest.XXXXXX")"
-  # Snapshot the PREVIOUS manifest before it is overwritten — it is the only record
-  # of which agent files this installer owns, and the retired-agent sweep below
-  # reads it after the new manifest lands. Always a real file (empty when there is
-  # no previous manifest) so cleanup never has to branch.
-  local prev_manifest
-  prev_manifest="$(mktemp "$KW_TMPDIR/kaola-workflow-manifest-prev.XXXXXX")"
-  if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
-    cp "$AGENT_MANIFEST_FILE" "$prev_manifest"
-  fi
-  local installed=0
-  local skipped=0
-
-  for agent in "${REQUIRED_AGENTS[@]}"; do
-    local file_name="$agent.md"
-    local source_file
-    source_file="$(agent_source_file "$agent")"
-    local dest="$AGENTS_DIR/$file_name"
-
-    if [[ ! -f "$source_file" ]]; then
-      echo "Required agent source not found: $source_file" >&2
-      rm -f "$manifest_tmp" "$prev_manifest"
-      exit 1
-    fi
-
-    if [[ -f "$dest" ]]; then
-      local recorded_hash
-      local current_hash
-      recorded_hash="$(manifest_lookup "$file_name")"
-      current_hash="$(sha256_file "$dest")"
-
-      # Safe to (re)write when dest is provably pristine (byte-identical to the
-      # current source) or recorded as an unmodified managed file. cmp against the
-      # source alone is not "already in desired state": the installed form is the
-      # inherit-rewritten frontmatter, so byte-equal-to-source must still rewrite.
-      if cmp -s "$source_file" "$dest" ||
-         { [[ -n "$recorded_hash" ]] &&
-           [[ "$current_hash" == "$recorded_hash" ]] &&
-           grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; }; then
-        install_managed_agent "$source_file" "$dest"
-        echo "Updated managed agent: $dest"
-      else
-        echo "Skipped agent with existing user-owned or modified file: $dest"
-        skipped=$((skipped + 1))
-        continue
-      fi
-    else
-      install_managed_agent "$source_file" "$dest"
-      echo "Installed agent: $dest"
-    fi
-
-    if ! grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-      echo "Install verification failed: missing managed marker in agent: $dest" >&2
-      rm -f "$manifest_tmp" "$prev_manifest"
-      exit 1
-    fi
-
-    local agent_metadata
-    agent_metadata="$(agent_manifest_metadata "$agent" "$source_file" "$dest")"
-    printf '%s\t%s\t%s\n' "$file_name" "$(sha256_file "$dest")" "$agent_metadata" >> "$manifest_tmp"
-    installed=$((installed + 1))
-  done
-
-  if [[ -s "$manifest_tmp" ]]; then
-    mv "$manifest_tmp" "$AGENT_MANIFEST_FILE"
-    # Only sweep once the NEW manifest is durably in place: if the deploy produced
-    # nothing there is no converged state to reconcile against, so a partial run
-    # can never delete an agent it did not just replace.
-    sweep_retired_agents "$prev_manifest"
-  else
-    rm -f "$manifest_tmp"
-  fi
-  rm -f "$prev_manifest"
-
-  if [[ "$skipped" -gt 0 ]]; then
-    echo "Skipped $skipped agent file(s). Existing files were left untouched."
-  fi
-  if [[ "$installed" -gt 0 ]]; then
-    echo "Verified managed Kaola-Workflow agents."
-    echo "Agent installation proof covers filesystem bytes only; runtime prompt loading is not attested."
-  fi
+  }
 }
 
-install_agent_files
+retire_claude_agents
 
 # Disposal, not a tail: older installs wrote an agent model manifest that the runtime
-# resolver consulted ahead of the static defaults. The resolver no longer reads it, so a
-# leftover file would be inert but misleading — delete it on every upgrade.
+# resolver consulted ahead of the static defaults. Nothing reads it any more — delete it on every
+# upgrade (never through a symlinked carrier or entry).
 dispose_agent_model_manifest() {
   local manifest_file="$AGENTS_DIR/.kaola-agent-models.json"
-  if [[ -f "$manifest_file" ]]; then
+  [[ -d "$AGENTS_DIR" && ! -L "$AGENTS_DIR" ]] || return 0
+  if [[ -f "$manifest_file" && ! -L "$manifest_file" ]]; then
     rm -f "$manifest_file"
     echo "Removed retired agent model manifest: $manifest_file"
   fi
@@ -778,10 +540,6 @@ verification_failed=0
 for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   [[ -f "$command_file" ]] || continue
   verify_installed_file "$COMMANDS_DIR/$(basename "$command_file")" "command" || verification_failed=1
-done
-
-for agent in "${REQUIRED_AGENTS[@]}"; do
-  verify_installed_file "$AGENTS_DIR/$agent.md" "agent" || verification_failed=1
 done
 
 # #363: verify fails CLOSED for ALL forges. The prior `continue` skipped verification for

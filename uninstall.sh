@@ -2,15 +2,10 @@
 set -euo pipefail
 
 FORGE=""
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Where earlier releases installed subagent profiles, and their ownership record (#1101).
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
-MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "code-reviewer" "doc-updater" "implementer" "investigator" "knowledge-lookup" "tdd-guide")
-# Every role a previous release deployed into ~/.claude/agents and later retired — censused from
-# agents/ history, not from memory. Uninstall must name these itself: it removes the agent
-# manifest below, so a name missed here is unremovable by any later install (the manifest-driven
-# sweep needs a pre-install manifest row that no longer exists).
-RETIRED_AGENTS=("contractor" "docs-lookup" "issue-scout" "workflow-planner" "planner" "code-architect" "synthesizer" "build-error-resolver" "metric-optimizer" "adversarial-verifier" "security-reviewer")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"
@@ -61,35 +56,31 @@ removed=0
 
 shopt -s nullglob
 
-for agent in "${REQUIRED_AGENTS[@]}" "${RETIRED_AGENTS[@]}"; do
-  dest="$AGENTS_DIR/$agent.md"
-  if [[ -f "$dest" ]] && grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-    rm "$dest"
-    echo "Removed managed agent: $dest"
-    removed=$((removed + 1))
-  fi
-done
-
-if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
-  managed_remaining=0
-  for agent in "${REQUIRED_AGENTS[@]}"; do
-    dest="$AGENTS_DIR/$agent.md"
-    if [[ -f "$dest" ]] && grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-      managed_remaining=1
-      break
+# Retire the subagent profiles earlier releases installed, with the same proof install.sh uses
+# (#1101): a file the manifest records, still carrying the managed marker and still hashing to the
+# recorded digest, is removed; an edited or unrecorded Kaola-named file is preserved and reported;
+# the manifest is retired once read. Never through a symlinked or non-directory carrier.
+if command -v node >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" ]]; then
+  if agent_out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime claude \
+      --dir "$AGENTS_DIR" --record "$AGENT_MANIFEST_FILE" 2>&1)"; then
+    if [[ -n "$agent_out" ]]; then
+      printf "%s\n" "$agent_out"
+      removed=$((removed + $(printf "%s\n" "$agent_out" | grep -c "^Removed retired" || true)))
     fi
-  done
-  if [[ "$managed_remaining" -eq 0 ]]; then
-    rm "$AGENT_MANIFEST_FILE"
-    echo "Removed managed agent manifest: $AGENT_MANIFEST_FILE"
-    removed=$((removed + 1))
+  else
+    printf "%s\n" "$agent_out" >&2
+    echo "warning: retired Claude agent sweep failed; $AGENTS_DIR left in place." >&2
   fi
+else
+  echo "warning: node unavailable; retired Claude agents in $AGENTS_DIR left in place." >&2
 fi
 
-# Remove the agent model manifest written by install.sh for the adaptive resolver.
+# The agent model manifest older installs wrote for the retired resolver path.
 AGENT_MODEL_MANIFEST="$AGENTS_DIR/.kaola-agent-models.json"
-if rm -f "$AGENT_MODEL_MANIFEST" 2>/dev/null; then
+if [[ -d "$AGENTS_DIR" && ! -L "$AGENTS_DIR" && -f "$AGENT_MODEL_MANIFEST" && ! -L "$AGENT_MODEL_MANIFEST" ]]; then
+  rm -f "$AGENT_MODEL_MANIFEST"
   echo "Removed agent model manifest: $AGENT_MODEL_MANIFEST"
+  removed=$((removed + 1))
 fi
 
 COMMANDS=(
@@ -211,7 +202,6 @@ fi
 # The runtime-neutral ~/.config/kaola-workflow/config.json is a shared block: once no Claude
 # edition remains, release the claude reference; the registry removes the block only when that
 # was the last reference any runtime held.
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_REFS="$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js"
 claude_editions_left=0
 for edition in kaola-workflow kaola-workflow-gitlab kaola-workflow-gitea; do
