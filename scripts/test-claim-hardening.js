@@ -5559,6 +5559,271 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
+// --- #1102: the pin must resolve the run that OWNS the worktree, not a name derived from the branch
+// #1100's pin composed its receipt path from `'issue-' + issueNumber`, which the branch spells. That
+// is right only when the run folder IS `issue-<N>`. A bundle or custom-named run owns its worktree
+// under a folder of another name, so both reads missed and the pin was silently inert. The fix
+// resolves the owning project from the run records that already exist — never from a new identity
+// mechanism. Two independent sources, because each is blind where the other sees:
+//   * the worktree's own `kaola-workflow/<project>/workflow-state.md` (available whenever the run's
+//     folder travels in the checkout, live or archived), and
+//   * the live/archive run records that name this branch, corroborated by worktree_path.
+// Identity safety is the hard half: branches are REUSED across runs of the same issue
+// (`workflow/issue-<N>`), so an old run's leftover receipt must never pin the NEW run's worktree.
+// Every resolution below is therefore agreement-checked — an unresolvable, missing or conflicting
+// owner leaves the worktree UNPINNED, which is exactly today's behavior.
+{
+  const { execFileSync: execFS1102, spawnSync: spawnS1102 } = require('child_process');
+  const CLAIM1102 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_1102 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g1102 = (cwd, args) => execFS1102('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_1102 });
+
+  const midFlightReceipt = (project, extra) => Object.assign({
+    project,
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+      stash_restore: 'done', archive_commit: 'done', push_main: 'pending', closure: 'pending' }
+  }, extra || {});
+
+  // One gh mock serves every sub-case: 96401 is CLOSED (the stale trigger — and the exact condition
+  // that makes readActiveFolders drop the folder, so the active-set guard protects nothing) and every
+  // other probe answers 'open', so nothing but the pin can decide these cases.
+  const binDir1102 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102-bin-'));
+  fs.writeFileSync(path.join(binDir1102, 'gh.js'), [
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('issue view 96401')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+    "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+    "process.stdout.write('[\\n'); process.exit(0);"
+  ].join('\n'));
+
+  const sweep1102 = (root) => {
+    // spawn-class: cli-contract
+    const r = spawnS1102(process.execPath, [CLAIM1102, 'stale-worktree-cleanup', '--execute'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1102, 'gh.js')
+      })
+    });
+    let out = {};
+    try { out = JSON.parse(r.stdout); } catch (_) {}
+    return { out, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  // A fixture repo with one lane worktree on `workflow/issue-96401` — the branch the run's own
+  // claim would have created, and the branch a LATER run of the same issue reuses verbatim.
+  const makeRepo1102 = () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102-')));
+    const kwRoot = root + '.kw';
+    g1102(root, ['init', '-b', 'main']);
+    g1102(root, ['config', 'user.email', 't@t.com']);
+    g1102(root, ['config', 'user.name', 'Test']);
+    g1102(root, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+    g1102(root, ['add', 'README.md']);
+    g1102(root, ['commit', '-m', 'init']);
+    fs.mkdirSync(kwRoot, { recursive: true });
+    const wtPath = path.join(kwRoot, 'bundle-96401-96402');
+    g1102(root, ['worktree', 'add', '-b', 'workflow/issue-96401', '--', wtPath, 'HEAD']);
+    return { root, kwRoot, wtPath };
+  };
+  const writeState1102 = (projectDir, project, extras) => {
+    fs.mkdirSync(projectDir, { recursive: true });
+    const lines = ['# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '']
+      .concat(extras || []);
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), lines.join('\n') + '\n');
+  };
+  const writeReceipt1102 = (projectDir, receipt) => {
+    fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, '.cache', 'sink-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
+  };
+  const cleanup1102 = (fx) => {
+    try { fs.rmSync(fx.root, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(fx.kwRoot, { recursive: true, force: true }); } catch (_) {}
+  };
+
+  // Case A — a bundle/custom-named run is pinned. The owning folder `bundle-96401-96402` holds a
+  // mid-flight receipt; NO `issue-96401` folder exists anywhere (the old derived name), so the
+  // pre-fix pin read two absent paths and swept the live run's own lane worktree.
+  {
+    const fx = makeRepo1102();
+    try {
+      // The run's state also travels WITH the worktree, which is how a live run's folder is reached.
+      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'issue_number: 96401', 'sink: merge',
+        'run_posture: worktree', 'main_root: ' + fx.root, 'session_marker: s-1102-test',
+        'claim_ts: 2026-09-27T00:00:00.000Z',
+        'worktree_path: ' + fx.wtPath,
+        'issue_numbers: 96401,96402', 'bundle_id: bundle-96401-96402', ''
+      ]);
+      writeReceipt1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), midFlightReceipt('bundle-96401-96402'));
+      const { out, stderr } = sweep1102(fx.root);
+      assert(out.dry_run === false, '#1102 bundle pin: dry_run must be false, got ' + JSON.stringify(out) + '\nstderr: ' + stderr);
+      assert(fs.existsSync(fx.wtPath),
+        '#1102 bundle pin: a bundle-named run\'s mid-flight receipt must pin its lane worktree — the receipt lives in kaola-workflow/bundle-96401-96402, so a name derived as issue-96401 can never find it');
+      assert(!Array.isArray(out.removed) || !out.removed.some(p => p === fx.wtPath),
+        '#1102 bundle pin: removed must NOT contain the bundle run\'s lane worktree, got ' + JSON.stringify(out.removed));
+      assert(!Array.isArray(out.deleted_branch) || !out.deleted_branch.includes('workflow/issue-96401'),
+        '#1102 bundle pin: the pinned lane worktree\'s branch must NOT be deleted either, got ' + JSON.stringify(out.deleted_branch));
+    } finally { cleanup1102(fx); }
+  }
+
+  // Case B — the same run STATE reached through the MAIN checkout instead of the worktree: the live
+  // folder carries the own-checkout state PLUS an archived copy under the collision-renamed
+  // `archive/<project>.archived-<ts>/` name. Both halves of the resolution must find the same
+  // project, and the receipt in the ARCHIVE copy is the live one (closure already moved the folder).
+  {
+    const fx = makeRepo1102();
+    try {
+      const stateLines = [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T00:00:00.000Z', ''
+      ];
+      writeState1102(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', stateLines);
+      const archivedDir = path.join(fx.root, 'kaola-workflow', 'archive', 'bundle-96401-96402.archived-2026-09-27T01-00-00-000Z');
+      writeState1102(archivedDir, 'bundle-96401-96402', stateLines);
+      writeReceipt1102(archivedDir, midFlightReceipt('bundle-96401-96402'));
+      const { out, stderr } = sweep1102(fx.root);
+      assert(fs.existsSync(fx.wtPath),
+        '#1102 archive pin: a run whose receipt sits in archive/<project>.archived-<ts>/ must still pin its lane worktree, got removed=' + JSON.stringify(out.removed) + '\nstderr: ' + stderr);
+    } finally { cleanup1102(fx); }
+  }
+
+  // Case C — IDENTITY SAFETY. Branches are reused: this is the SECOND run of issue 96401, so the
+  // OLD run's archived receipt is mid-flight under a name that is NOT this run's, while THIS run has
+  // no receipt yet. Reading the issue-derived name would consume the dead run's receipt and pin a
+  // worktree the current run must be allowed to sweep.
+  {
+    const fx = makeRepo1102();
+    try {
+      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T02:00:00.000Z', ''
+      ]);
+      const staleDir = path.join(fx.root, 'kaola-workflow', 'archive', 'issue-96401');
+      writeState1102(staleDir, 'issue-96401', [
+        '## Sink', 'branch: workflow/issue-96401', 'issue_number: 96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z', ''
+      ]);
+      writeReceipt1102(staleDir, midFlightReceipt('issue-96401'));
+      const { out, stderr } = sweep1102(fx.root);
+      assert(!fs.existsSync(fx.wtPath),
+        '#1102 identity safety: an OLD run\'s mid-flight receipt under archive/issue-96401 must NOT pin a NEW run\'s worktree that has no receipt of its own — the current run owns bundle-96401-96402, not issue-96401');
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === fx.wtPath),
+        '#1102 identity safety: removed must contain the unpinned lane worktree, got ' + JSON.stringify(out.removed) + '\nstderr: ' + stderr);
+    } finally { cleanup1102(fx); }
+  }
+
+  // Case D — identity safety at its hardest: the OLD run used THIS run's folder name (a re-run of
+  // the same bundle) and its mid-flight receipt is still archived. `worktree_path` cannot separate
+  // them — both runs claim the same path — so only the claim record separates them, and this run's
+  // strictly NEWER claim_ts does. The dead run's receipt must not pin the live worktree.
+  {
+    const fx = makeRepo1102();
+    try {
+      writeState1102(path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T03:00:00.000Z', ''
+      ]);
+      const older = path.join(fx.root, 'kaola-workflow', 'archive', 'bundle-96401-96402');
+      writeState1102(older, 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T03:00:00.000Z', ''
+      ]);
+      writeReceipt1102(older, midFlightReceipt('bundle-96401-96402'));
+      const { out, stderr } = sweep1102(fx.root);
+      assert(!fs.existsSync(fx.wtPath),
+        '#1102 identity safety (same name, older run): an older archived run\'s receipt must not pin the newer run\'s worktree when the newer run holds no receipt of its own');
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === fx.wtPath),
+        '#1102 identity safety (same name, older run): removed must contain the worktree, got ' + JSON.stringify(out.removed) + '\nstderr: ' + stderr);
+    } finally { cleanup1102(fx); }
+  }
+
+  // Case E — /all-done and absent receipts keep today's behavior for a CUSTOM-NAMED run: the pin is
+  // receipt-driven, never an unknown-exemption that a resolver could widen by resolving anything.
+  {
+    const fx = makeRepo1102();
+    try {
+      const projectDir = path.join(fx.wtPath, 'kaola-workflow', 'bundle-96401-96402');
+      writeState1102(projectDir, 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree',
+        'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T00:00:00.000Z', ''
+      ]);
+      writeReceipt1102(projectDir, {
+        project: 'bundle-96401-96402',
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+          stash_restore: 'done', archive_commit: 'done', push_main: 'done', closure: 'done' }
+      });
+      const r1 = sweep1102(fx.root);
+      assert(!fs.existsSync(fx.wtPath),
+        '#1102 all-done: a COMPLETED custom-named run\'s leftover lane worktree sweeps exactly as before');
+      assert(Array.isArray(r1.out.removed) && r1.out.removed.some(p => p === fx.wtPath),
+        '#1102 all-done: removed must contain the completed run\'s worktree, got ' + JSON.stringify(r1.out.removed) + '\nstderr: ' + r1.stderr);
+    } finally { cleanup1102(fx); }
+  }
+
+  // Case F — the integration arm reads its OWN directory name. `.kw/integrate/<project>` IS the true
+  // project, so a custom-named W needs no resolution at all; only the receipt LOOKUP had to stop
+  // assuming `issue-<N>`.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102-w-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'bundle-96401-96402');
+    try {
+      g1102(root, ['init', '-b', 'main']);
+      g1102(root, ['config', 'user.email', 't@t.com']);
+      g1102(root, ['config', 'user.name', 'Test']);
+      g1102(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1102(root, ['add', 'README.md']);
+      g1102(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1102(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      const projectDir = path.join(root, 'kaola-workflow', 'bundle-96401-96402');
+      writeState1102(projectDir, 'bundle-96401-96402', [
+        '## Sink', 'branch: workflow/issue-96401', 'run_posture: worktree', ''
+      ]);
+      writeReceipt1102(projectDir, midFlightReceipt('bundle-96401-96402'));
+      const { out, stderr } = sweep1102(root);
+      assert(fs.existsSync(wPath),
+        '#1102 integration arm: a bundle-named W whose project holds a mid-flight receipt must be pinned, got removed=' + JSON.stringify(out.removed) + '\nstderr: ' + stderr);
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Case G — the safety floor under the integration arm: a repository with NO run records at all
+  // (no workflow-state.md, no receipt) resolves to no owner and keeps the ORIGINAL behavior — a
+  // closed-issue W is stale. A resolver that guessed would turn "unknown" into "protected".
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102-wnone-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+    try {
+      g1102(root, ['init', '-b', 'main']);
+      g1102(root, ['config', 'user.email', 't@t.com']);
+      g1102(root, ['config', 'user.name', 'Test']);
+      g1102(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1102(root, ['add', 'README.md']);
+      g1102(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1102(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      const { out } = sweep1102(root);
+      assert(!fs.existsSync(wPath),
+        '#1102 no-owner floor: with no run record anywhere the closed-issue W must sweep exactly as before');
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wPath),
+        '#1102 no-owner floor: removed must contain the W, got ' + JSON.stringify(out.removed));
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  fs.rmSync(binDir1102, { recursive: true, force: true });
+}
+
 spawnCensus.report();
 
 if (failed > 0) {
