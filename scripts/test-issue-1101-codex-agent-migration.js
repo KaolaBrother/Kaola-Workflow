@@ -496,6 +496,89 @@ try {
       `once writable, the next install retires the block and the profiles\n${again.out}`);
   });
 
+  // C14 — Codex itself writes `[hooks.state."<hooks.json>:<event>:<i>:<j>"] trusted_hash = …`
+  // tables when the user trusts a hook, and it places them inside the Kaola block, before the END
+  // marker (measured on a real ~/.codex/config.toml). The released [agents.*] part is still proof,
+  // so the block retires, the profiles it registered go, and the host tables are kept byte-for-byte
+  // where the block was. Any other unrecognized table keeps the whole block (mixed_managed_block),
+  // and the ownership record is never deleted while a profile it proves is kept.
+  const hooksState = (home, n) =>
+    `[hooks.state."${home}/.codex/hooks.json:session_start:${n}:0"]\ntrusted_hash = "sha256:${String(n).repeat(64)}"\n`;
+  for (const edition of EDITIONS) {
+    section(`C14 host-written hooks.state tables inside the block are kept; the block still retires (${edition})`, () => {
+      const home = makeHome(`hooks-state-${edition}`);
+      plantFixture(CURRENT, '.codex', home);
+      const cfg = configOf(home);
+      const userTail = '\n[agents.my-local-role]\ndescription = "mine"\n';
+      fs.writeFileSync(cfg, readText(cfg).replace('\n' + END,
+        '\n\n' + hooksState(home, 0) + '\n' + hooksState(home, 1) + END) + userTail);
+      const before = readText(cfg);
+      const record = path.join(nsOf(home), '.kaola-managed-profiles.json');
+      const r = installGlobal(home, edition);
+      check(r.status === 0, `install exits 0\n${r.out}`);
+      const expected = before.slice(0, before.indexOf(BEGIN)) + hooksState(home, 0) + '\n' + hooksState(home, 1)
+        + before.slice(before.indexOf(END) + END.length + 1);
+      check(readText(cfg) === expected,
+        `only the markers and the released [agents.*] tables go; the hooks.state tables stay verbatim\n--- got:\n${readText(cfg)}`);
+      check(hasLine(r.out, REMOVED_REG + cfg), 'the block retirement is reported');
+      for (const role of CURRENT_ROLES) {
+        const file = path.join(nsOf(home), role + '.toml');
+        check(!fs.existsSync(file) && hasLine(r.out, REMOVED + file), `${role}.toml is retired and reported`);
+      }
+      check(!fs.existsSync(record) && hasLine(r.out, REMOVED_RECORD + record), 'the used record is removed and reported');
+      check(!fs.existsSync(nsOf(home)), 'the emptied namespace dir is removed');
+      const again = installGlobal(home, edition);
+      check(again.status === 0 && readText(cfg) === expected && countPrefix(again.out, 'Removed retired') === 0,
+        `a second run changes nothing\n${again.out}`);
+    });
+  }
+
+  section('C14 an unrecognized table beside hooks.state keeps the block, the profiles and the record', () => {
+    const home = makeHome('hooks-state-mixed');
+    plantFixture(CURRENT, '.codex', home);
+    const cfg = configOf(home);
+    fs.writeFileSync(cfg, readText(cfg).replace('\n' + END,
+      '\n\n' + hooksState(home, 0) + '\n[mcp_servers.mine]\ncommand = "mine"\n' + END));
+    const before = readText(cfg);
+    const record = path.join(nsOf(home), '.kaola-managed-profiles.json');
+    const recordBefore = readText(record);
+    for (const step of ['install', 'uninstall']) {
+      const r = step === 'install' ? installGlobal(home) : uninstallGlobal(home);
+      check(r.status === 0, `${step} exits 0\n${r.out}`);
+      check(readText(cfg) === before, `${step}: the mixed block is left byte-for-byte`);
+      check(hasLine(r.out, PRESERVED_REG('mixed_managed_block') + cfg), `${step}: the mixed block is reported`);
+      check(tomls(nsOf(home)).length === 7, `${step}: every profile the kept block registers is kept`);
+      check(readText(record) === recordBefore && countPrefix(r.out, REMOVED_RECORD) === 0,
+        `${step}: the record that proves the kept profiles is kept`);
+    }
+  });
+
+  section('C14 the record is never deleted while a profile it proves is kept', () => {
+    // An edited block (C8 shape) and a read-only config (C13 shape) both keep every profile.
+    const home = makeHome('record-kept-edited');
+    plantFixture(CURRENT, '.codex', home);
+    const cfg = configOf(home);
+    fs.writeFileSync(cfg, readText(cfg).replace(END, '[agents.mine]\nconfig_file = "./agents/mine.toml"\n' + END));
+    const record = path.join(nsOf(home), '.kaola-managed-profiles.json');
+    const r = installGlobal(home);
+    check(r.status === 0 && fs.existsSync(record) && !hasLine(r.out, REMOVED_RECORD + record),
+      `an edited block: the record is kept with the profiles\n${r.out}`);
+
+    const home2 = makeHome('record-kept-readonly');
+    plantFixture(CURRENT, '.codex', home2);
+    const record2 = path.join(nsOf(home2), '.kaola-managed-profiles.json');
+    fs.chmodSync(configOf(home2), 0o444);
+    try {
+      const r2 = installGlobal(home2);
+      check(r2.status === 0 && fs.existsSync(record2), `a read-only config: the record is kept\n${r2.out}`);
+    } finally {
+      fs.chmodSync(configOf(home2), 0o644);
+    }
+    const r3 = installGlobal(home2);
+    check(r3.status === 0 && !fs.existsSync(record2) && tomls(nsOf(home2)).length === 0,
+      `once the block can go, the kept record still proves the profiles and all retire\n${r3.out}`);
+  });
+
   // C12 (H6) — pre-rename codex-workflow leftovers are reported, never touched.
   section('C12 pre-rename codex-workflow leftovers are only reported', () => {
     const home = makeHome('pre-rename');
