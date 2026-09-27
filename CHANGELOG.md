@@ -28,32 +28,32 @@
 - **The stale-worktree sweep's resumability pin resolves the run that OWNS a lane worktree instead
   of deriving `issue-<N>` (#1102).** #1100's pin composed its receipt path from the issue number the
   BRANCH spells, so it could only ever find a run whose folder is named `issue-<N>`. A bundle or
-  custom-named run (`bundle-<set>`, `branch-issue-merge-sink`, …) files its receipt under a folder of
-  another name, so both reads missed and the pin was silently inert for exactly the runs the sweep
-  could then treat as stale. The lane arm now looks for the MAIN checkout's live and archive
+  custom-named run (`bundle-<set>`, `branch-issue-merge-sink`, …) files its receipt under a folder
+  of another name, so both reads missed and the pin was silently inert for exactly the runs the
+  sweep could then treat as stale. The lane arm now looks for the MAIN checkout's live and archive
   `workflow-state.md` records (suffixed `.archived-<ts>` archives included) whose `branch` is the
   worktree's branch, and has three outcomes. **The current run's folders:** a single live record is
   the current run unless an archived record carries a strictly newer `claim_ts`, and every folder
   carrying its `claim_ts` (or, if it has none, the live folder alone) belongs to it, live first;
   with no live record, the record with the strictly newest `claim_ts` is the current run, the sink's
   own `readCurrentClaimTs` rule. Only those folders' receipts are read, and any one whose steps are
-  not all done pins. **Ambiguous** (two live records on the branch, a newer archived claim beside the
-  live one, a `claim_ts` tie, or an unstamped record among several): no record's receipt is read.
-  **No record names the branch:** the base's derived read is unchanged — live
+  not all done pins. **Ambiguous** (two live records on the branch, a newer archived claim beside
+  the live one, a `claim_ts` tie, or an unstamped record among several): no record's receipt is
+  read. **No record names the branch:** the base's derived read is unchanged — live
   `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/`. In the first
   two outcomes the derived `issue-<N>` folders (live and plain archive) that are not records — their
   `workflow-state.md` is missing, unreadable, names no branch, or names this branch without a safe
   `name`: the #1100 receipt-only folder, the sink's own #832 archive skeleton, a corrupted state —
   are read as well, because a receipt surviving there is a sink that has not finished. When the
-  resolved current run has a `claim_ts`, such a receipt whose `claim_ts` (or `started_at`) predates that run's `claim_ts`
-  is an earlier run's and is skipped, exactly as the sink's own #694 cross-run check refuses to
-  resume it. So a receipt from an older run never pins a newer resolved run; only an undatable
-  derived receipt (no stamp on either side, or an ambiguous owner) keeps the pin the base gave it. A derived folder
-  whose state names another branch is never read. This is not the sink's `currentArchiveDir`: a
-  folder without a readable `workflow-state.md` is not a record rather than failing closed. The
-  integration arm is unchanged (its directory name is already the project). All-done and
-  missing-receipt behavior is unchanged, and all four claim copies (root, Codex, GitLab, Gitea) carry
-  the same change.
+  resolved current run has a `claim_ts`, such a receipt whose `claim_ts` (or `started_at`) predates
+  that run's `claim_ts` is an earlier run's and is skipped, exactly as the sink's own #694 cross-run
+  check refuses to resume it. So a receipt from an older run never pins a newer resolved run; only
+  an undatable derived receipt (no stamp on either side, or an ambiguous owner) keeps the pin the
+  base gave it. A derived folder whose state names another branch is never read. This is not the
+  sink's `currentArchiveDir`: a folder without a readable `workflow-state.md` is not a record rather
+  than failing closed. The integration arm is unchanged (its directory name is already the project).
+  All-done and missing-receipt behavior is unchanged, and all four claim copies (root, Codex,
+  GitLab, Gitea) carry the same change.
 
 ### Changed
 

@@ -1836,16 +1836,15 @@ unreadable, names no `branch`, or names this branch without a safe `name` — th
 folder, the sink's own #832 archive skeleton, a corrupted state. A derived folder whose state names
 another branch belongs to another run and is never read. A receipt surviving in an unclaimed folder
 is a sink that has not finished (a terminal sink disposes it), so it keeps the pin it had before
-#1102 — except that, when the resolved current run has a `claim_ts`, a receipt whose `claim_ts` (or, for an older
-receipt shape, `started_at`) predates that run's `claim_ts` is skipped. That is the sink's own #694
-cross-run rule: it refuses to resume such a receipt as an earlier run's.
+#1102 — except that, when the resolved current run has a `claim_ts`, a receipt whose `claim_ts` (or,
+for an older receipt shape, `started_at`) predates that run's `claim_ts` is skipped. That is the
+sink's own #694 cross-run rule: it refuses to resume such a receipt as an earlier run's.
 
-So a receipt from an older run never pins a newer resolved run of the same issue: the resolved
-run's own folders are the only records read, and an older derived receipt is dated out. Only an
-undatable derived receipt — no stamp on the receipt or on the resolved run, or any derived receipt
-when the owner is ambiguous —
-keeps the base pin. This is not the sink's `currentArchiveDir`: it skips unreadable folders instead
-of failing closed.
+So a receipt from an older run never pins a newer resolved run of the same issue: the resolved run's
+own folders are the only records read, and an older derived receipt is dated out. Only an undatable
+derived receipt — no stamp on the receipt or on the resolved run, or any derived receipt when the
+owner is ambiguous — keeps the base pin. This is not the sink's `currentArchiveDir`: it skips
+unreadable folders instead of failing closed.
 
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).
