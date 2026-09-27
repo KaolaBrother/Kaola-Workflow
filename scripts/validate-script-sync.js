@@ -132,6 +132,7 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    // The Codex-session proof module (#1101: it resolves no subagent model any more).
     label: 'resolve-agent-model module copies',
     files: [
       'scripts/kaola-workflow-resolve-agent-model.js',
@@ -164,9 +165,9 @@ const BYTE_IDENTICAL_GROUPS = [
     files: KERNEL_COPIES,
   },
   {
-    // issue #266 AC-B: Codex agent-profile freshness preflight. Authored require-free
-    // (only fs + path + inline regex) so it qualifies as a true 4-tree byte-identical
-    // script — no edition-specific require() means no edition-specific bytes.
+    // issue #266 AC-B: the Codex preflight/doctor. Authored free of edition-specific requires
+    // (fs + path + os + the byte-identical kernel) so it qualifies as a true 4-tree
+    // byte-identical script — no edition-specific require() means no edition-specific bytes.
     label: 'codex-preflight copies',
     files: [
       'scripts/kaola-workflow-codex-preflight.js',
@@ -209,30 +210,6 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/scripts/install-codex-agent-profiles.js',
     ],
   },
-  {
-    // #629 bullet 2: the three plugins/*/config/agents.toml files are byte-identical at HEAD
-    // (md5 579c8575...) but were previously uncovered here — only derived NAME parity was
-    // checked by the forge validators. Green at HEAD; guards future canonical edits.
-    label: 'config/agents.toml triple',
-    files: [
-      'plugins/kaola-workflow/config/agents.toml',
-      'plugins/kaola-workflow-gitlab/config/agents.toml',
-      'plugins/kaola-workflow-gitea/config/agents.toml',
-    ],
-  },
-  // #422.1: agent-profile .toml triples — each agent's three plugin-tree .toml files
-  // (codex/gitlab/gitea) must be byte-identical. Built programmatically from the codex tree's
-  // agents/ directory so a new profile is auto-covered. Includes the 6 -max model variants.
-  ...fs.readdirSync(path.join(repoRoot, 'plugins/kaola-workflow/agents'))
-    .filter(f => f.endsWith('.toml'))
-    .map(f => ({
-      label: 'agent-profile toml triple (' + f + ')',
-      files: [
-        'plugins/kaola-workflow/agents/' + f,
-        'plugins/kaola-workflow-gitlab/agents/' + f,
-        'plugins/kaola-workflow-gitea/agents/' + f,
-      ],
-    })),
 ];
 
 // SELF-CONTAINED rename-normalized families — forge ports that live at a forge-RENAMED path
