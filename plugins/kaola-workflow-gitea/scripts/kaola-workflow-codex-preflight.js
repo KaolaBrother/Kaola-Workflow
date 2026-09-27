@@ -2,106 +2,66 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-codex-preflight.js (issue #266 AC-B; extended by #332)
+// kaola-workflow-codex-preflight.js — Codex runtime readiness gate.
 //
-// Hard-gates Codex agent-profile freshness BEFORE any subagent-invoked compliance
-// is claimed. Verifies:
-//   (a) .codex/agents/kaola-workflow/<role>.toml exists for every REQUIRED role
-//       AND is schema-valid (top-level non-empty `name` matching the role, omitted runtime-strength
-//       keys for parent inheritance, non-empty `description`, valid `nickname_candidates`,
-//       and a non-blank developer_instructions block) - codex >=0.138 silently ignores
-//       a profile without a non-empty `name`.
-//   (b) .codex/config.toml contains the managed block with an [agents.{role}] entry
-//       for every REQUIRED role, and NO retired/foreign [agents.*] inside the block.
-//   (c) no stale/retired Kaola profile files survive in the target dir (#332).
+// Kaola-Workflow defines no subagent roles and installs no Codex role profiles (#1101); subagents
+// are the host's native capability. This gate checks only the host facts Kaola-Workflow depends on,
+// plus Kaola-owned leftovers of earlier releases:
+//   (a) the Codex version floor (CODEX_MIN_VERSION; --codex-version > KAOLA_CODEX_VERSION > probe);
+//   (b) config-layer safety: HOME and every trusted project .codex layer must be regular,
+//       non-symlink paths that stay inside their scope, and project_root_markers must parse;
+//   (c) the effective persisted runtime (HOME overlaid by every trusted repository-root-to-cwd
+//       project layer): whether Codex exposes its multi_agent_v2 spawn tools, the dispatch posture,
+//       and the V2 bounds. These are host facts, reported only — never a refusal, since subagent
+//       dispatch belongs to the host and Kaola-Workflow requires no dispatch mode;
+//   (d) retired-role residue: a RETIRED_PROFILE_FILES or ownership-manifest file still inside the
+//       Kaola-owned .codex/agents/kaola-workflow/ directory, or the "# BEGIN/END kaola-workflow
+//       agents" marker block still in config.toml, in HOME or any project .codex layer. Only those
+//       exact names count: other files and user [agents.*] tables are never residue.
 //
-// REQUIRED role set = the template roles from ../config/agents.toml (relative to this
-// script, present in the 3 plugin trees; absent in the claude scripts/ tree — graceful
-// degrade). The second half of that union — the DELEGATED roles read out of a frozen
-// plan's `## Nodes` role column — is gone with the plan: a run no longer declares which
-// roles it will dispatch before it dispatches them, so the template IS the required set.
+// This file never deletes anything. Residue is removed by the Kaola Codex installer
+// (install-codex-agent-profiles.js): without --no-autofix the gate runs it for each residue scope
+// and then re-runs itself read-only; --no-autofix only reports.
 //
-// Auto-installs (re-runs install-codex-agent-profiles.js) when the ONLY problem
-// is a stale/missing/malformed managed block, profile file, or stale Kaola file
-// (safe, idempotent). Typed-refuses when conflicts exist outside the markers, the
-// installer is unavailable, or the local manifest carries an unsupported (future)
-// schema_version.
+// --doctor mode is READ-ONLY (never runs the installer): it reports the version floor, the
+// installed plugin identity (for a plugin-cache copy, its marketplace/name/version path), the
+// effective runtime, and per-scope residue with the exact installer command for each scope.
 //
-// --doctor mode is READ-ONLY (never runs the installer): it reports user, project,
-// and plugin-cache scope freshness with concrete per-scope repair commands. Plugin
-// cache inspection is read-only, but exact source-byte or schema drift fails the doctor gate.
-//
-// TRUE 4-tree byte-identical: requires ONLY fs + path + os + the forge-neutral kernel
+// TRUE 4-tree byte-identical: requires ONLY Node built-ins and the forge-neutral kernel
 // (kaola-workflow-adaptive-schema.js, a sibling in every tree — see KERNEL_COPIES in
-// validate-script-sync.js). No require() of edition-specific scripts: the kernel is the one
-// exception because it is itself byte-identical in all four trees, so requiring it adds no
-// edition-specific bytes. The CODEX_PINNED_ROLES catalog and the #332 Codex
-// agent-profile schema (MANIFEST_BASENAME, RETIRED_PROFILE_FILES, EFFORT_VALUES,
-// validateProfileText + its helpers) are BOTH sourced from the kernel now — its one authoring
-// source, per #29 audit convergence — instead of being hand-duplicated from
-// install-codex-agent-profiles.js (which has no copy in the root scripts/ tree, so this file
-// could never require() it directly; requiring the kernel sidesteps that, since the kernel does
-// have a scripts/ copy).
+// validate-script-sync.js), which owns the retired profile inventory.
 //
 // CLI:
 //   node kaola-workflow-codex-preflight.js --project-root <dir>
-//     [--no-autofix] [--json]
+//     [--no-autofix] [--json] [--home <dir>] [--codex-version <x.y.z>]
 //   node kaola-workflow-codex-preflight.js --doctor [--project-root <dir>]
-//     [--home <dir>] [--json]
+//     [--home <dir>] [--codex-version <x.y.z>] [--json]
 //
-// Exit 0 = fresh (or autofixed-then-fresh); non-zero = typed refusal.
+// Exit 0 = fresh (or autofixed-then-fresh); non-zero = typed refusal:
+//   1 retired_role_residue (--doctor: stale), 2 plugin_identity_invalid (--doctor),
+//   4 config_layer_unsafe / scope_authority_unsafe / project_root_markers_invalid / autofix_unsafe,
+//   5 installer_failed, 7 codex_version_unsupported.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-// #29 audit: the pinned role catalog AND the #332 Codex agent-profile
-// schema (constants + validateProfileText + its helpers) have ONE authoring source, the
-// forge-neutral kernel — required here rather than re-declared, same as every other 4-tree
-// byte-identical script that needs it (e.g. kaola-workflow-validation-runner.js). `crypto` is no
-// longer required at top level: this file's own `sha256Hex` retired in favor of the kernel's
-// (identical logic), which this file now calls directly for its own source/file-hash checks too.
 const {
-  CODEX_PINNED_ROLES,
   MANIFEST_BASENAME,
   RETIRED_PROFILE_FILES,
-  EFFORT_VALUES,
   escapeRegExp,
-  parseStringArrayLine,
-  profileTopLevelShape,
-  validateProfileText,
-  sha256Hex,
 } = require('./kaola-workflow-adaptive-schema');
 
+// The marker pair earlier installers wrapped around their [agents.*] registrations in config.toml.
 const BEGIN_MARKER = '# BEGIN kaola-workflow agents';
 const END_MARKER = '# END kaola-workflow agents';
 
 // #775: the Codex 0.145 multi_agent_v2 re-baseline version floor. MIRROR of
-// install-codex-agent-profiles.js (same #332-style duplication convention). Net-new — no version
-// comparison existed anywhere in this repository before this gate.
+// install-codex-agent-profiles.js.
 const CODEX_MIN_VERSION = '0.145.0';
 
-// The mandatory planner was the only orchestration role; it is gone with the plan it authored.
-const CODEX_ORCHESTRATION_ROLES = Object.freeze([]);
-const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
-const CODEX_STANDARD_EFFORT = 'medium';
-const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
-const CODEX_REASONING_EFFORT = 'xhigh';
-const MANIFEST_SCHEMA_VERSION = 1;
-const AGENT_SOURCE_REPAIR = 'node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check';
-
-function repositoryRepairCommand(scriptDir) {
-  let cursor = path.resolve(scriptDir);
-  for (let i = 0; i < 5; i++) {
-    if (fs.existsSync(path.join(cursor, 'scripts', 'generate-agent-profiles.js'))) {
-      return `cd ${cursor} && ${AGENT_SOURCE_REPAIR}`;
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) break;
-    cursor = parent;
-  }
-  return 'Refresh the kaola-workflow plugin source, then re-run the profile installer.';
-}
+const RETIRED_ROLE_RESIDUE_STATUS = 'retired_role_residue';
+const INSTALLER_BASENAME = 'install-codex-agent-profiles.js';
 
 function stripTomlComment(line) {
   let inSingle = false;
@@ -354,11 +314,6 @@ function parseTomlAssignment(line) {
   return null;
 }
 
-function parseTomlAssignmentKey(line) {
-  const assignment = parseTomlAssignment(line);
-  return assignment ? assignment.key : null;
-}
-
 function tomlAssignmentPath(tableName, assignment) {
   if (!assignment) return null;
   let segments = [];
@@ -550,9 +505,8 @@ function detectCodexDispatchMode(configContent) {
 
   const v2Enabled = seen && !ambiguous && enabled;
   return {
-    // #775: the single legal dispatch mode once V2 is enabled — no more v1-thread-id fallback.
-    // null (not a fabricated 'v1-thread-id') when V2 is not enabled; runPreflight refuses
-    // codex_multi_agent_v2_required in that case rather than silently exiting ok.
+    // 'v2-task-name' when V2 is enabled; null (not a fabricated 'v1-thread-id') otherwise.
+    // Report-only: the host's native dispatch applies either way.
     dispatch_mode: v2Enabled ? 'v2-task-name' : null,
     multi_agent_v2_enabled: v2Enabled,
   };
@@ -573,8 +527,7 @@ function detectCodexDispatchMode(configContent) {
 //
 // ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws, and the
 // caller must never let this change an install/preflight exit code — it only
-// informs a REPORT/WARN. Duplicated byte-identically alongside the #332 schema
-// helpers above (installer <-> preflight, x7 files total); keep in lock-step.
+// informs a REPORT. The installer carries a byte-identical copy; keep the two in lock-step.
 // ---------------------------------------------------------------------------
 const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.';
 
@@ -582,11 +535,9 @@ const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture
 // retired — multi_agent_v2 (`features.multi_agent_v2`) is the ONLY dispatch contract, so
 // deriveDispatchPosture below gates on detectCodexDispatchMode's `multi_agent_v2_enabled` alone.
 
-// Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
-// same name) — the effort setting that gates MultiAgentMode. TOML root keys must
-// precede the first [table] header, so scanning the text up to the first top-level
-// table line is the correct (and only valid) place a user- or installer-owned root
-// key can live — the same `top` convention used by validateProfileText.
+// Root-level `model_reasoning_effort` of the host's own Codex config — the effort setting
+// that gates MultiAgentMode. TOML root keys must precede the first [table] header, so only
+// assignments outside every table (or dotted from the root) count.
 function parseTopLevelModelReasoningEffort(configContent) {
   let table = null;
   let seen = false;
@@ -609,27 +560,18 @@ function parseTopLevelModelReasoningEffort(configContent) {
   return effort;
 }
 
-// Exact remediation text for a non-proactive posture; null when nothing to remediate. Leads with
-// the always-available, always-documented in-session ask; the ultra reasoning-effort route is
-// offered second and qualified as undocumented/plan-gated (many Codex plans currently top out
-// at xhigh, so the config.toml / per-session route is not always actionable).
+// Neutral description of a non-proactive posture; null for 'proactive'. It states what the host
+// does and recommends nothing: Kaola-Workflow requires no dispatch mode and sets no model or effort.
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because '
-      + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in '
-      + 'Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. '
-      + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
-      + 'in-session; or, if your Codex '
-      + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
-      + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
-      + 'model_reasoning_effort=ultra) for proactive delegation.';
+    return 'Codex does not expose its multi_agent_v2 spawn tools: features.multi_agent_v2.enabled is absent '
+      + 'or false (opt-in and off by default in Codex >=0.145.0). The host\'s native subagent behavior '
+      + 'applies; Kaola-Workflow neither requires nor writes this setting.';
   }
-  return 'Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). '
-    + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
-    + 'an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), '
-    + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
-    + 'for proactive delegation.';
+  return 'Codex dispatch posture is explicitRequestOnly: Codex spawns sub-agents when explicitly asked '
+    + 'in-session, and proactive delegation is gated by Codex on its own root reasoning-effort setting. '
+    + 'Kaola-Workflow requires neither and sets no model or effort.';
 }
 
 // #775: gates ONLY on multi_agent_v2_enabled (`features.multi_agent_v2`) — v1 is retired, so there is no
@@ -684,22 +626,19 @@ function deriveDispatchPosture(configContent) {
 // 'v2-task-name'); when v2 is not enabled, every field reports not_applicable/null —
 // mirrors how dispatch_posture itself collapses to 'none' when features are off.
 //
-// ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws. Duplicated
-// byte-identically alongside the dispatch-posture helpers above (installer <-> preflight,
-// x7 files total); keep the two copies in lock-step.
+// ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws. The installer carries a
+// byte-identical copy of these helpers; keep the two in lock-step.
 // ---------------------------------------------------------------------------
 const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
 
-const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow '
-  + 'dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 '
-  + '(the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node '
-  + 'runtime so long-poll joins are not capped short. Example:\n'
-  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n'
-  + 'max_wait_timeout_ms = 1800000\n'
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'How Codex bounds [features.multi_agent_v2] when the user enables it '
+  + '(Kaola-Workflow neither requires nor writes any of it): max_concurrent_threads_per_session INCLUDES '
+  + 'the root thread, so the effective subagent width is that budget minus 1, and the *_wait_timeout_ms '
+  + 'keys cap long-poll joins. '
   + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
   + 'is absent are Codex >=0.145.0 SOURCE behavior, verified at tag rust-v0.145.0 in codex-rs/core/src/config/mod.rs (DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4; effective_agent_max_threads uses saturating_sub(1)) and introduced by PR #19792 — source-verified, not documented: the public configuration reference does not carry multi_agent_v2 at all. The wait-timeout bounds '
-  + 'have no independently verified default and are read only when explicitly configured. Do NOT set '
-  + 'agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for '
+  + 'have no independently verified default and are read only when explicitly configured. '
+  + 'agents.max_threads is a separate [agents] key, NOT an alias for '
   + 'max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from '
   + 'features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key '
   + 'rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the '
@@ -804,11 +743,10 @@ function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
 }
 
 // Codex overlays config keys from ~/.codex, then project .codex directories from
-// repository root to cwd. Parse only the [agents]/posture fields this gate owns,
+// repository root to cwd. Parse only the multi_agent_v2/posture fields this gate owns,
 // retain whether each field was explicitly present, and overlay high layers over
-// low layers without treating an absent project field as a reset. #775: [agents] is
-// a genuine top-level table (never a [features] scalar/inline-object), so there is no
-// more v2-shape merge-compatibility tracking — each field just overlays independently.
+// low layers without treating an absent project field as a reset. Each field overlays
+// independently.
 function parseRuntimeLayerOverrides(configContent) {
   const overrides = {};
   let table = null;
@@ -1234,21 +1172,19 @@ function readConfigLayer(codexDir) {
   }
 }
 
-function scopeAuthorityIssue(codexDir, templateRoles) {
+function kaolaAgentsDir(codexDir) {
+  return path.join(codexDir, 'agents', 'kaola-workflow');
+}
+
+// Config-layer safety for one Codex scope. The scope directory, its config.toml, and — only when
+// present — the Kaola-owned agents/kaola-workflow/ directory must be regular non-symlink paths that
+// resolve inside the scope, so neither this gate nor the installer it may run follows a link out of
+// it. The rest of a user's agents/ tree is not Kaola's and is not inspected.
+function scopeAuthorityIssue(codexDir) {
   const checks = [
-    { target: codexDir, kind: 'directory', optional: true },
-    { target: path.join(codexDir, 'agents'), kind: 'directory', optional: true },
-    { target: path.join(codexDir, 'agents', 'kaola-workflow'), kind: 'directory', optional: true },
-    { target: path.join(codexDir, 'config.toml'), kind: 'file', optional: true },
-    {
-      target: path.join(codexDir, 'agents', 'kaola-workflow', MANIFEST_BASENAME),
-      kind: 'file', optional: true,
-    },
-    ...(templateRoles || []).map(role => ({
-      target: path.join(codexDir, 'agents', 'kaola-workflow', `${role}.toml`),
-      kind: 'file',
-      optional: true,
-    })),
+    { target: codexDir, kind: 'directory' },
+    { target: path.join(codexDir, 'config.toml'), kind: 'file' },
+    { target: kaolaAgentsDir(codexDir), kind: 'directory' },
   ];
 
   let authorityReal = null;
@@ -1258,7 +1194,7 @@ function scopeAuthorityIssue(codexDir, templateRoles) {
     try {
       stat = fs.lstatSync(check.target);
     } catch (error) {
-      if (check.optional && error && error.code === 'ENOENT') continue;
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) continue;
       return { path: check.target, error: error.message };
     }
     if (stat.isSymbolicLink()) {
@@ -1290,7 +1226,7 @@ function unsafeConfigLayerResult(configRead) {
       safe_autofix: false,
       config_path: configRead.configPath,
       error: configRead.error,
-      repair: `Replace ${configRead.configPath} with a readable regular non-symlink config.toml, then re-run the profile preflight.`,
+      repair: `Replace ${configRead.configPath} with a readable regular non-symlink config.toml, then re-run this preflight.`,
     },
   };
 }
@@ -1306,33 +1242,191 @@ function unsafeScopeAuthorityResult(codexDir, scopeName, issue) {
       codex_dir: codexDir,
       authority_path: issue.path,
       error: issue.error,
-      repair: `Replace ${issue.path} with the expected regular non-symlink path inside ${codexDir}, then re-run the canonical profile installer.`,
+      repair: `Replace ${issue.path} with the expected regular non-symlink path inside ${codexDir}, then re-run this preflight.`,
     },
   };
 }
 
-// EXEMPTION — the `repair` string below states a Codex behavior: project .codex layers are not
-// read unless the project is trusted. Reproduced on codex-cli 0.145.0, with a project
-// `.codex/config.toml` carrying `[features.multi_agent_v2] enabled = true`:
-//
-//   $ cd <project> && CODEX_HOME=<home with NO [projects."<project>"] entry> codex features list
-//   multi_agent_v2   stable   false
-//   $ cd <project> && CODEX_HOME=<home with trust_level = "trusted"> codex features list
-//   multi_agent_v2   stable   true
-//
-// The project layer takes effect only once trusted, which is what makes this repair actionable.
-function projectTrustRequiredResult(projectRoot, trustLevel) {
+// The effective-runtime report every result carries. Report-only: none of it gates.
+function runtimeFields(runtime) {
   return {
-    exitCode: 4,
+    dispatch_mode: runtime.dispatch_mode,
+    multi_agent_v2_enabled: runtime.multi_agent_v2_enabled,
+    dispatch_posture: runtime.dispatch_posture,
+    model_reasoning_effort: runtime.model_reasoning_effort,
+    multi_agent_enabled: runtime.multi_agent_enabled,
+    dispatch_posture_warning: runtime.dispatch_posture_warning,
+    max_concurrent_threads_per_session: runtime.max_concurrent_threads_per_session,
+    max_concurrent_threads_per_session_source: runtime.max_concurrent_threads_per_session_source,
+    effective_subagent_width: runtime.effective_subagent_width,
+    min_wait_timeout_ms: runtime.min_wait_timeout_ms,
+    max_wait_timeout_ms: runtime.max_wait_timeout_ms,
+    default_wait_timeout_ms: runtime.default_wait_timeout_ms,
+    effective_config_paths: runtime.effective_config_paths || [],
+  };
+}
+
+// Codex derives the project root from the persisted global `project_root_markers`, then considers
+// every .codex layer root -> cwd. Trust is decided independently for each layer: exact layer,
+// detected root, then root Git project. Only trusted layers enter the effective runtime overlay.
+// A project layer that is HOME's own .codex is the user scope and is not listed twice.
+function discoverCodexLayers(projectRoot, homeDir) {
+  const globalCodexDir = path.join(homeDir, '.codex');
+  const globalConfigRead = readConfigLayer(globalCodexDir);
+  const globalConfigContent = globalConfigRead.ok ? globalConfigRead.content : '';
+  const markerConfig = globalConfigRead.ok
+    ? parseProjectRootMarkers(globalConfigContent)
+    : { valid: true, markers: ['.git'] };
+  const markers = markerConfig.valid ? markerConfig.markers : ['.git'];
+  const detectedProjectRoot = findProjectRoot(projectRoot, markers);
+  const repoRoot = findRepoRootForTrust(projectRoot);
+  const projectLayers = projectCodexLayerDirs(projectRoot, markers)
+    .filter(codexDir => path.resolve(codexDir) !== path.resolve(globalCodexDir))
+    .map(codexDir => ({
+      codexDir,
+      projectRoot: path.dirname(codexDir),
+      trust: globalConfigRead.ok
+        ? projectTrustLevel(globalConfigContent, path.dirname(codexDir), detectedProjectRoot, repoRoot)
+        : 'unknown',
+      configRead: readConfigLayer(codexDir),
+    }));
+  const projectTrust = projectLayers.length > 0
+    ? projectLayers[projectLayers.length - 1].trust
+    : 'unknown';
+  return {
+    globalCodexDir,
+    globalConfigRead,
+    globalConfigContent,
+    markerConfig,
+    projectLayers,
+    projectTrust,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Retired-role residue — read-only. Names only what earlier Kaola releases wrote: a file whose
+// basename is in RETIRED_PROFILE_FILES or is the ownership manifest, directly inside the Kaola-owned
+// agents/kaola-workflow/ directory, and the managed marker block in config.toml. Files anywhere else
+// and user [agents.*] tables outside the markers are never residue. A symlinked or non-directory
+// agents/kaola-workflow is not followed (scopeAuthorityIssue refuses it for a loaded scope).
+// ---------------------------------------------------------------------------
+function inspectRetiredRoleResidue(codexDir, configContent) {
+  const residueDir = kaolaAgentsDir(codexDir);
+  const configPath = path.join(codexDir, 'config.toml');
+  const owned = new Set([...RETIRED_PROFILE_FILES, MANIFEST_BASENAME]);
+  const profileFiles = [];
+  let dirStat = null;
+  try { dirStat = fs.lstatSync(residueDir); } catch (_) {}
+  if (dirStat && dirStat.isDirectory()) {
+    let names = [];
+    try { names = fs.readdirSync(residueDir); } catch (_) {}
+    for (const name of names.sort()) {
+      if (owned.has(name)) profileFiles.push(path.join(residueDir, name));
+    }
+  }
+  const managedBlock = managedMarkerRange(configContent).state;
+  const residuePaths = [...profileFiles, ...(managedBlock === 'absent' ? [] : [configPath])];
+  return {
+    codex_dir: codexDir,
+    config_path: configPath,
+    retired_profile_files: profileFiles,
+    managed_block: managedBlock,
+    residue_paths: residuePaths,
+    present: residuePaths.length > 0,
+  };
+}
+
+// User scope first, then every project layer root -> cwd. An ignored (untrusted) layer is still
+// Kaola-owned disk state the installer removes, so it is inspected too — but never through an
+// unsafe path: such a layer is skipped rather than followed.
+function collectResidueScopes(layers) {
+  const scopes = [{
+    label: 'global',
+    globalInstall: true,
+    projectRoot: null,
+    trust: null,
+    residue: inspectRetiredRoleResidue(layers.globalCodexDir, layers.globalConfigContent),
+  }];
+  for (const layer of layers.projectLayers) {
+    if (layer.trust !== 'trusted' && scopeAuthorityIssue(layer.codexDir)) continue;
+    scopes.push({
+      label: layer.projectRoot,
+      globalInstall: false,
+      projectRoot: layer.projectRoot,
+      trust: layer.trust,
+      residue: inspectRetiredRoleResidue(
+        layer.codexDir, layer.configRead.ok ? layer.configRead.content : ''),
+    });
+  }
+  return scopes;
+}
+
+function residueInstallCommand(installerPath, scope, homeDir) {
+  if (!scope.globalInstall) return `node ${installerPath} ${scope.projectRoot}`;
+  const homePrefix = path.resolve(homeDir) === path.resolve(os.homedir()) ? '' : `HOME=${homeDir} `;
+  return `${homePrefix}node ${installerPath} --global`;
+}
+
+function residueScopeRepair(installerPath, scope, homeDir) {
+  const command = residueInstallCommand(installerPath, scope, homeDir);
+  if (scope.residue.managed_block === 'invalid') {
+    return `${scope.residue.config_path} holds an unbalanced "${BEGIN_MARKER}" / "${END_MARKER}" `
+      + 'marker pair. Remove those marker lines and the retired [agents.*] registrations Kaola-Workflow '
+      + `wrote between them by hand, then run: ${command}`;
+  }
+  return 'Kaola-Workflow no longer installs Codex role profiles. Re-run the Kaola Codex installer for '
+    + `this scope; it removes the Kaola-owned retired role profiles and managed config block: ${command}. `
+    + 'A file the installer preserves (modified since install, or with no ownership record) is reported '
+    + 'as "Retired KW agent preserved"; review it and delete it by hand.';
+}
+
+function residueScopeReport(installerPath, scope, homeDir) {
+  return {
+    scope: scope.label,
+    codex_dir: scope.residue.codex_dir,
+    config_path: scope.residue.config_path,
+    ...(scope.globalInstall ? {} : { project_trust: scope.trust }),
+    retired_profile_files: scope.residue.retired_profile_files,
+    managed_block: scope.residue.managed_block,
+    residue_paths: scope.residue.residue_paths,
+    safe_autofix: scope.residue.managed_block !== 'invalid',
+    repair: residueScopeRepair(installerPath, scope, homeDir),
+  };
+}
+
+function retiredRoleResidueResult(residueScopes, runtime, installerPath, installerFound, homeDir) {
+  const residue = residueScopes.map(scope => residueScopeReport(installerPath, scope, homeDir));
+  return {
+    exitCode: 1,
     result: {
-      status: 'project_trust_required',
+      status: RETIRED_ROLE_RESIDUE_STATUS,
       stale: true,
-      safe_autofix: false,
-      project_root: path.resolve(projectRoot),
-      project_trust: trustLevel,
-      repair: 'Codex ignores project .codex layers unless the project is trusted. Trust this project in Codex and start a fresh session, or install canonical Kaola profiles globally and remove the ignored project Kaola override.',
+      safe_autofix: installerFound && residue.every(scope => scope.safe_autofix),
+      residue_paths: residue.flatMap(scope => scope.residue_paths),
+      residue,
+      repair: residue.map(scope => scope.repair).join('\n'),
+      ...runtimeFields(runtime),
     },
   };
+}
+
+function managedMarkerRange(configContent) {
+  const source = String(configContent || '');
+  const structural = tomlStructuralContent(source);
+  const beginPattern = new RegExp(`^${escapeRegExp(BEGIN_MARKER)}\\r?$`, 'gm');
+  const endPattern = new RegExp(`^${escapeRegExp(END_MARKER)}\\r?$`, 'gm');
+  const begins = [...structural.matchAll(beginPattern)];
+  const ends = [...structural.matchAll(endPattern)];
+  if (begins.length === 0 && ends.length === 0) {
+    return { state: 'absent', start: -1, end: -1 };
+  }
+  if (begins.length !== 1 || ends.length !== 1 || begins[0].index >= ends[0].index) {
+    return { state: 'invalid', start: -1, end: -1 };
+  }
+  let end = ends[0].index + END_MARKER.length;
+  if (source.slice(end, end + 2) === '\r\n') end += 2;
+  else if (source[end] === '\n') end += 1;
+  return { state: 'present', start: begins[0].index, end, endMarkerStart: ends[0].index };
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,529 +1462,12 @@ function parseArgs(argv) {
   return { projectRoot, noAutofix, json, doctor, home, codexVersion };
 }
 
-// #332 schema check — `validateProfileText` is now required from the kernel above (#29 audit),
-// the ONE authority both this file (read-only validation) and install-codex-agent-profiles.js
-// (write-time validation) call.
-
-function classifyProfilePinPosture(text) {
-  const top = profileTopLevelShape(text).outside;
-  const models = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
-  const efforts = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
-  const anyModelLine = (top.match(/^model\s*=.*$/gm) || []).length;
-  const anyEffortLine = (top.match(/^model_reasoning_effort\s*=.*$/gm) || []).length;
-  if (anyModelLine === 0 && anyEffortLine === 0) return 'inherit';
-  if (anyModelLine === 1 && anyEffortLine === 1 && models.length === 1 && efforts.length === 1
-      && models[0] === CODEX_STANDARD_MODEL && [CODEX_STANDARD_EFFORT, CODEX_REASONING_EFFORT].includes(efforts[0])) {
-    return 'legacy_pinned';
-  }
-  return 'malformed';
-}
-
-const LEGACY_PIN_ONLY_REASONS = new Set([
-  "top-level 'model' must be present and equal \"gpt-6-luna\"",
-  "top-level 'model_reasoning_effort' must be present and equal \"max\""
-]);
-
-// ---------------------------------------------------------------------------
-// Template role parsing — reads config/agents.toml via inline regex (no TOML lib).
-// Each tree has its own copy of this file at <scriptDir>/../config/agents.toml.
-// Returns { roles: string[], error: string|null }
-// ---------------------------------------------------------------------------
-function bundledSourceAuthorityIssue(pluginRoot, target, expectedKind, label) {
-  const resolvedRoot = path.resolve(pluginRoot);
-  const resolvedTarget = path.resolve(target);
-  const lexicalRelative = path.relative(resolvedRoot, resolvedTarget);
-  if (lexicalRelative === '..' || lexicalRelative.startsWith(`..${path.sep}`)
-      || path.isAbsolute(lexicalRelative)) {
-    return `${label}_unsafe: ${resolvedTarget} escapes ${resolvedRoot}`;
-  }
-  let stat;
-  try { stat = fs.lstatSync(resolvedTarget); }
-  catch (error) {
-    return error && error.code === 'ENOENT'
-      ? `${label}_missing: ${resolvedTarget}`
-      : `${label}_unsafe: cannot inspect ${resolvedTarget}: ${error.message}`;
-  }
-  const correctKind = expectedKind === 'directory' ? stat.isDirectory() : stat.isFile();
-  if (stat.isSymbolicLink() || !correctKind) {
-    return `${label}_unsafe: ${resolvedTarget} must be a regular non-symlink ${expectedKind}`;
-  }
-  try {
-    const realRoot = fs.realpathSync(resolvedRoot);
-    const realTarget = fs.realpathSync(resolvedTarget);
-    const realRelative = path.relative(realRoot, realTarget);
-    if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`)
-        || path.isAbsolute(realRelative)) {
-      return `${label}_unsafe: ${resolvedTarget} resolves outside ${resolvedRoot}`;
-    }
-  } catch (error) {
-    return `${label}_unsafe: cannot resolve ${resolvedTarget}: ${error.message}`;
-  }
-  return null;
-}
-
-function readTemplateRoles(scriptDir) {
-  const pluginRoot = path.resolve(scriptDir, '..');
-  const configDir = path.join(pluginRoot, 'config');
-  const templatePath = path.join(configDir, 'agents.toml');
-  const sourceAgentsDir = path.join(pluginRoot, 'agents');
-  const authorityIssues = [
-    bundledSourceAuthorityIssue(pluginRoot, pluginRoot, 'directory', 'plugin_source_root'),
-    bundledSourceAuthorityIssue(pluginRoot, configDir, 'directory', 'plugin_config_path'),
-    bundledSourceAuthorityIssue(pluginRoot, templatePath, 'file', 'plugin_config_path'),
-    bundledSourceAuthorityIssue(pluginRoot, sourceAgentsDir, 'directory', 'plugin_agents_path'),
-  ].filter(Boolean);
-  if (authorityIssues.length > 0) {
-    return { roles: [], entries: [], content: '', error: null, sourceErrors: authorityIssues };
-  }
-  let content;
-  try {
-    content = fs.readFileSync(templatePath, 'utf8');
-  } catch (e) {
-    return { roles: [], entries: [], content: '', error: `template_missing: cannot read ${templatePath}: ${e.message}` };
-  }
-  const roles = [];
-  const entries = [];
-  const lines = content.split(/\r?\n/);
-  let current = null;
-  for (const line of lines) {
-    const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
-    if (head) {
-      current = { role: head[1], description: null, nicknameCandidates: [], configFile: null, basename: null };
-      roles.push(current.role);
-      entries.push(current);
-      continue;
-    }
-    if (!current) continue;
-    const desc = line.match(/^description\s*=\s*"([^"]*)"\s*$/);
-    if (desc) {
-      current.description = desc[1];
-      continue;
-    }
-    const nick = line.match(/^nickname_candidates\s*=\s*\[([^\]]*)\]\s*$/);
-    if (nick) {
-      const parsed = parseStringArrayLine(line, 'nickname_candidates');
-      current.nicknameCandidates = parsed.valid ? parsed.values : [];
-      continue;
-    }
-    const configFile = line.match(/^config_file\s*=\s*"([^"]*)"\s*$/);
-    if (configFile) {
-      current.configFile = configFile[1];
-      current.basename = path.basename(configFile[1]);
-    }
-  }
-  if (roles.length === 0) {
-    return { roles: [], entries: [], content, error: `template_missing: no [agents.*] entries found in ${templatePath}` };
-  }
-  const sourceErrors = [];
-  const seenRoles = new Set();
-  const seenConfigFiles = new Set();
-  const seenBasenames = new Set();
-  for (const entry of entries) {
-    if (seenRoles.has(entry.role)) {
-      sourceErrors.push(`agents.toml duplicate [agents.${entry.role}] entry`);
-    }
-    seenRoles.add(entry.role);
-    if (!entry.configFile || !entry.basename) continue;
-    if (seenConfigFiles.has(entry.configFile)) {
-      sourceErrors.push(`agents.toml duplicate config_file "${entry.configFile}" reference`);
-    }
-    seenConfigFiles.add(entry.configFile);
-    if (seenBasenames.has(entry.basename)) {
-      sourceErrors.push(`agents.toml duplicate config_file basename "${entry.basename}" reference`);
-    }
-    seenBasenames.add(entry.basename);
-    const canonicalBasename = `${entry.role}.toml`;
-    if (entry.basename !== canonicalBasename) {
-      sourceErrors.push(
-        `agents.toml [agents.${entry.role}] config_file basename must be "${canonicalBasename}" `
-        + `(got "${entry.basename}")`
-      );
-    }
-  }
-  const referenced = new Set();
-  for (const entry of entries) {
-    if (!entry.basename) {
-      sourceErrors.push(`agents.toml [agents.${entry.role}] has no config_file line`);
-      continue;
-    }
-    referenced.add(entry.basename);
-    const sourcePath = path.join(sourceAgentsDir, entry.basename);
-    const sourceIssue = bundledSourceAuthorityIssue(
-      pluginRoot, sourcePath, 'file', 'plugin_source_profile');
-    if (sourceIssue) {
-      sourceErrors.push(sourceIssue);
-      continue;
-    }
-    let sourceText;
-    try { sourceText = fs.readFileSync(sourcePath, 'utf8'); }
-    catch (error) {
-      sourceErrors.push(`plugin_source_profile_unsafe: cannot read ${sourcePath}: ${error.message}`);
-      continue;
-    }
-    entry.sourcePath = sourcePath;
-    entry.sourceText = sourceText;
-    entry.sourceSha256 = 'sha256:' + sha256Hex(Buffer.from(sourceText, 'utf8'));
-    for (const reason of validateProfileText(sourceText, entry.role, entry)) {
-      sourceErrors.push(`agents/${entry.basename}: ${reason}`);
-    }
-  }
-  for (const file of fs.readdirSync(sourceAgentsDir).filter(name => name.endsWith('.toml')).sort()) {
-    if (!referenced.has(file)) {
-      sourceErrors.push(`agents/${file}: not referenced by any [agents.*] entry in config/agents.toml`);
-    }
-  }
-  return { roles, entries, content, error: null, sourceErrors };
-}
-
-// ---------------------------------------------------------------------------
-// Profile check: assert .codex/agents/kaola-workflow/<role>.toml exists for all roles.
-// Returns { missingRoles: string[] }
-// ---------------------------------------------------------------------------
-function checkProfiles(agentsDir, requiredRoles) {
-  const missingRoles = [];
-  for (const role of requiredRoles) {
-    const profilePath = path.join(agentsDir, `${role}.toml`);
-    if (!fs.existsSync(profilePath)) {
-      missingRoles.push(role);
-    }
-  }
-  return { missingRoles };
-}
-
-// ---------------------------------------------------------------------------
-// Managed block check: locate the # BEGIN / # END block in config.toml, parse
-// [agents.{role}] entries inside it, and detect conflicting [agents.*] entries
-// outside the markers.
-//
-// Returns:
-//   {
-//     blockFound: boolean,
-//     rolesInBlock: string[],
-//     conflictingRolesOutside: string[]  // [agents.*] entries outside the markers
-//   }
-// ---------------------------------------------------------------------------
-// #775 (owner decision D2): the template (config/agents.toml) carries ONLY [agents.<role>]
-// role registrations now — no [features] enablement header — so `full` and `agentOnly` are the
-// SAME bytes (the historical split at the first `[agents.` line, kept for output-shape
-// back-compat, is now a no-op: firstAgent is always 0). Kaola never writes the [agents] enabled
-// flag itself; see codexMultiAgentV2RequiredResult / CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION.
-function canonicalManagedBlockBodies(templateContent) {
-  const template = String(templateContent || '').trim();
-  if (!template) return { full: '', agentOnly: '' };
-  const firstAgent = template.search(/^\[agents\./m);
-  const agentOnly = firstAgent >= 0 ? template.slice(firstAgent).trim() : '';
-  return {
-    full: `\n${template}\n`,
-    agentOnly: agentOnly ? `\n${agentOnly}\n` : '',
-  };
-}
-
-function managedMarkerRange(configContent) {
-  const source = String(configContent || '');
-  const structural = tomlStructuralContent(source);
-  const beginPattern = new RegExp(`^${escapeRegExp(BEGIN_MARKER)}\\r?$`, 'gm');
-  const endPattern = new RegExp(`^${escapeRegExp(END_MARKER)}\\r?$`, 'gm');
-  const begins = [...structural.matchAll(beginPattern)];
-  const ends = [...structural.matchAll(endPattern)];
-  if (begins.length === 0 && ends.length === 0) {
-    return { state: 'absent', start: -1, end: -1 };
-  }
-  if (begins.length !== 1 || ends.length !== 1 || begins[0].index >= ends[0].index) {
-    return { state: 'invalid', start: -1, end: -1 };
-  }
-  let end = ends[0].index + END_MARKER.length;
-  if (source.slice(end, end + 2) === '\r\n') end += 2;
-  else if (source[end] === '\n') end += 1;
-  return { state: 'present', start: begins[0].index, end, endMarkerStart: ends[0].index };
-}
-
-function containsExternalFeaturesTable(content) {
-  let currentTable = null;
-  for (const rawLine of tomlStructuralLines(content)) {
-    const line = stripTomlComment(rawLine).trim();
-    if (!line) continue;
-    const tableName = parseTomlTableName(line);
-    if (tableName !== null) {
-      currentTable = tableName;
-      if (tomlTableNameMatches(tableName, 'features')) return true;
-      continue;
-    }
-    if (currentTable !== null) continue;
-    const assignment = parseTomlAssignment(line);
-    if (assignment && assignment.key[0] && assignment.key[0].value === 'features') return true;
-  }
-  return false;
-}
-
-// #775: legitimate top-level [agents] SCALAR settings a user may own directly (Kaola never writes
-// these itself — see the D2 config posture / CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION, and the
-// "Kaola never writes or overrides agents.default_subagent_model / ...reasoning_effort" non-goal).
-// None of these collide with a Kaola role name, so a bare [agents] table carrying ONLY these keys
-// is not a wildcard override — only a MANAGED ROLE NAME (or an inline-table-valued key under one)
-// still counts as a conflict, exactly as before #775. Without this allowlist a user-owned bare
-// [agents] settings table would immediately trip the managed-role conflict check.
-const AGENTS_TABLE_SCALAR_SETTING_KEYS = new Set([
-  'enabled', 'max_concurrent_threads_per_session', 'max_threads',
-  'min_wait_timeout_ms', 'max_wait_timeout_ms', 'default_wait_timeout_ms',
-  'default_subagent_model', 'default_subagent_reasoning_effort',
-]);
-
-function outsideAgentDeclarations(outsideContent) {
-  const declarations = [];
-  let currentTable = null;
-  for (const rawLine of tomlStructuralLines(outsideContent)) {
-    const line = stripTomlComment(rawLine).trim();
-    if (!line) continue;
-    const tableName = parseTomlTableName(line);
-    if (tableName) {
-      currentTable = tableName;
-      if (Array.isArray(tableName.segments)
-          && tableName.segments[0] && tableName.segments[0].value === 'agents'
-          && tableName.segments.length > 1) {
-        const role = tableName.segments.slice(1).map(segment => segment.value).join('.');
-        declarations.push(role);
-      }
-      continue;
-    }
-    if (currentTable !== null) {
-      // Inside a bare [agents] table: only a key that is NOT a sanctioned scalar setting is a
-      // candidate role-name declaration (filtered against templateRoles by the caller, same as
-      // every other declaration this function emits).
-      if (Array.isArray(currentTable.segments) && currentTable.segments.length === 1
-          && currentTable.segments[0].value === 'agents') {
-        const assignmentKey = parseTomlAssignmentKey(line);
-        const key = assignmentKey && assignmentKey[0] && assignmentKey[0].value;
-        if (key && !AGENTS_TABLE_SCALAR_SETTING_KEYS.has(key)) declarations.push(key);
-      }
-      continue;
-    }
-    const assignmentKey = parseTomlAssignmentKey(line);
-    if (assignmentKey && assignmentKey[0] && assignmentKey[0].value === 'agents') {
-      // Root-level inline form (`agents = {...}`), not the table-header form this gate's own
-      // remediation instructs — stays conservative (unconditional wildcard) as before #775.
-      declarations.push(assignmentKey[1] ? assignmentKey[1].value : '*');
-    }
-  }
-  return [...new Set(declarations)];
-}
-
-function managedRoleConflicts(conflictingRolesOutside, templateRoles) {
-  return (conflictingRolesOutside || []).filter(role =>
-    role === '*' || (templateRoles || []).some(templateRole =>
-      role === templateRole || role.startsWith(templateRole + '.')));
-}
-
-function checkManagedBlock(configContent, templateContent = '') {
-  const markerRange = managedMarkerRange(configContent);
-
-  let blockFound = false;
-  let blockBody = '';
-  let outsideContent = configContent;
-
-  if (markerRange.state === 'present') {
-    blockFound = true;
-    blockBody = configContent.slice(
-      markerRange.start + BEGIN_MARKER.length,
-      markerRange.endMarkerStart,
-    );
-    outsideContent = configContent.slice(0, markerRange.start)
-      + configContent.slice(markerRange.end);
-  }
-
-  // Parse [agents.{role}] entries inside the block
-  const rolesInBlock = [];
-  const blockRe = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let m;
-  while ((m = blockRe.exec(blockBody)) !== null) {
-    rolesInBlock.push(m[1]);
-  }
-
-  // Any agents declaration outside the owned markers is a higher-precedence
-  // override, including quoted/dotted/indented tables and `[agents]` inline maps.
-  const conflictingRolesOutside = outsideAgentDeclarations(outsideContent);
-
-  const expectedBodies = canonicalManagedBlockBodies(templateContent);
-  const expectedBody = containsExternalFeaturesTable(outsideContent)
-    ? expectedBodies.agentOnly
-    : expectedBodies.full;
-  const managedBlockDrift = markerRange.state === 'invalid'
-    || (blockFound && expectedBody ? blockBody !== expectedBody : false);
-
-  return { blockFound, managedBlockDrift, rolesInBlock, conflictingRolesOutside };
-}
-
-// ---------------------------------------------------------------------------
-// #332 manifest read — returns the parsed local manifest or null on absent/corrupt.
-// ---------------------------------------------------------------------------
-function readManifest(agentsDir) {
-  const p = path.join(agentsDir, MANIFEST_BASENAME);
-  if (!fs.existsSync(p)) return null;
-  try {
-    const obj = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (!obj || typeof obj !== 'object') return null;
-    return obj;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #332 scope inspector — the single source of truth for both the normal gate and
-// doctor mode. Inspects a target .codex dir against the current template roles.
-// Pure read-only.
-// ---------------------------------------------------------------------------
-function inspectScope({
-  codexDir,
-  templateRoles,
-  templateEntries,
-  templateContent = '',
-  configContentOverride,
-  inspectProfiles = true,
-}) {
-  const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
-  const configPath = path.join(codexDir, 'config.toml');
-  const roleSet = new Set(templateRoles);
-  const metaByRole = new Map((templateEntries || []).map(e => [e.role, e]));
-
-  const exists = fs.existsSync(codexDir);
-
-  let configContent = typeof configContentOverride === 'string' ? configContentOverride : '';
-  if (typeof configContentOverride !== 'string' && fs.existsSync(configPath)) {
-    try { configContent = fs.readFileSync(configPath, 'utf8'); } catch { configContent = ''; }
-  }
-  const dispatchMode = detectCodexDispatchMode(configContent);
-  const posture = deriveDispatchPosture(configContent);
-  const v2Bounds = deriveMultiAgentV2Bounds(configContent, dispatchMode.multi_agent_v2_enabled);
-  const { blockFound, managedBlockDrift, rolesInBlock, conflictingRolesOutside } =
-    checkManagedBlock(configContent, templateContent);
-  const managedRoleConflictsOutside = managedRoleConflicts(
-    conflictingRolesOutside, templateRoles,
-  );
-
-  const missingFromBlock = templateRoles.filter(r => !rolesInBlock.includes(r));
-  const staleRolesInBlock = rolesInBlock.filter(r => !roleSet.has(r));
-
-  const { missingRoles: missingProfiles } = inspectProfiles
-    ? checkProfiles(agentsDir, templateRoles)
-    : { missingRoles: [] };
-
-  // Inspect the agents dir contents: malformed required profiles + stale/extra files.
-  const malformed = [];
-  const legacyPinnedProfiles = [];
-  const staleProfileMap = new Map();
-  const staleFiles = [];
-  const extraUnmanaged = [];
-  const manifest = inspectProfiles ? readManifest(agentsDir) : null;
-  const manifestFiles = (manifest && manifest.files && typeof manifest.files === 'object')
-    ? new Set(Object.keys(manifest.files))
-    : new Set();
-
-  const manifestFileExists = inspectProfiles
-    && fs.existsSync(path.join(agentsDir, MANIFEST_BASENAME));
-  let manifestStatus = manifestFileExists ? 'invalid' : 'absent';
-  if (manifest) {
-    manifestStatus = (typeof manifest.schema_version === 'number' && manifest.schema_version > MANIFEST_SCHEMA_VERSION)
-      ? 'unsupported'
-      : (manifest.schema_version === MANIFEST_SCHEMA_VERSION ? 'present' : 'outdated');
-  }
-
-  function addStaleProfile(role, file, reason) {
-    const key = `${role}\0${file}`;
-    if (!staleProfileMap.has(key)) staleProfileMap.set(key, { role, file, reasons: [] });
-    const item = staleProfileMap.get(key);
-    if (!item.reasons.includes(reason)) item.reasons.push(reason);
-  }
-
-  if (inspectProfiles && fs.existsSync(agentsDir)) {
-    let names = [];
-    try { names = fs.readdirSync(agentsDir); } catch { names = []; }
-    for (const name of names) {
-      if (!name.endsWith('.toml')) continue;
-      const role = name.replace(/\.toml$/, '');
-      if (roleSet.has(role)) {
-        // Required role: schema-check it.
-        let txt = '';
-        try { txt = fs.readFileSync(path.join(agentsDir, name), 'utf8'); } catch { txt = ''; }
-        const posture = classifyProfilePinPosture(txt);
-        const expected = metaByRole.get(role) || null;
-        const reasons = validateProfileText(txt, role, expected);
-        const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
-        if (posture === 'legacy_pinned' || posture === 'inherit') {
-          const nonPinReasons = reasons.filter(reason =>
-            !LEGACY_PIN_ONLY_REASONS.has(reason));
-          if (nonPinReasons.length === 0) legacyPinnedProfiles.push({ role, file: name });
-          else malformed.push({ role, file: name, reasons: nonPinReasons });
-        } else if (reasons.length > 0) {
-          if (sourceDrift) {
-            addStaleProfile(role, name, 'profile_bytes_mismatch: installed profile differs from bundled source');
-            for (const reason of reasons) addStaleProfile(role, name, reason);
-          } else {
-            malformed.push({ role, file: name, reasons });
-          }
-        } else if (sourceDrift) {
-          addStaleProfile(role, name, 'profile_bytes_mismatch: installed profile differs from bundled source');
-        }
-
-        if (manifest && manifest.schema_version === MANIFEST_SCHEMA_VERSION) {
-          const actualFileHash = 'sha256:' + sha256Hex(Buffer.from(txt, 'utf8'));
-          const recordedFileHash = manifest.files && manifest.files[name];
-          if (recordedFileHash !== actualFileHash) {
-            addStaleProfile(role, name,
-              `manifest_file_hash_mismatch: expected=${actualFileHash} got=${recordedFileHash || 'missing'}`);
-          }
-        }
-      } else if (manifestFiles.has(name) || RETIRED_PROFILE_FILES.includes(name)) {
-        staleFiles.push(name);
-      } else {
-        extraUnmanaged.push(name);
-      }
-    }
-  }
-
-  malformed.sort((a, b) => a.role.localeCompare(b.role));
-  legacyPinnedProfiles.sort((a, b) => a.role.localeCompare(b.role));
-  const staleProfiles = [...staleProfileMap.values()].sort((a, b) => a.role.localeCompare(b.role));
-  staleFiles.sort();
-  extraUnmanaged.sort();
-
-  return {
-    exists,
-    blockFound,
-    managedBlockDrift,
-    rolesInBlock,
-    missingFromBlock,
-    staleRolesInBlock,
-    conflictingRolesOutside,
-    managedRoleConflictsOutside,
-    missingProfiles,
-    malformed,
-    legacyPinnedProfiles,
-    staleProfiles,
-    staleFiles,
-    extraUnmanaged,
-    manifest: manifestStatus,
-    dispatch_mode: dispatchMode.dispatch_mode,
-    multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
-    dispatch_posture: posture.dispatch_posture,
-    model_reasoning_effort: posture.model_reasoning_effort,
-    multi_agent_enabled: posture.multi_agent_enabled,
-    dispatch_posture_warning: posture.dispatch_posture_warning,
-    max_concurrent_threads_per_session: v2Bounds.max_concurrent_threads_per_session,
-    max_concurrent_threads_per_session_source: v2Bounds.max_concurrent_threads_per_session_source,
-    effective_subagent_width: v2Bounds.effective_subagent_width,
-    min_wait_timeout_ms: v2Bounds.min_wait_timeout_ms,
-    max_wait_timeout_ms: v2Bounds.max_wait_timeout_ms,
-    default_wait_timeout_ms: v2Bounds.default_wait_timeout_ms,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Find the installer script sibling to this script.
 // Returns the absolute path if it exists, or null.
 // ---------------------------------------------------------------------------
 function findInstaller(scriptDir) {
-  const installerPath = path.join(scriptDir, 'install-codex-agent-profiles.js');
+  const installerPath = path.join(scriptDir, INSTALLER_BASENAME);
   return fs.existsSync(installerPath) ? installerPath : null;
 }
 
@@ -1909,10 +1486,10 @@ function regularNonSymlinkFile(target) {
   }
 }
 
-// The repository-root CLI is a documented entrypoint, while its canonical
-// profiles, manifest, and installer live in plugins/kaola-workflow. Resolve that
-// one source-tree layout explicitly. Installed/cache copies retain their direct
-// scriptDir and therefore their own exact manifest/path authority.
+// The repository-root CLI is a documented entrypoint, while its plugin manifest and
+// installer live in plugins/kaola-workflow. Resolve that one source-tree layout
+// explicitly. Installed/cache copies retain their direct scriptDir and therefore
+// their own exact manifest/path authority.
 function resolvePreflightSourceScriptDir(scriptDir, home) {
   const requested = path.resolve(scriptDir);
   const requestedRoot = path.resolve(requested, '..');
@@ -2002,8 +1579,8 @@ function codexVersionSupported(version) {
     && compareCodexVersion(version, CODEX_MIN_VERSION) >= 0;
 }
 
-// Same inline require('child_process') idiom as runInstaller above (this file's #332 duplication
-// convention — no top-level require of child_process anywhere in this script).
+// Same inline require('child_process') idiom as runInstaller above (no top-level require of
+// child_process anywhere in this script).
 function probeCodexVersionFromBinary() {
   try {
     const { spawnSync } = require('child_process');
@@ -2032,63 +1609,9 @@ function resolveCodexVersion({ override, env } = {}) {
 function codexVersionUnsupportedRemediation(detected) {
   return `Codex ${detected || '(version undetermined — no --codex-version/KAOLA_CODEX_VERSION override and no codex binary on PATH)'} `
     + `is below the supported floor ${CODEX_MIN_VERSION}. Upgrade the Codex CLI to >=${CODEX_MIN_VERSION} `
-    + '(ships multi_agent_v2, the dispatch path this workflow requires — it is opt-in and OFF by '
-    + 'default, so the switch at features.multi_agent_v2.enabled must be set explicitly), '
     + 'then re-run this preflight. On a sandbox/CI host with no codex binary on PATH, pass '
     + '--codex-version <installed-version> or set KAOLA_CODEX_VERSION=<installed-version> to attest the '
     + 'version explicitly.';
-}
-
-// Owner decision D2: the exact minimal paste-able config diff for the codex_multi_agent_v2_required
-// refusal. multi_agent_v2 is opt-in and OFF by default in Codex 0.145, so it must be written for
-// Codex to expose the V2 spawn tools at all. Kaola does NOT write it for the user — config.toml is
-// user-owned — so the preflight refuses until it is added by hand. It targets [features], which
-// never collides with the "# BEGIN kaola-workflow agents" managed [agents.<role>] block.
-const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires MultiAgentV2, but '
-  + 'features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is OPT-IN and off by default in '
-  + 'Codex >=0.145.0 — only V1 multi_agent is on by default — so it has to be set explicitly for Codex to '
-  + 'expose the V2 task-name spawn tools. Kaola-Workflow does not write this flag for you (see '
-  + 'docs/decisions for the D2 config posture) — add it to ~/.codex/config.toml (or a trusted project '
-  + '.codex/config.toml) by hand, then start a fresh Codex session:\n\n'
-  + '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 5\n\n'
-  + 'The equivalent inline form under [features] (multi_agent_v2 = { enabled = true, ... }) and a bare '
-  + 'multi_agent_v2 = true are both accepted. Do NOT set agents.max_threads alongside it — that is a '
-  + 'separate [agents] key, NOT an alias, and it does not raise the MultiAgentV2 cap; Codex 0.145.0 '
-  + 'accepts it rather than complaining, so a stray one leaves the cap where it was instead of '
-  + 'erroring. The concurrency budget comes from features.multi_agent_v2.max_concurrent_threads_per_session alone '
-  + '(PR #19792). A top-level [agents] enabled = true does NOT enable MultiAgentV2 — set the switch '
-  + 'above instead, in any of the three accepted shapes. Kaola never writes or overrides '
-  + 'agents.default_subagent_model / agents.default_subagent_reasoning_effort; Codex resolves the '
-  + 'sub-agent model/reasoning independently.';
-
-const CODEX_MULTI_AGENT_V2_REQUIRED_STATUS = 'codex_multi_agent_v2_required';
-
-function codexMultiAgentV2RequiredResult(scope, scopeName, codexDir, configPath = null) {
-  return {
-    exitCode: 7,
-    result: {
-      status: CODEX_MULTI_AGENT_V2_REQUIRED_STATUS,
-      scope: scopeName,
-      stale: true,
-      safe_autofix: false,
-      repair: CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION,
-      extra_unmanaged: scope.extraUnmanaged,
-      dispatch_mode: scope.dispatch_mode,
-      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      dispatch_posture: scope.dispatch_posture,
-      model_reasoning_effort: scope.model_reasoning_effort,
-      multi_agent_enabled: scope.multi_agent_enabled,
-      dispatch_posture_warning: scope.dispatch_posture_warning,
-      max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-      max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-      effective_subagent_width: scope.effective_subagent_width,
-      min_wait_timeout_ms: scope.min_wait_timeout_ms,
-      max_wait_timeout_ms: scope.max_wait_timeout_ms,
-      default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      config_path: configPath || path.join(codexDir, 'config.toml'),
-      effective_config_paths: scope.effective_config_paths || [],
-    },
-  };
 }
 
 function codexVersionUnsupportedResult(versionInfo) {
@@ -2103,787 +1626,6 @@ function codexVersionUnsupportedResult(versionInfo) {
       required_version: CODEX_MIN_VERSION,
       repair: codexVersionUnsupportedRemediation(versionInfo.version),
     },
-  };
-}
-
-// #775: the 0.142/0.144 transport-mode grammar + gate (non_code_mode_only / hide_spawn_agent_metadata
-// / tool_namespace + codex_v2_encrypted_transport_unsafe / codex_v2_role_transport_unsafe) is retired
-// — Codex >=0.145.0's stabilized MultiAgentV2 no longer needs Kaola's transport-safety check. This
-// frees exit code 7, reused above by codexVersionUnsupportedResult / codexMultiAgentV2RequiredResult
-// so no caller's exit-code map shifts.
-
-function unsupportedManifestResult({
-  scope,
-  agentsDir,
-  scriptDir,
-  projectRoot,
-  globalInstall = false,
-  scopeName,
-}) {
-  const installTarget = globalInstall ? '--global' : projectRoot;
-  return {
-    exitCode: 6,
-    result: {
-      status: 'profile_schema_version_unsupported',
-      scope: scopeName,
-      stale: true,
-      extra_unmanaged: scope.extraUnmanaged,
-      repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then run node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${installTarget}`,
-      safe_autofix: false,
-      dispatch_mode: scope.dispatch_mode,
-      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      dispatch_posture: scope.dispatch_posture,
-      model_reasoning_effort: scope.model_reasoning_effort,
-      multi_agent_enabled: scope.multi_agent_enabled,
-      dispatch_posture_warning: scope.dispatch_posture_warning,
-      max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-      max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-      effective_subagent_width: scope.effective_subagent_width,
-      min_wait_timeout_ms: scope.min_wait_timeout_ms,
-      max_wait_timeout_ms: scope.max_wait_timeout_ms,
-      default_wait_timeout_ms: scope.default_wait_timeout_ms,
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Core preflight check
-// ---------------------------------------------------------------------------
-function runPreflight(opts) {
-  const {
-    projectRoot,
-    noAutofix,
-    scriptDir,
-    home,
-    codexVersion,
-  } = opts;
-  const homeDir = home || os.homedir();
-  const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, homeDir);
-
-  // --- #775: Codex version floor, checked before anything else — nothing downstream matters if
-  // the installed Codex predates the multi_agent_v2 re-baseline. ---
-  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
-  if (!codexVersionSupported(versionInfo.version)) {
-    return codexVersionUnsupportedResult(versionInfo);
-  }
-
-  let activeProjectRoot = path.resolve(projectRoot);
-  let codexDir = path.join(activeProjectRoot, '.codex');
-  let agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
-
-  // --- Read template roles (may fail gracefully) ---
-  const template = readTemplateRoles(sourceScriptDir);
-  const { roles: templateRoles, entries: templateEntries, content: templateContent,
-    error: templateError, sourceErrors = [] } = template;
-  if (templateError) {
-    return {
-      exitCode: 2,
-      result: {
-        status: 'template_missing',
-        error: templateError,
-        stale: true,
-        safe_autofix: false,
-        repair: 'Install or update kaola-workflow to get the bundled config/agents.toml',
-      },
-    };
-  }
-  if (sourceErrors.length > 0) {
-    return {
-      exitCode: 2,
-      result: {
-        status: 'profile_source_stale',
-        malformed: sourceErrors,
-        stale: true,
-        safe_autofix: false,
-        repair: repositoryRepairCommand(sourceScriptDir),
-      },
-    };
-  }
-
-  // --- REQUIRED role set: the template, whole. Nothing declares roles ahead of dispatch. ---
-  const requiredRoles = [...templateRoles];
-
-  // Codex derives the project root from the persisted global
-  // `project_root_markers`, then considers every .codex layer root -> cwd. Trust
-  // is decided independently for each layer: exact layer, detected root, then
-  // root Git project. Only trusted layers enter the effective runtime overlay.
-  const globalCodexDir = path.join(homeDir, '.codex');
-  const globalConfigRead = readConfigLayer(globalCodexDir);
-  if (!globalConfigRead.ok) return unsafeConfigLayerResult(globalConfigRead);
-  const globalConfigPath = globalConfigRead.configPath;
-  const globalConfigContent = globalConfigRead.content;
-  const markerConfig = parseProjectRootMarkers(globalConfigContent);
-  if (!markerConfig.valid) {
-    return {
-      exitCode: 4,
-      result: {
-        status: 'project_root_markers_invalid',
-        stale: true,
-        safe_autofix: false,
-        config_path: globalConfigPath,
-        repair: 'Set top-level project_root_markers to exactly one TOML array of strings, then start a fresh Codex session.',
-      },
-    };
-  }
-  const detectedProjectRoot = findProjectRoot(projectRoot, markerConfig.markers);
-  const repoRoot = findRepoRootForTrust(projectRoot);
-  const projectLayerDirs = projectCodexLayerDirs(projectRoot, markerConfig.markers);
-  const layerTrustLevels = projectLayerDirs.map(layerCodexDir => projectTrustLevel(
-    globalConfigContent,
-    path.dirname(layerCodexDir),
-    detectedProjectRoot,
-    repoRoot,
-  ));
-  const projectTrust = layerTrustLevels[layerTrustLevels.length - 1] || 'unknown';
-  const projectConfigReads = projectLayerDirs.map(readConfigLayer);
-  const globalAuthorityIssue = scopeAuthorityIssue(globalCodexDir, templateRoles);
-  if (globalAuthorityIssue) {
-    return unsafeScopeAuthorityResult(globalCodexDir, 'global', globalAuthorityIssue);
-  }
-  {
-    const unsafeProjectConfig = projectConfigReads.find((configRead, index) =>
-      layerTrustLevels[index] === 'trusted' && !configRead.ok);
-    if (unsafeProjectConfig) return unsafeConfigLayerResult(unsafeProjectConfig);
-    for (let index = 0; index < projectLayerDirs.length; index++) {
-      if (layerTrustLevels[index] !== 'trusted') continue;
-      const layerCodexDir = projectLayerDirs[index];
-      const issue = scopeAuthorityIssue(layerCodexDir, templateRoles);
-      if (issue) return unsafeScopeAuthorityResult(layerCodexDir, 'project', issue);
-    }
-  }
-
-  const projectLayers = projectLayerDirs.map((layerCodexDir, index) => {
-    const configRead = projectConfigReads[index];
-    // Codex ignores project config when trust is absent. Never follow or gate an
-    // unsafe ignored layer; a safe ignored layer is parsed only to identify a
-    // Kaola footprint that requires an explicit trust decision.
-    const configContent = configRead.ok ? configRead.content : '';
-    const layerScope = inspectScope({
-      codexDir: layerCodexDir, templateRoles, templateEntries, templateContent,
-      configContentOverride: configContent,
-      inspectProfiles: layerTrustLevels[index] === 'trusted',
-    });
-    const layerAgentsDir = path.join(layerCodexDir, 'agents', 'kaola-workflow');
-    const kaolaConflicts = layerScope.managedRoleConflictsOutside;
-    let agentsFootprint = false;
-    try {
-      fs.lstatSync(layerAgentsDir);
-      agentsFootprint = true;
-    } catch (_) {}
-    const footprint = agentsFootprint
-      || layerScope.blockFound
-      || layerScope.rolesInBlock.length > 0
-      || kaolaConflicts.length > 0;
-    return {
-      codexDir: layerCodexDir,
-      projectRoot: path.dirname(layerCodexDir),
-      agentsDir: layerAgentsDir,
-      scope: layerScope,
-      kaolaConflicts,
-      footprint,
-      configContent,
-      trust: layerTrustLevels[index],
-    };
-  });
-  const ignoredKaolaLayer = projectLayers.find(layer =>
-    layer.footprint && layer.trust !== 'trusted');
-  if (ignoredKaolaLayer) {
-    return projectTrustRequiredResult(ignoredKaolaLayer.projectRoot, ignoredKaolaLayer.trust);
-  }
-  const loadedProjectLayers = projectLayers.filter(layer => layer.trust === 'trusted');
-  const overrideLayers = loadedProjectLayers.filter(layer => layer.footprint);
-  const selectedLayer = overrideLayers.find(layer => layer.kaolaConflicts.length > 0)
-    || overrideLayers.find(layer => !scopeProfilesFresh(layer.scope))
-    || overrideLayers[overrideLayers.length - 1]
-    || loadedProjectLayers[loadedProjectLayers.length - 1]
-    || projectLayers[projectLayers.length - 1];
-  activeProjectRoot = selectedLayer.projectRoot;
-  codexDir = selectedLayer.codexDir;
-  agentsDir = selectedLayer.agentsDir;
-
-  const rawGlobalScope = inspectScope({
-    codexDir: globalCodexDir, templateRoles, templateEntries, templateContent,
-  });
-  const effectiveRuntime = deriveEffectiveRuntime([
-    { content: globalConfigContent, configPath: globalConfigPath },
-    ...loadedProjectLayers.map(layer => ({
-      content: layer.configContent,
-      configPath: path.join(layer.codexDir, 'config.toml'),
-    })),
-  ]);
-  const projectKaolaOverridePresent = overrideLayers.length > 0;
-  const activeInstallGlobal = !projectKaolaOverridePresent;
-  if (activeInstallGlobal) {
-    activeProjectRoot = null;
-    codexDir = globalCodexDir;
-    agentsDir = path.join(globalCodexDir, 'agents', 'kaola-workflow');
-  }
-  const scope = {
-    ...(activeInstallGlobal ? rawGlobalScope : selectedLayer.scope),
-    ...effectiveRuntime,
-  };
-  const globalScope = { ...rawGlobalScope, ...effectiveRuntime };
-
-  // #775: multi_agent_v2 is a required engine feature (`features.multi_agent_v2`) — NO V1 fallback.
-  // Retired transport-mode gate previously sat here; freed exit code 7 is reused below.
-  if (!effectiveRuntime.multi_agent_v2_enabled) {
-    return codexMultiAgentV2RequiredResult(scope, 'effective', codexDir, null);
-  }
-
-  // Any managed-role collision in a loaded project layer is unsafe; a higher
-  // fresh layer does not authorize silently rewriting a lower user block.
-  // Unrelated project-local agent declarations remain user-owned and valid.
-  const conflictingLayer = overrideLayers.find(layer => layer.kaolaConflicts.length > 0);
-  if (conflictingLayer) {
-    const conflictScope = { ...conflictingLayer.scope, ...effectiveRuntime };
-    const conflictingRoles = conflictingLayer.kaolaConflicts;
-    return {
-      exitCode: 4,
-      result: {
-        status: 'autofix_unsafe',
-        stale: true,
-        conflicting_roles_outside_markers: conflictingRoles,
-        extra_unmanaged: conflictScope.extraUnmanaged,
-        repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${path.join(conflictingLayer.codexDir, 'config.toml')}, then re-run install-codex-agent-profiles.js.`,
-        safe_autofix: false,
-        dispatch_mode: conflictScope.dispatch_mode,
-        multi_agent_v2_enabled: conflictScope.multi_agent_v2_enabled,
-        dispatch_posture: conflictScope.dispatch_posture,
-        model_reasoning_effort: conflictScope.model_reasoning_effort,
-        multi_agent_enabled: conflictScope.multi_agent_enabled,
-        dispatch_posture_warning: conflictScope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: conflictScope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: conflictScope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: conflictScope.effective_subagent_width,
-        min_wait_timeout_ms: conflictScope.min_wait_timeout_ms,
-        max_wait_timeout_ms: conflictScope.max_wait_timeout_ms,
-        default_wait_timeout_ms: conflictScope.default_wait_timeout_ms,
-      },
-    };
-  }
-
-  // The global layer is always loaded. A hand-authored declaration outside the
-  // managed markers can therefore override a managed Kaola role even when a
-  // project layer supplies otherwise-fresh profiles. Preserve unrelated user
-  // roles, but fail closed for wildcard, exact, and nested Kaola collisions.
-  const globalKaolaConflicts = rawGlobalScope.managedRoleConflictsOutside;
-  if (globalKaolaConflicts.length > 0) {
-    return {
-      exitCode: 4,
-      result: {
-        status: 'autofix_unsafe',
-        stale: true,
-        conflicting_roles_outside_markers: globalKaolaConflicts,
-        extra_unmanaged: globalScope.extraUnmanaged,
-        repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${globalConfigPath}, then re-run install-codex-agent-profiles.js.`,
-        safe_autofix: false,
-        dispatch_mode: globalScope.dispatch_mode,
-        multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
-        dispatch_posture: globalScope.dispatch_posture,
-        model_reasoning_effort: globalScope.model_reasoning_effort,
-        multi_agent_enabled: globalScope.multi_agent_enabled,
-        dispatch_posture_warning: globalScope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: globalScope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: globalScope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: globalScope.effective_subagent_width,
-        min_wait_timeout_ms: globalScope.min_wait_timeout_ms,
-        max_wait_timeout_ms: globalScope.max_wait_timeout_ms,
-        default_wait_timeout_ms: globalScope.default_wait_timeout_ms,
-      },
-    };
-  }
-
-  if (!projectKaolaOverridePresent && scopeProfilesFresh(rawGlobalScope)) {
-    return {
-      exitCode: 0,
-      result: {
-        status: 'ok',
-        scope: 'global',
-        roles_checked: requiredRoles,
-        extra_unmanaged: globalScope.extraUnmanaged,
-        autofixed: false,
-        dispatch_mode: globalScope.dispatch_mode,
-        multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
-        dispatch_posture: globalScope.dispatch_posture,
-        model_reasoning_effort: globalScope.model_reasoning_effort,
-        multi_agent_enabled: globalScope.multi_agent_enabled,
-        dispatch_posture_warning: globalScope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: globalScope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: globalScope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: globalScope.effective_subagent_width,
-        min_wait_timeout_ms: globalScope.min_wait_timeout_ms,
-        max_wait_timeout_ms: globalScope.max_wait_timeout_ms,
-        default_wait_timeout_ms: globalScope.default_wait_timeout_ms,
-      },
-    };
-  }
-
-  // --- Unsupported (future) manifest schema is NOT autofixable ---
-  if (scope.manifest === 'unsupported') {
-    return unsupportedManifestResult({
-      scope,
-      agentsDir,
-      scriptDir: sourceScriptDir,
-      projectRoot: activeProjectRoot,
-      globalInstall: activeInstallGlobal,
-      scopeName: activeInstallGlobal ? 'global' : activeProjectRoot,
-    });
-  }
-
-  const missingProfiles = [...new Set(scope.missingProfiles)];
-  const missingFromBlock = requiredRoles.filter(r => !scope.rolesInBlock.includes(r));
-
-  const installerForRepair = findInstaller(sourceScriptDir);
-  const repairCmd = installerForRepair
-    ? `node ${installerForRepair} ${activeInstallGlobal ? '--global' : activeProjectRoot}`
-    : 'install-codex-agent-profiles.js not found alongside this script.';
-
-  // --- Priority-ordered staleness classification ---
-  // profiles_malformed / profiles_stale / profiles_missing / config_stale outrank
-  // managed_block_stale so the existing #266 fixtures keep their statuses.
-  const blockMissing = !scope.blockFound;
-  const malformedFirst = scope.malformed.length > 0;
-  const legacyPinsPresent = scope.legacyPinnedProfiles.length > 0;
-  const profileDriftPresent = scope.staleProfiles.length > 0
-    || (scope.manifest !== 'present' && scope.missingProfiles.length === 0 && scope.blockFound);
-  const staleFilesPresent = scope.staleFiles.length > 0;
-  const profilesMissing = missingProfiles.length > 0;
-  const configStale = blockMissing || scope.managedBlockDrift || missingFromBlock.length > 0;
-  const onlyBlockRolesStale = scope.staleRolesInBlock.length > 0;
-
-  const isStale = malformedFirst || legacyPinsPresent || profileDriftPresent || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
-
-  if (!isStale) {
-    return {
-      exitCode: 0,
-      result: {
-        status: 'ok',
-        roles_checked: requiredRoles,
-        extra_unmanaged: scope.extraUnmanaged,
-        autofixed: false,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      },
-    };
-  }
-
-  function staleResult() {
-    if (malformedFirst) {
-      return {
-        status: 'profiles_malformed',
-        malformed: scope.malformed,
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    if (legacyPinsPresent) {
-      return {
-        status: 'profiles_stale',
-        stale_profiles: scope.legacyPinnedProfiles,
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    if (profileDriftPresent) {
-      return {
-        status: 'profiles_stale',
-        stale_profiles: scope.staleProfiles,
-        manifest: scope.manifest,
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    if (staleFilesPresent) {
-      return {
-        status: 'profiles_stale',
-        stale_files: scope.staleFiles,
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    if (profilesMissing) {
-      return {
-        status: 'profiles_missing',
-        missing_roles: [...new Set([...missingProfiles, ...missingFromBlock])],
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    if (configStale) {
-      return {
-        status: 'config_stale',
-        missing_roles: [...new Set([...missingProfiles, ...missingFromBlock])],
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: repairCmd,
-        safe_autofix: true,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      };
-    }
-    // onlyBlockRolesStale: full current set present, retired [agents.*] inside markers.
-    return {
-      status: 'managed_block_stale',
-      stale_roles_in_block: scope.staleRolesInBlock,
-      extra_unmanaged: scope.extraUnmanaged,
-      stale: true,
-      repair: repairCmd,
-      safe_autofix: true,
-      dispatch_mode: scope.dispatch_mode,
-      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      dispatch_posture: scope.dispatch_posture,
-      model_reasoning_effort: scope.model_reasoning_effort,
-      multi_agent_enabled: scope.multi_agent_enabled,
-      dispatch_posture_warning: scope.dispatch_posture_warning,
-      max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-      max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-      effective_subagent_width: scope.effective_subagent_width,
-      min_wait_timeout_ms: scope.min_wait_timeout_ms,
-      max_wait_timeout_ms: scope.max_wait_timeout_ms,
-      default_wait_timeout_ms: scope.default_wait_timeout_ms,
-    };
-  }
-
-  // --- Stale: attempt autofix if allowed ---
-  if (noAutofix) {
-    return { exitCode: 1, result: staleResult() };
-  }
-
-  // --- Try autofix ---
-  const installerPath = installerForRepair;
-  if (!installerPath) {
-    const r = staleResult();
-    return {
-      exitCode: 5,
-      result: {
-        status: 'installer_failed',
-        missing_roles: r.missing_roles || [],
-        extra_unmanaged: scope.extraUnmanaged,
-        stale: true,
-        repair: 'install-codex-agent-profiles.js not found alongside this script.',
-        safe_autofix: false,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      },
-    };
-  }
-
-  // Every trusted project layer with a Kaola footprint participates in Codex's
-  // loaded authority. Repair every stale footprint from repository root to cwd;
-  // fixing only the first one can leave a higher stale layer active while the
-  // gate incorrectly reports success.
-  const repairTargets = activeInstallGlobal
-    ? [{
-      projectRoot: null,
-      globalInstall: true,
-      label: 'global',
-      codexDir: globalCodexDir,
-      agentsDir: path.join(globalCodexDir, 'agents', 'kaola-workflow'),
-      configContent: globalConfigContent,
-      scope: rawGlobalScope,
-    }]
-    : overrideLayers
-      .filter(layer => !scopeProfilesFresh(layer.scope))
-      .map(layer => ({
-        projectRoot: layer.projectRoot,
-        globalInstall: false,
-        label: layer.projectRoot,
-        codexDir: layer.codexDir,
-        agentsDir: layer.agentsDir,
-        configContent: layer.configContent,
-        scope: layer.scope,
-      }));
-  if (repairTargets.length === 0) {
-    const fallbackLayer = activeInstallGlobal ? null : selectedLayer;
-    repairTargets.push({
-      projectRoot: activeProjectRoot,
-      globalInstall: activeInstallGlobal,
-      label: activeInstallGlobal ? 'global' : activeProjectRoot,
-      codexDir: activeInstallGlobal ? globalCodexDir : fallbackLayer.codexDir,
-      agentsDir: activeInstallGlobal
-        ? path.join(globalCodexDir, 'agents', 'kaola-workflow')
-        : fallbackLayer.agentsDir,
-      configContent: activeInstallGlobal ? globalConfigContent : fallbackLayer.configContent,
-      scope: activeInstallGlobal ? rawGlobalScope : fallbackLayer.scope,
-    });
-  }
-
-  // Prove every target is repairable before the first installer subprocess can
-  // mutate anything. A later future manifest or ambiguous marker range is a
-  // manual/upgrade repair, not permission to partially update earlier layers.
-  const unsupportedTarget = repairTargets.find(target => target.scope.manifest === 'unsupported');
-  if (unsupportedTarget) {
-    return unsupportedManifestResult({
-      scope: { ...unsupportedTarget.scope, ...effectiveRuntime },
-      agentsDir: unsupportedTarget.agentsDir,
-      scriptDir: sourceScriptDir,
-      projectRoot: unsupportedTarget.projectRoot,
-      globalInstall: unsupportedTarget.globalInstall,
-      scopeName: unsupportedTarget.label,
-    });
-  }
-  const ambiguousTarget = repairTargets.find(target =>
-    managedMarkerRange(target.configContent).state === 'invalid');
-  if (ambiguousTarget) {
-    const targetScope = { ...ambiguousTarget.scope, ...effectiveRuntime };
-    return {
-      exitCode: 4,
-      result: {
-        status: 'autofix_unsafe',
-        scope: ambiguousTarget.label,
-        stale: true,
-        safe_autofix: false,
-        config_path: path.join(ambiguousTarget.codexDir, 'config.toml'),
-        extra_unmanaged: targetScope.extraUnmanaged,
-        repair: `Repair the ambiguous kaola-workflow managed block markers in ${path.join(ambiguousTarget.codexDir, 'config.toml')} before reinstalling any loaded layer.`,
-        dispatch_mode: targetScope.dispatch_mode,
-        multi_agent_v2_enabled: targetScope.multi_agent_v2_enabled,
-        dispatch_posture: targetScope.dispatch_posture,
-        model_reasoning_effort: targetScope.model_reasoning_effort,
-        multi_agent_enabled: targetScope.multi_agent_enabled,
-        dispatch_posture_warning: targetScope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: targetScope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: targetScope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: targetScope.effective_subagent_width,
-        min_wait_timeout_ms: targetScope.min_wait_timeout_ms,
-        max_wait_timeout_ms: targetScope.max_wait_timeout_ms,
-        default_wait_timeout_ms: targetScope.default_wait_timeout_ms,
-      },
-    };
-  }
-  for (const target of repairTargets) {
-    const repairRun = runInstaller(
-      installerPath, target.projectRoot, target.globalInstall, homeDir,
-    );
-    if (!repairRun.success) {
-      return {
-        exitCode: 5,
-        result: {
-          status: 'installer_failed',
-          scope: target.label,
-          extra_unmanaged: scope.extraUnmanaged,
-          stale: true,
-          repair: `Installer error for ${target.label}: ${repairRun.stderr}`,
-          safe_autofix: false,
-          dispatch_mode: scope.dispatch_mode,
-          multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-          dispatch_posture: scope.dispatch_posture,
-          model_reasoning_effort: scope.model_reasoning_effort,
-          multi_agent_enabled: scope.multi_agent_enabled,
-          dispatch_posture_warning: scope.dispatch_posture_warning,
-          max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-          max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-          effective_subagent_width: scope.effective_subagent_width,
-          min_wait_timeout_ms: scope.min_wait_timeout_ms,
-          max_wait_timeout_ms: scope.max_wait_timeout_ms,
-          default_wait_timeout_ms: scope.default_wait_timeout_ms,
-        },
-      };
-    }
-  }
-
-  // Re-enter the complete read-only gate so root markers, per-layer trust,
-  // authority paths, conflicts, every trusted loaded profile set, and the
-  // effective runtime overlay are all rediscovered from persisted bytes.
-  const verified = runPreflight({
-    ...opts,
-    noAutofix: true,
-  });
-  if (verified.exitCode !== 0) {
-    return {
-      exitCode: 5,
-      result: {
-        status: 'installer_failed',
-        stale: true,
-        safe_autofix: false,
-        repair: 'Installer ran, but the complete persisted-layer re-verification still refused.',
-        postcheck: verified.result,
-      },
-    };
-  }
-  return {
-    exitCode: 0,
-    result: {
-      ...verified.result,
-      autofixed: true,
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// #332 doctor mode — READ-ONLY multi-scope reporting. Never runs the installer.
-// Scopes: user (<home>/.codex), project (<projectRoot>/.codex), plugin_cache
-// (cached source profiles, exact-byte + schema proof, read-only but gate-affecting).
-// ---------------------------------------------------------------------------
-function scopeIsStale(s) {
-  return s.exists && (
-    s.malformed.length > 0 ||
-    s.legacyPinnedProfiles.length > 0 ||
-    s.staleProfiles.length > 0 ||
-    s.staleFiles.length > 0 ||
-    s.missingProfiles.length > 0 ||
-    !s.blockFound ||
-    s.managedBlockDrift ||
-    s.missingFromBlock.length > 0 ||
-    s.staleRolesInBlock.length > 0 ||
-    s.managedRoleConflictsOutside.length > 0 ||
-    s.manifest !== 'present' ||
-    s.multi_agent_v2_enabled === false
-  );
-}
-
-// Profile/config provenance only. Runtime transport is derived from the merged
-// layer stack, so an unsafe lower transport field can be safely overridden by a
-// complete higher layer without making otherwise-canonical global profiles stale.
-function scopeProfilesFresh(s) {
-  return s.exists
-    && s.malformed.length === 0
-    && s.legacyPinnedProfiles.length === 0
-    && s.staleProfiles.length === 0
-    && s.staleFiles.length === 0
-    && s.missingProfiles.length === 0
-    && s.blockFound
-    && !s.managedBlockDrift
-    && s.missingFromBlock.length === 0
-    && s.staleRolesInBlock.length === 0
-    && s.managedRoleConflictsOutside.length === 0
-    && s.manifest === 'present';
-}
-
-function scopeReport(scope, name, codexDir, repair, readOnly) {
-  return {
-    scope: name,
-    codex_dir: codexDir,
-    exists: scope.exists,
-    managed_block: scope.blockFound ? 'present' : 'absent',
-    managed_block_drift: scope.managedBlockDrift,
-    profiles: scope.rolesInBlock,
-    missing_roles: scope.missingProfiles,
-    missing_from_block: scope.missingFromBlock,
-    malformed: scope.malformed,
-    stale_profiles: [...scope.legacyPinnedProfiles, ...scope.staleProfiles],
-    profile_byte_drift: scope.staleProfiles,
-    stale_files: scope.staleFiles,
-    stale_roles_in_block: scope.staleRolesInBlock,
-    conflicting_roles_outside: scope.conflictingRolesOutside,
-    managed_role_conflicts_outside: scope.managedRoleConflictsOutside,
-    extra_unmanaged: scope.extraUnmanaged,
-    manifest: scope.manifest,
-    dispatch_mode: scope.dispatch_mode,
-    multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-    dispatch_posture: scope.dispatch_posture,
-    model_reasoning_effort: scope.model_reasoning_effort,
-    multi_agent_enabled: scope.multi_agent_enabled,
-    dispatch_posture_warning: scope.dispatch_posture_warning,
-    max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-    max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-    effective_subagent_width: scope.effective_subagent_width,
-    min_wait_timeout_ms: scope.min_wait_timeout_ms,
-    max_wait_timeout_ms: scope.max_wait_timeout_ms,
-    default_wait_timeout_ms: scope.default_wait_timeout_ms,
-    effective_config_paths: scope.effective_config_paths || [],
-    read_only: !!readOnly,
-    repair,
   };
 }
 
@@ -2919,12 +1661,6 @@ function readPluginIdentity(scriptDir, home) {
       const issue = cachePathIssue(component, 'plugin_cache_path');
       if (issue) return { identity: null, error: issue, manifestPath };
     }
-    const configDir = path.join(pluginRoot, 'config');
-    const configPath = path.join(configDir, 'agents.toml');
-    const configDirIssue = cachePathIssue(configDir, 'plugin_config_path');
-    if (configDirIssue) return { identity: null, error: configDirIssue, manifestPath };
-    const configFileIssue = cacheFileIssue(configPath, 'plugin_config_path');
-    if (configFileIssue) return { identity: null, error: configFileIssue, manifestPath };
   }
   const manifestDirIssue = cachePathIssue(manifestDir, 'plugin_manifest_path');
   if (manifestDirIssue) return { identity: null, error: manifestDirIssue, manifestPath };
@@ -2999,186 +1735,202 @@ function cachePathIssue(target, label) {
   return null;
 }
 
-function cacheFileIssue(target, label) {
-  let stat;
-  try {
-    stat = fs.lstatSync(target);
-  } catch (error) {
-    return error && error.code === 'ENOENT'
-      ? `${label}_missing: ${target}`
-      : `${label}_unsafe: cannot inspect ${target}: ${error.message}`;
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    return `${label}_unsafe: ${target} must be a regular non-symlink file`;
-  }
-  return null;
-}
-
-function pathEntryInspection(target, label) {
-  try {
-    fs.lstatSync(target);
-    return { exists: true, issue: null };
-  } catch (error) {
-    if (error && error.code === 'ENOENT') return { exists: false, issue: null };
-    return {
-      exists: false,
-      issue: `${label}_unsafe: cannot inspect ${target}: ${error.message}`,
-    };
-  }
-}
-
 function pluginCacheRootComponents(home) {
   const codexRoot = path.join(home, '.codex');
   const pluginsRoot = path.join(codexRoot, 'plugins');
   return [codexRoot, pluginsRoot, path.join(pluginsRoot, 'cache')];
 }
 
-// Find only this installed plugin's exact name/version cache under
-// <home>/.codex/plugins/cache. Other plugins and old versions are not part of
-// this preflight's authority and must not affect its result.
-function findPluginCacheAgentDirs(home, identity) {
-  const cacheRoot = path.join(home, '.codex', 'plugins', 'cache');
-  const out = [];
-  const cacheEntry = pathEntryInspection(cacheRoot, 'plugin_cache_path');
-  if (cacheEntry.issue) {
-    return [{
-      dir: cacheRoot,
-      plugin: identity.name,
-      marketplace: null,
-      version: identity.version,
-      manifestPath: null,
-      reasons: [cacheEntry.issue],
-    }];
+function projectRootMarkersInvalidResult(configPath) {
+  return {
+    exitCode: 4,
+    result: {
+      status: 'project_root_markers_invalid',
+      stale: true,
+      safe_autofix: false,
+      config_path: configPath,
+      repair: 'Set top-level project_root_markers to exactly one TOML array of strings, then start a fresh Codex session.',
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Core preflight check
+// ---------------------------------------------------------------------------
+function runPreflight(opts) {
+  const {
+    projectRoot,
+    noAutofix,
+    scriptDir,
+    home,
+    codexVersion,
+  } = opts;
+  const homeDir = home || os.homedir();
+  const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, homeDir);
+
+  // --- #775: Codex version floor, checked before anything else — nothing downstream matters if
+  // the installed Codex predates the multi_agent_v2 re-baseline. ---
+  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
+  if (!codexVersionSupported(versionInfo.version)) {
+    return codexVersionUnsupportedResult(versionInfo);
   }
-  if (!cacheEntry.exists) return out;
-  const rootIssue = pluginCacheRootComponents(home)
-    .map(component => cachePathIssue(component, 'plugin_cache_path'))
-    .find(Boolean) || null;
-  if (rootIssue) {
-    return [{
-      dir: cacheRoot,
-      plugin: identity.name,
-      marketplace: null,
-      version: identity.version,
-      manifestPath: null,
-      reasons: [rootIssue],
-    }];
+
+  // --- Config-layer safety: HOME always, project layers only once Codex loads them. ---
+  const layers = discoverCodexLayers(projectRoot, homeDir);
+  if (!layers.globalConfigRead.ok) return unsafeConfigLayerResult(layers.globalConfigRead);
+  if (!layers.markerConfig.valid) {
+    return projectRootMarkersInvalidResult(layers.globalConfigRead.configPath);
   }
-  let marketplaces = [];
-  try {
-    marketplaces = fs.readdirSync(cacheRoot);
-  } catch (error) {
-    return [{
-      dir: cacheRoot,
-      plugin: identity.name,
-      marketplace: null,
-      version: identity.version,
-      manifestPath: null,
-      reasons: [`plugin_cache_path_unsafe: cannot list ${cacheRoot}: ${error.message}`],
-    }];
+  const globalAuthorityIssue = scopeAuthorityIssue(layers.globalCodexDir);
+  if (globalAuthorityIssue) {
+    return unsafeScopeAuthorityResult(layers.globalCodexDir, 'global', globalAuthorityIssue);
   }
-  for (const mk of marketplaces) {
-    const mkDir = path.join(cacheRoot, mk);
-    const mkIssue = cachePathIssue(mkDir, 'plugin_cache_path');
-    if (mkIssue) {
-      out.push({
-        dir: mkDir,
-        plugin: identity.name,
-        marketplace: mk,
-        version: identity.version,
-        manifestPath: null,
-        reasons: [mkIssue],
-      });
-      continue;
-    }
-    const pluginDir = path.join(mkDir, identity.name);
-    const pluginEntry = pathEntryInspection(pluginDir, 'plugin_cache_path');
-    if (pluginEntry.issue) {
-      out.push({
-        dir: pluginDir,
-        plugin: identity.name,
-        marketplace: mk,
-        version: identity.version,
-        manifestPath: null,
-        reasons: [pluginEntry.issue],
-      });
-      continue;
-    }
-    if (!pluginEntry.exists) continue;
-    const reasons = [];
-    const pluginIssue = cachePathIssue(pluginDir, 'plugin_cache_path');
-    if (pluginIssue) reasons.push(pluginIssue);
-    const versionDir = path.join(pluginDir, identity.version);
-    const versionEntry = pluginIssue
-      ? { exists: false, issue: null }
-      : pathEntryInspection(versionDir, 'plugin_cache_path');
-    if (versionEntry.issue) {
-      reasons.push(versionEntry.issue);
-    } else if (!pluginIssue && !versionEntry.exists) {
-      continue;
-    }
-    const versionIssue = (pluginIssue || versionEntry.issue)
-      ? null
-      : cachePathIssue(versionDir, 'plugin_cache_path');
-    if (versionIssue) reasons.push(versionIssue);
-    const agentsDir = path.join(versionDir, 'agents');
-    const configDir = path.join(versionDir, 'config');
-    const configPath = path.join(configDir, 'agents.toml');
-    const manifestDir = path.join(versionDir, '.codex-plugin');
-    const manifestPath = path.join(manifestDir, 'plugin.json');
-    if (reasons.length === 0) {
-      const agentsIssue = cachePathIssue(agentsDir, 'plugin_cache_agents_path');
-      if (agentsIssue) reasons.push(agentsIssue);
-      const configDirIssue = cachePathIssue(configDir, 'plugin_config_path');
-      if (configDirIssue) reasons.push(configDirIssue);
-      if (!configDirIssue) {
-        const configFileIssue = cacheFileIssue(configPath, 'plugin_config_path');
-        if (configFileIssue) reasons.push(configFileIssue);
-      }
-      const manifestDirIssue = cachePathIssue(manifestDir, 'plugin_manifest_path');
-      if (manifestDirIssue) reasons.push(manifestDirIssue);
-      if (!manifestDirIssue) {
-        let manifestStat;
-        try { manifestStat = fs.lstatSync(manifestPath); } catch (error) {
-          reasons.push(`plugin_manifest_unsafe: cannot inspect ${manifestPath}: ${error.message}`);
-        }
-        if (manifestStat && (manifestStat.isSymbolicLink() || !manifestStat.isFile())) {
-          reasons.push(`plugin_manifest_unsafe: ${manifestPath} must be a regular non-symlink file`);
-        }
-      }
-    }
-    if (reasons.length === 0) {
-      try {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        if (manifest.name !== identity.name) {
-          reasons.push(`plugin_manifest_name_mismatch: expected=${identity.name} got=${String(manifest.name)}`);
-        }
-        if (manifest.version !== identity.version) {
-          reasons.push(`plugin_manifest_version_mismatch: expected=${identity.version} got=${String(manifest.version)}`);
-        }
-      } catch (error) {
-        reasons.push(`plugin_manifest_invalid: cannot parse ${manifestPath}: ${error.message}`);
-      }
-    }
-    out.push({
-      dir: agentsDir,
-      plugin: identity.name,
-      marketplace: mk,
-      version: identity.version,
-      configPath,
-      manifestPath,
-      reasons,
-    });
+  const loadedProjectLayers = layers.projectLayers.filter(layer => layer.trust === 'trusted');
+  const unsafeProjectConfig = loadedProjectLayers.find(layer => !layer.configRead.ok);
+  if (unsafeProjectConfig) return unsafeConfigLayerResult(unsafeProjectConfig.configRead);
+  for (const layer of loadedProjectLayers) {
+    const issue = scopeAuthorityIssue(layer.codexDir);
+    if (issue) return unsafeScopeAuthorityResult(layer.codexDir, 'project', issue);
   }
-  return out;
+
+  const effectiveRuntime = deriveEffectiveRuntime([
+    { content: layers.globalConfigContent, configPath: layers.globalConfigRead.configPath },
+    ...loadedProjectLayers.map(layer => ({
+      content: layer.configRead.content,
+      configPath: layer.configRead.configPath,
+    })),
+  ]);
+
+  // --- Retired-role residue ---
+  const installerFound = findInstaller(sourceScriptDir);
+  const installerPath = installerFound || path.join(sourceScriptDir, INSTALLER_BASENAME);
+  const residueScopes = collectResidueScopes(layers).filter(scope => scope.residue.present);
+  if (residueScopes.length === 0) {
+    return {
+      exitCode: 0,
+      result: {
+        status: 'ok',
+        autofixed: false,
+        project_trust: layers.projectTrust,
+        scopes_checked: [layers.globalCodexDir, ...layers.projectLayers.map(layer => layer.codexDir)],
+        ...runtimeFields(effectiveRuntime),
+      },
+    };
+  }
+
+  const finding = retiredRoleResidueResult(
+    residueScopes, effectiveRuntime, installerPath, !!installerFound, homeDir);
+  if (noAutofix) return finding;
+
+  // --- Autofix: only the installer removes residue; this file never deletes anything. ---
+  if (!installerFound) {
+    return {
+      exitCode: 5,
+      result: {
+        status: 'installer_failed',
+        stale: true,
+        safe_autofix: false,
+        residue_paths: finding.result.residue_paths,
+        residue: finding.result.residue,
+        repair: `${INSTALLER_BASENAME} not found alongside this script; refresh the kaola-workflow plugin, then re-run this preflight.`,
+        ...runtimeFields(effectiveRuntime),
+      },
+    };
+  }
+
+  // Prove every target is repairable before the first installer subprocess can mutate anything:
+  // an unbalanced marker pair is a manual repair, not permission to partially clean other scopes.
+  const ambiguousScope = residueScopes.find(scope => scope.residue.managed_block === 'invalid');
+  if (ambiguousScope) {
+    return {
+      exitCode: 4,
+      result: {
+        status: 'autofix_unsafe',
+        scope: ambiguousScope.label,
+        stale: true,
+        safe_autofix: false,
+        config_path: ambiguousScope.residue.config_path,
+        residue_paths: finding.result.residue_paths,
+        residue: finding.result.residue,
+        repair: residueScopeRepair(installerPath, ambiguousScope, homeDir),
+        ...runtimeFields(effectiveRuntime),
+      },
+    };
+  }
+
+  for (const scope of residueScopes) {
+    const repairRun = runInstaller(installerPath, scope.projectRoot, scope.globalInstall, homeDir);
+    if (!repairRun.success) {
+      return {
+        exitCode: 5,
+        result: {
+          status: 'installer_failed',
+          scope: scope.label,
+          stale: true,
+          safe_autofix: false,
+          residue_paths: finding.result.residue_paths,
+          residue: finding.result.residue,
+          repair: `Installer error for ${scope.label}: ${repairRun.stderr}`,
+          ...runtimeFields(effectiveRuntime),
+        },
+      };
+    }
+  }
+
+  // Re-enter the complete read-only gate so every layer is rediscovered from persisted bytes.
+  const verified = runPreflight({
+    ...opts,
+    noAutofix: true,
+  });
+  if (verified.exitCode !== 0) {
+    return {
+      exitCode: 5,
+      result: {
+        status: 'installer_failed',
+        stale: true,
+        safe_autofix: false,
+        repair: 'Installer ran, but the complete persisted-layer re-verification still refused.',
+        postcheck: verified.result,
+      },
+    };
+  }
+  return {
+    exitCode: 0,
+    result: {
+      ...verified.result,
+      autofixed: true,
+      autofixed_residue_paths: finding.result.residue_paths,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Doctor mode — READ-ONLY multi-scope reporting. Never runs the installer.
+// Scopes: user (<home>/.codex) and every project .codex layer root -> cwd.
+// ---------------------------------------------------------------------------
+function doctorScopeReport(name, residue, runtime, repair, extra = {}) {
+  return {
+    scope: name,
+    codex_dir: residue.codex_dir,
+    config_path: residue.config_path,
+    exists: fs.existsSync(residue.codex_dir),
+    ...extra,
+    retired_role_residue: residue.present,
+    retired_profile_files: residue.retired_profile_files,
+    managed_block: residue.managed_block,
+    residue_paths: residue.residue_paths,
+    ...runtimeFields(runtime),
+    read_only: true,
+    repair: residue.present ? repair : null,
+  };
 }
 
 function runDoctor(opts) {
-  const { projectRoot, home, scriptDir, codexVersion } = opts;
+  const { projectRoot, scriptDir, codexVersion } = opts;
+  const home = opts.home || os.homedir();
   const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, home);
   // #775: doctor is read-only, so it REPORTS the version floor rather than hard-refusing at exit 7
-  // (that typed refusal is runPreflight's job); an unsupported version still folds into `gating`
-  // below so `--doctor` surfaces it rather than silently reporting "ok".
+  // (that typed refusal is runPreflight's job); an unsupported version still folds into `gating`.
   const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
   const codexVersionReport = {
     detected_version: versionInfo.version,
@@ -3198,348 +1950,143 @@ function runDoctor(opts) {
       },
     };
   }
-  const pluginIdentity = pluginIdentityRead.identity;
-  const template = readTemplateRoles(sourceScriptDir);
-  const { roles: templateRoles, entries: templateEntries, content: templateContent,
-    error: templateError, sourceErrors = [] } = template;
+  const installerPath = findInstaller(sourceScriptDir)
+    || path.join(sourceScriptDir, INSTALLER_BASENAME);
 
-  if (templateError) {
-    return {
-      exitCode: 2,
-      result: { status: 'template_missing', error: templateError, scopes: [] },
-    };
-  }
-
-  const scopes = [];
-
-  scopes.push({
-    scope: 'repository',
-    codex_dir: path.join(sourceScriptDir, '..', 'agents'),
-    exists: true,
-    managed_block: 'n/a',
-    managed_block_drift: false,
-    profiles: templateRoles,
-    missing_roles: [],
-    missing_from_block: [],
-    malformed: sourceErrors,
-    stale_profiles: [],
-    profile_byte_drift: [],
-    stale_files: [],
-    stale_roles_in_block: [],
-    conflicting_roles_outside: [],
-    extra_unmanaged: [],
-    manifest: 'n/a',
-    read_only: true,
-    repair: repositoryRepairCommand(sourceScriptDir),
+  const layers = discoverCodexLayers(projectRoot, home);
+  const userConfig = layers.globalConfigRead;
+  const refused = (scopes, extra = {}) => ({
+    exitCode: 1,
+    result: {
+      status: 'stale',
+      project_trust: layers.projectTrust,
+      codex_version: codexVersionReport,
+      plugin: pluginIdentityRead.identity,
+      ...extra,
+      scopes,
+    },
   });
 
-  // User + every project layer share the same persisted-config overlay as the
-  // normal gate. Refuse unsafe config paths without following them.
-  const userCodex = path.join(home, '.codex');
-  const userConfig = readConfigLayer(userCodex);
-  const markerConfig = userConfig.ok
-    ? parseProjectRootMarkers(userConfig.content)
-    : { valid: true, markers: ['.git'] };
-  if (!markerConfig.valid) {
-    scopes.push({
-      scope: 'user', codex_dir: userCodex, config_path: userConfig.configPath,
-      exists: true, project_root_markers_invalid: true,
-      managed_block: 'n/a', managed_block_drift: false,
-      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
-      stale_profiles: [], profile_byte_drift: [], stale_files: [],
-      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
-      manifest: 'n/a', read_only: true,
-      repair: 'Set top-level project_root_markers to exactly one TOML array of strings.',
-    });
-    return { exitCode: 1, result: { status: 'stale', scopes } };
-  }
-  const detectedProjectRoot = findProjectRoot(projectRoot, markerConfig.markers);
-  const repoRoot = findRepoRootForTrust(projectRoot);
-  const projectDirs = projectCodexLayerDirs(projectRoot, markerConfig.markers);
-  const projectConfigs = projectDirs.map(readConfigLayer);
-  const layerTrustLevels = projectDirs.map(projectCodex => userConfig.ok
-    ? projectTrustLevel(
-      userConfig.content,
-      path.dirname(projectCodex),
-      detectedProjectRoot,
-      repoRoot,
-    )
-    : 'unknown');
-  const projectTrust = layerTrustLevels[layerTrustLevels.length - 1] || 'unknown';
-  // Project config is not part of Codex's runtime authority until the project is
-  // trusted. Unsafe ignored paths are reported as ignored, not followed or gated.
-  const unsafeConfigs = [userConfig,
-    ...projectConfigs.filter((configRead, index) => layerTrustLevels[index] === 'trusted')]
-    .filter(configRead => !configRead.ok);
-  for (const unsafe of unsafeConfigs) {
-    scopes.push({
-      scope: unsafe === userConfig ? 'user' : 'project_layer',
-      codex_dir: path.dirname(unsafe.configPath),
-      config_path: unsafe.configPath,
+  if (!layers.markerConfig.valid) {
+    return refused([{
+      scope: 'user',
+      codex_dir: layers.globalCodexDir,
+      config_path: userConfig.configPath,
       exists: true,
-      config_layer_unsafe: true,
-      error: unsafe.error,
-      managed_block: 'n/a',
-      managed_block_drift: false,
-      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
-      stale_profiles: [], profile_byte_drift: [], stale_files: [],
-      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
-      manifest: 'n/a', read_only: true,
-      repair: unsafeConfigLayerResult(unsafe).result.repair,
-    });
-  }
-  if (unsafeConfigs.length > 0) {
-    return { exitCode: 1, result: { status: 'stale', scopes } };
+      project_root_markers_invalid: true,
+      read_only: true,
+      repair: projectRootMarkersInvalidResult(userConfig.configPath).result.repair,
+    }]);
   }
 
-  const authorityChecks = [
-    { codexDir: userCodex, scope: 'user' },
-    ...projectDirs.filter((_, index) => layerTrustLevels[index] === 'trusted')
-      .map(codexDir => ({ codexDir, scope: 'project_layer' })),
+  // Project config is not part of Codex's runtime authority until the project is trusted. Unsafe
+  // ignored paths are reported as ignored, not followed or gated.
+  const loadedProjectLayers = layers.projectLayers.filter(layer => layer.trust === 'trusted');
+  const unsafeConfigs = [
+    ...(userConfig.ok ? [] : [{ scope: 'user', configRead: userConfig }]),
+    ...loadedProjectLayers.filter(layer => !layer.configRead.ok)
+      .map(layer => ({ scope: 'project_layer', configRead: layer.configRead })),
   ];
-  const authorityIssues = authorityChecks.map(check => ({
-    ...check,
-    issue: scopeAuthorityIssue(check.codexDir, templateRoles),
-  })).filter(check => check.issue);
-  for (const authority of authorityIssues) {
-    scopes.push({
+  if (unsafeConfigs.length > 0) {
+    return refused(unsafeConfigs.map(({ scope, configRead }) => ({
+      scope,
+      codex_dir: path.dirname(configRead.configPath),
+      config_path: configRead.configPath,
+      exists: true,
+      config_layer_unsafe: true,
+      error: configRead.error,
+      read_only: true,
+      repair: unsafeConfigLayerResult(configRead).result.repair,
+    })));
+  }
+
+  const authorityIssues = [
+    { codexDir: layers.globalCodexDir, scope: 'user' },
+    ...loadedProjectLayers.map(layer => ({ codexDir: layer.codexDir, scope: 'project_layer' })),
+  ].map(check => ({ ...check, issue: scopeAuthorityIssue(check.codexDir) }))
+    .filter(check => check.issue);
+  if (authorityIssues.length > 0) {
+    return refused(authorityIssues.map(authority => ({
       scope: authority.scope,
       codex_dir: authority.codexDir,
       exists: true,
       scope_authority_unsafe: true,
       authority_path: authority.issue.path,
       error: authority.issue.error,
-      managed_block: 'n/a', managed_block_drift: false,
-      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
-      stale_profiles: [], profile_byte_drift: [], stale_files: [],
-      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
-      manifest: 'n/a', read_only: true,
+      read_only: true,
       repair: unsafeScopeAuthorityResult(
         authority.codexDir, authority.scope, authority.issue,
       ).result.repair,
-    });
-  }
-  if (authorityIssues.length > 0) {
-    return {
-      exitCode: 1,
-      result: {
-        status: 'stale',
-        scope_authority_unsafe: true,
-        project_trust: projectTrust,
-        scopes,
-      },
-    };
+    })), { scope_authority_unsafe: true });
   }
 
   const effectiveRuntime = deriveEffectiveRuntime([
-    ...(userConfig.ok ? [{ content: userConfig.content, configPath: userConfig.configPath }] : []),
-    ...projectConfigs
-      .filter((configRead, index) => configRead.ok && layerTrustLevels[index] === 'trusted')
-      .map(configRead => ({
-      content: configRead.content, configPath: configRead.configPath,
-      })),
+    { content: layers.globalConfigContent, configPath: userConfig.configPath },
+    ...loadedProjectLayers.map(layer => ({
+      content: layer.configRead.content, configPath: layer.configRead.configPath,
+    })),
   ]);
 
-  const userScopeRaw = inspectScope({
-    codexDir: userCodex, templateRoles, templateEntries, templateContent,
-    configContentOverride: userConfig.content,
+  const residueByDir = new Map(collectResidueScopes(layers)
+    .map(scope => [scope.residue.codex_dir, scope]));
+  const scopes = [];
+  const userScope = residueByDir.get(layers.globalCodexDir);
+  scopes.push(doctorScopeReport(
+    'user', userScope.residue, effectiveRuntime,
+    residueScopeRepair(installerPath, userScope, home),
+  ));
+  layers.projectLayers.forEach((layer, index) => {
+    const name = index === layers.projectLayers.length - 1 ? 'project' : 'project_layer';
+    const extra = {
+      project_trust: layer.trust,
+      config_layer_ignored: layer.trust !== 'trusted',
+    };
+    if (!layer.configRead.ok) extra.ignored_config_error = layer.configRead.error;
+    const residueScope = residueByDir.get(layer.codexDir);
+    if (!residueScope) {
+      // An ignored layer behind an unsafe path: reported, never followed.
+      const issue = scopeAuthorityIssue(layer.codexDir);
+      extra.ignored_authority_error = issue ? `${issue.path}: ${issue.error}` : null;
+      scopes.push(doctorScopeReport(name, {
+        codex_dir: layer.codexDir,
+        config_path: layer.configRead.configPath,
+        retired_profile_files: [],
+        managed_block: 'n/a',
+        residue_paths: [],
+        present: false,
+      }, effectiveRuntime, null, extra));
+      return;
+    }
+    scopes.push(doctorScopeReport(
+      name, residueScope.residue, effectiveRuntime,
+      residueScopeRepair(installerPath, residueScope, home), extra,
+    ));
   });
-  const userScope = { ...userScopeRaw, ...effectiveRuntime };
-  const userReport = scopeReport(
-    userScope, 'user', userCodex,
-    `node ${path.join(sourceScriptDir, 'install-codex-agent-profiles.js')} ${home}`,
-    false,
-  );
-  const userKaolaConflicts = userScopeRaw.managedRoleConflictsOutside;
-  userReport.kaola_footprint = fs.existsSync(path.join(userCodex, 'agents', 'kaola-workflow'))
-    || userScope.blockFound || userScope.rolesInBlock.length > 0
-    || userKaolaConflicts.length > 0;
-  userReport.kaola_state = userReport.kaola_footprint ? 'configured' : 'not_installed';
-  scopes.push(userReport);
 
-  const projectScopes = [];
-  for (let index = 0; index < projectDirs.length; index += 1) {
-    const projectCodex = projectDirs[index];
-    const raw = inspectScope({
-      codexDir: projectCodex, templateRoles, templateEntries, templateContent,
-      configContentOverride: projectConfigs[index].ok ? projectConfigs[index].content : '',
-      inspectProfiles: layerTrustLevels[index] === 'trusted',
-    });
-    const scope = { ...raw, ...effectiveRuntime };
-    const kaolaConflicts = raw.managedRoleConflictsOutside;
-    let agentsFootprint = false;
-    try {
-      fs.lstatSync(path.join(projectCodex, 'agents', 'kaola-workflow'));
-      agentsFootprint = true;
-    } catch (_) {}
-    const footprint = agentsFootprint
-      || raw.blockFound || raw.rolesInBlock.length > 0 || kaolaConflicts.length > 0;
-    const name = index === projectDirs.length - 1 ? 'project' : 'project_layer';
-    const report = scopeReport(
-      scope, name, projectCodex,
-      `node ${path.join(sourceScriptDir, 'install-codex-agent-profiles.js')} ${path.dirname(projectCodex)}`,
-      false,
-    );
-    report.kaola_footprint = footprint;
-    report.kaola_state = footprint ? 'configured' : 'not_installed';
-    report.project_trust = layerTrustLevels[index];
-    report.config_layer_ignored = layerTrustLevels[index] !== 'trusted';
-    if (!projectConfigs[index].ok && layerTrustLevels[index] !== 'trusted') {
-      report.ignored_config_error = projectConfigs[index].error;
-    }
-    scopes.push(report);
-    projectScopes.push({ scope, footprint, trust: layerTrustLevels[index] });
-  }
-
-  // plugin_cache scope(s) — exact-byte + schema proof, read-only but gate-affecting.
-  for (const c of findPluginCacheAgentDirs(home, pluginIdentity)) {
-    const malformed = c.reasons.length > 0
-      ? [{ role: 'plugin-cache', file: c.manifestPath || c.dir, reasons: [...c.reasons] }]
-      : [];
-    const staleProfiles = [];
-    const staleFiles = [];
-    const missingRoles = [];
-    let names = [];
-    if (c.reasons.length === 0) {
-      try {
-        names = fs.readdirSync(c.dir);
-      } catch (error) {
-        malformed.push({
-          role: 'plugin-cache',
-          file: c.dir,
-          reasons: [`plugin_cache_agents_path_unsafe: cannot list ${c.dir}: ${error.message}`],
-        });
-      }
-      const expectedByFile = new Map((templateEntries || []).map(entry => [entry.basename, entry]));
-      for (const entry of (templateEntries || [])) {
-        if (entry.basename && !names.includes(entry.basename)) missingRoles.push(entry.role);
-      }
-      let cachedConfig = null;
-      try { cachedConfig = fs.readFileSync(c.configPath); } catch (error) {
-        malformed.push({
-          role: 'plugin-config',
-          file: c.configPath,
-          reasons: [`plugin_config_path_unsafe: cannot read ${c.configPath}: ${error.message}`],
-        });
-      }
-      if (cachedConfig && !cachedConfig.equals(Buffer.from(templateContent, 'utf8'))) {
-        malformed.push({
-          role: 'plugin-config',
-          file: c.configPath,
-          reasons: ['plugin_config_bytes_mismatch: cached config/agents.toml differs from bundled source'],
-        });
-      }
-      for (const name of names) {
-        if (!name.endsWith('.toml')) continue;
-        const expected = expectedByFile.get(name) || null;
-        if (!expected) {
-          staleFiles.push(name);
-          continue;
-        }
-        const role = expected.role;
-        const profilePath = path.join(c.dir, name);
-        let profileStat;
-        try { profileStat = fs.lstatSync(profilePath); } catch (error) {
-          malformed.push({
-            role,
-            file: name,
-            reasons: [`plugin_cache_profile_unsafe: cannot inspect ${profilePath}: ${error.message}`],
-          });
-          continue;
-        }
-        if (profileStat.isSymbolicLink() || !profileStat.isFile()) {
-          malformed.push({
-            role,
-            file: name,
-            reasons: [`plugin_cache_profile_unsafe: ${profilePath} must be a regular non-symlink file`],
-          });
-          continue;
-        }
-        let txt = '';
-        try { txt = fs.readFileSync(profilePath, 'utf8'); } catch { txt = ''; }
-        const reasons = validateProfileText(txt, role, expected);
-        const sourceDrift = typeof expected.sourceText === 'string' && txt !== expected.sourceText;
-        if (sourceDrift) {
-          staleProfiles.push({ role, file: name, reasons: [
-            'profile_bytes_mismatch: cached profile differs from bundled source', ...reasons,
-          ] });
-        } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
-      }
-    }
-    malformed.sort((a, b) => a.role.localeCompare(b.role));
-    staleProfiles.sort((a, b) => a.role.localeCompare(b.role));
-    staleFiles.sort();
-    missingRoles.sort();
-    scopes.push({
-      scope: 'plugin_cache',
-      codex_dir: c.dir,
-      marketplace: c.marketplace,
-      plugin_name: c.plugin,
-      plugin_version: c.version,
-      config_path: c.configPath || null,
-      plugin_manifest: c.manifestPath,
-      exists: true,
-      managed_block: 'n/a',
-      managed_block_drift: false,
-      profiles: [],
-      missing_roles: missingRoles,
-      missing_from_block: [],
-      malformed,
-      stale_profiles: staleProfiles,
-      profile_byte_drift: staleProfiles,
-      stale_files: staleFiles,
-      stale_roles_in_block: [],
-      conflicting_roles_outside: [],
-      extra_unmanaged: [],
-      manifest: c.reasons.length === 0 ? 'present' : 'invalid',
-      dispatch_mode: 'n/a',
-      multi_agent_v2_enabled: false,
-      dispatch_posture: 'n/a',
-      model_reasoning_effort: null,
-      multi_agent_enabled: false,
-      dispatch_posture_warning: null,
-      max_concurrent_threads_per_session: null,
-      max_concurrent_threads_per_session_source: 'n/a',
-      effective_subagent_width: null,
-      min_wait_timeout_ms: null,
-      max_wait_timeout_ms: null,
-      default_wait_timeout_ms: null,
-      read_only: true,
-      repair: c.marketplace
-        ? `codex plugin remove ${c.plugin}@${c.marketplace} && codex plugin add ${c.plugin}@${c.marketplace}  # refresh plugin cache`
-        : `Replace ${c.dir} with a regular non-symlink plugin cache directory, then refresh ${c.plugin}.`,
-    });
-  }
-
-  const pluginCacheStale = scopes.some(scope => scope.scope === 'plugin_cache'
-    && (scope.malformed.length > 0 || scope.stale_profiles.length > 0
-      || scope.missing_roles.length > 0 || scope.stale_files.length > 0));
-  // #775: multi_agent_v2 (`features.multi_agent_v2`) is a required engine feature; an installed-but-
-  // not-enabled scope is exactly what scopeIsStale's `multi_agent_v2_enabled === false` branch
-  // already reports (kaola_footprint-gated), same as effectiveTransportUnsafe did pre-#775.
-  const effectiveV2Unavailable = userReport.kaola_footprint && !effectiveRuntime.multi_agent_v2_enabled;
-  const projectStale = projectScopes.some(item =>
-    item.trust === 'trusted' && item.footprint && scopeIsStale(item.scope));
-  const projectTrustRequired = projectScopes.some(item =>
-    item.trust !== 'trusted' && item.footprint);
-  const gating = sourceErrors.length > 0
-    || unsafeConfigs.length > 0
-    || (userReport.kaola_footprint && scopeIsStale(userScope))
-    || projectStale
-    || projectTrustRequired
-    || effectiveV2Unavailable
-    || pluginCacheStale
-    || !codexVersionReport.supported;
+  const residuePaths = scopes.flatMap(scope => scope.residue_paths || []);
+  const gating = residuePaths.length > 0 || !codexVersionReport.supported;
   return {
     exitCode: gating ? 1 : 0,
     result: {
       status: gating ? 'stale' : 'ok',
-      project_trust: projectTrust,
-      project_trust_required: projectTrustRequired,
+      project_trust: layers.projectTrust,
       codex_version: codexVersionReport,
+      plugin: pluginIdentityRead.identity,
+      retired_role_residue: residuePaths.length > 0,
+      residue_paths: residuePaths,
+      ...runtimeFields(effectiveRuntime),
       scopes,
     },
   };
+}
+
+// MultiAgentV2 bounds line: report-only, never affects exitCode. null when v2 not active.
+function boundsNote(result) {
+  if (result.max_concurrent_threads_per_session === null
+      || result.max_concurrent_threads_per_session === undefined) return null;
+  return `multi_agent_v2 effective subagent width ${result.effective_subagent_width} `
+    + `(max_concurrent_threads_per_session=${result.max_concurrent_threads_per_session} `
+    + `[${result.max_concurrent_threads_per_session_source}])`;
 }
 
 // ---------------------------------------------------------------------------
@@ -3562,37 +2109,15 @@ if (require.main === module) {
     if (json || exitCode !== 0) {
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else {
-      if (result.codex_version && !result.codex_version.supported) {
-        process.stdout.write(`codex_version: unsupported (detected=${result.codex_version.detected_version || 'unknown'} required=${result.codex_version.required_version})\n`);
-      }
       for (const s of (result.scopes || [])) {
-        const stale = s.kaola_footprint === false
-          ? false
-          : s.scope === 'repository'
-          ? s.malformed.length > 0
-          : (s.scope === 'plugin_cache'
-            ? (s.malformed.length > 0 || s.stale_profiles.length > 0
-              || s.missing_roles.length > 0 || s.stale_files.length > 0)
-            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.managed_block_drift || s.missing_from_block.length || s.stale_roles_in_block.length || (s.managed_role_conflicts_outside || []).length || s.manifest !== 'present' || s.multi_agent_v2_enabled === false)));
-        const state = s.kaola_footprint === false
-          ? 'not-installed'
-          : (!s.exists ? 'absent' : (stale ? 'stale' : 'ok'));
+        const state = s.config_layer_ignored ? 'ok (ignored: project not trusted)' : 'ok';
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
-        if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
-        if (stale && s.multi_agent_v2_enabled === false) {
-          process.stdout.write(`  repair: ${CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION}\n`);
-        }
-        // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode.
-        if (s.dispatch_posture_warning) process.stdout.write(`  warn: ${s.dispatch_posture_warning}\n`);
-        // MultiAgentV2 bounds: report-only, never affects exitCode. null when v2 not active.
-        if (s.max_concurrent_threads_per_session !== null) {
-          process.stdout.write(
-            `  multi_agent_v2: effective subagent width ${s.effective_subagent_width} `
-            + `(max_concurrent_threads_per_session=${s.max_concurrent_threads_per_session} `
-            + `[${s.max_concurrent_threads_per_session_source}])\n`
-          );
-        }
       }
+      process.stdout.write(`multi_agent_v2: ${result.multi_agent_v2_enabled ? 'enabled' : 'not enabled'}\n`);
+      // #598: report-only — the dispatch-posture note never affects exitCode.
+      if (result.dispatch_posture_warning) process.stdout.write(`note: ${result.dispatch_posture_warning}\n`);
+      const note = boundsNote(result);
+      if (note) process.stdout.write(`note: ${note}\n`);
     }
     process.exit(exitCode);
   }
@@ -3609,23 +2134,16 @@ if (require.main === module) {
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   } else {
     // Fresh (exit 0, no --json): print human-readable summary
-    const autofixNote = result.autofixed ? ' (autofixed)' : '';
+    const autofixNote = result.autofixed ? ' (retired role residue removed by the installer)' : '';
     process.stdout.write(
-      `ok: ${result.roles_checked.length} roles verified${autofixNote}\n`
+      `ok: no retired role residue; multi_agent_v2 ${result.multi_agent_v2_enabled ? 'enabled' : 'not enabled'}${autofixNote}\n`
     );
-    // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode
-    // (an otherwise-fresh preflight must never be reddened by this report).
+    // #598: report-only — the dispatch-posture note never affects exitCode.
     if (result.dispatch_posture_warning) {
-      process.stdout.write(`warn: ${result.dispatch_posture_warning}\n`);
+      process.stdout.write(`note: ${result.dispatch_posture_warning}\n`);
     }
-    // MultiAgentV2 bounds: report-only, never affects exitCode. null when v2 not active.
-    if (result.max_concurrent_threads_per_session !== null) {
-      process.stdout.write(
-        `note: multi_agent_v2 effective subagent width ${result.effective_subagent_width} `
-        + `(max_concurrent_threads_per_session=${result.max_concurrent_threads_per_session} `
-        + `[${result.max_concurrent_threads_per_session_source}])\n`
-      );
-    }
+    const note = boundsNote(result);
+    if (note) process.stdout.write(`note: ${note}\n`);
   }
 
   process.exit(exitCode);
@@ -3634,23 +2152,13 @@ if (require.main === module) {
 module.exports = {
   runPreflight,
   runDoctor,
-  readTemplateRoles,
-  checkManagedBlock,
-  checkProfiles,
-  validateProfileText,
-  classifyProfilePinPosture,
-  inspectScope,
-  readManifest,
+  parseArgs,
+  // Retired-role residue (read-only; the installer owns removal).
+  RETIRED_ROLE_RESIDUE_STATUS,
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
-  EFFORT_VALUES,
-  CODEX_PINNED_ROLES,
-  CODEX_ORCHESTRATION_ROLES,
-  CODEX_STANDARD_MODEL,
-  CODEX_STANDARD_EFFORT,
-  CODEX_REASONING_MODEL,
-  CODEX_REASONING_EFFORT,
-  AGENT_SOURCE_REPAIR,
+  inspectRetiredRoleResidue,
+  managedMarkerRange,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
   deriveDispatchPosture,
@@ -3664,13 +2172,11 @@ module.exports = {
   deriveEffectiveRuntime,
   OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
   MULTI_AGENT_V2_BOUNDS_NOTE,
-  // #775: Codex 0.145 version floor + the two new typed refusals (pure; exported for unit tests).
+  // #775: Codex 0.145 version floor and its typed refusal (pure; exported for unit tests).
   CODEX_MIN_VERSION,
   compareCodexVersion,
   parseCodexVersionOutput,
   codexVersionSupported,
   resolveCodexVersion,
   codexVersionUnsupportedRemediation,
-  CODEX_MULTI_AGENT_V2_REQUIRED_STATUS,
-  CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION,
 };
