@@ -8514,6 +8514,168 @@ function testSinkPrLinkedPosturePublishesArchive() {
   }
 }
 
+// #1098 T9 (F1) — a REFUSED archive push must be recovered by the next run. Run 1 creates the PR and
+// builds the archive commit, but the remote hook refuses the push: exit 1 and the branch is ahead of
+// origin. Run 2 reuses the PR; `commitPathsOntoCandidate` sees the tree already equals the tip and
+// returns without committing, so only the PUSH can make the archive visible. Before this test the
+// reuse path never pushed and run 2 exited 0 with `sink_pr: reused` while origin lacked the archive.
+function testSinkPrRePushesArchiveAfterRefusedPush() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-repush-')));
+  const remotePath = tmp + '-remote';
+  const wtRoot = tmp + '-wt';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const branch = 'workflow/issue-37';
+  const wt = path.join(wtRoot, 'issue-37');
+  try {
+    initGitRepoWithBareRemote(tmp);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), 'f\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', 'feat'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-37');
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 37\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    fs.writeFileSync(path.join(archDir, 'plan.md'), '# Plan\n');
+    // The remote refuses (but does NOT corrupt) commits that record PR metadata while BLOCK exists.
+    const hook = path.join(remotePath, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nif [ -f ' + remotePath + '/BLOCK ]; then while read o n r; do '
+      + 'if git log --format=%s $n -1 | grep -q "record PR metadata"; then echo "blocked by hook" >&2; exit 1; fi; done; fi\nexit 0\n');
+    fs.chmodSync(hook, 0o755);
+    fs.writeFileSync(path.join(remotePath, 'BLOCK'), '');
+    const binDir = path.join(tmp, '.bin');
+    writeSinkPrStubGh(binDir, {
+      list: '[]', create: 'https://github.com/test/repo/pull/37',
+      view: JSON.stringify({ url: 'https://github.com/test/repo/pull/37', number: 37, state: 'OPEN',
+        headRefName: branch, baseRefName: 'main', body: 'Closes #37' })
+    });
+    const run = () => spawnSync(process.execPath, [sinkPrScript, '--project', 'issue-37', '--branch', branch, '--issue', '37'],
+      { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    const r1 = run();
+    assert(r1.status !== 0,
+      '#1098 T9: run 1 must fail while the remote refuses the archive push, got exit ' + r1.status + '\nstdout: ' + r1.stdout);
+    fs.unlinkSync(path.join(remotePath, 'BLOCK'));
+    const r2 = run();
+    assert(r2.status === 0,
+      '#1098 T9: run 2 (re-entry) must succeed once the remote accepts, got exit ' + r2.status + '\nstdout: ' + r2.stdout + '\nstderr: ' + r2.stderr);
+    assert(/sink_pr: reused/.test(r2.stdout),
+      '#1098 T9: run 2 must reuse the PR, got: ' + r2.stdout);
+    // The point of the test: the archive is actually ON origin after the re-entry.
+    const remoteTree = G.git(tmp, ['ls-tree', '-r', '--name-only', 'origin/' + branch], { env }).stdout.toString();
+    assert(remoteTree.includes('kaola-workflow/archive/issue-37/plan.md'),
+      '#1098 T9: origin must carry the archive after re-entry, got:\n' + remoteTree);
+    assert(G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim()
+      === G.git(tmp, ['rev-parse', 'origin/' + branch], { env }).stdout.toString().trim(),
+      '#1098 T9: local and remote branch tips must match after re-entry');
+    console.log('testSinkPrRePushesArchiveAfterRefusedPush: PASSED');
+  } finally {
+    try { G.git(tmp, ['worktree', 'remove', '--force', wt], { env }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T10 (F2) — a durable PR record whose probe FAILS must fail CLOSED. The record proves a PR
+// exists; if its state cannot be read, falling through to discovery would push the (possibly deleted
+// by a squash-merge) branch back and open a SECOND PR — resurrecting a merged change. The sink must
+// refuse, modify nothing, and never call `pr create` or push.
+function testSinkPrProbeFailureFailsClosed() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-probefail-')));
+  const remotePath = tmp + '-remote';
+  const wtRoot = tmp + '-wt';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const branch = 'workflow/issue-38';
+  const wt = path.join(wtRoot, 'issue-38');
+  try {
+    initGitRepoWithBareRemote(tmp);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), 'f\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', 'feat'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-38');
+    fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 38\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    // The durable record of an earlier PR that has since been squash-merged (branch deleted).
+    fs.writeFileSync(path.join(archDir, '.cache', 'sink-pr-result.json'),
+      JSON.stringify({ project: 'issue-38', branch: branch,
+        pr_url: 'https://github.com/test/repo/pull/38', pr_number: 38 }) + '\n');
+    G.git(tmp, ['push', 'origin', '--delete', branch], { env });
+    const binDir = path.join(tmp, '.bin');
+    // `pr view` fails transiently; `pr list` says none open. The OLD code then pushed + created.
+    fs.mkdirSync(binDir, { recursive: true });
+    const viewFail = path.join(binDir, 'gh');
+    fs.writeFileSync(viewFail, [
+      '#!' + process.execPath,
+      "if (process.argv[2] === 'pr' && process.argv[3] === 'view') { process.stderr.write('HTTP 502: transient\\n'); process.exit(1); }",
+      "if (process.argv[2] === 'pr' && process.argv[3] === 'list') { process.stdout.write('[]\\n'); process.exit(0); }",
+      "if (process.argv[2] === 'pr' && process.argv[3] === 'create') { process.stdout.write('https://github.com/test/repo/pull/39\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);"
+    ].join('\n'));
+    fs.chmodSync(viewFail, 0o755);
+    const r = spawnSync(process.execPath, [sinkPrScript, '--project', 'issue-38', '--branch', branch, '--issue', '38'],
+      { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(r.status !== 0,
+      '#1098 T10: a failed probe of a RECORDED PR must fail closed, got exit ' + r.status + '\nstdout: ' + r.stdout);
+    assert(/pr_probe_failed/.test(r.stderr),
+      '#1098 T10: the refusal must name pr_probe_failed, got: ' + r.stderr);
+    assert(!/sink_pr: created/.test(r.stdout),
+      '#1098 T10: the sink must not report a create, got: ' + r.stdout);
+    // The deleted branch must NOT come back on the REMOTE (a stale local tracking ref is not proof).
+    const verify = G.git(remotePath, ['rev-parse', '--verify', 'refs/heads/' + branch], { env });
+    assert(verify.status !== 0,
+      '#1098 T10: the deleted remote branch must not be resurrected by the refused run');
+    console.log('testSinkPrProbeFailureFailsClosed: PASSED');
+  } finally {
+    try { G.git(tmp, ['worktree', 'remove', '--force', wt], { env }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 T11 (F6) — OFFLINE from a dev worktree must not commit onto the MAIN checkout. The linked
+// posture's contract is that main's index and HEAD are never touched; the OFFLINE lane used to
+// `git add`/`commit` at `root`, which is main, so a main run went from N to N+1 commits. It must
+// still write the placeholder into the archive folder.
+function testSinkPrOfflineDoesNotCommitOnMain() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-offline-')));
+  const wtRoot = tmp + '-wt';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const branch = 'workflow/issue-39';
+  const wt = path.join(wtRoot, 'issue-39');
+  try {
+    initGitRepoWithBareRemote(tmp);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), 'f\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', 'feat'], { env });
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-39');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 39\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    const headBefore = G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim();
+    const r = spawnSync(process.execPath, [sinkPrScript, '--project', 'issue-39', '--branch', branch, '--issue', '39'],
+      { cwd: wt, encoding: 'utf8', timeout: 60000, env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    assert(r.status === 0, '#1098 T11: OFFLINE sink-pr must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+    assert(G.git(tmp, ['rev-parse', 'HEAD'], { env }).stdout.toString().trim() === headBefore,
+      '#1098 T11: OFFLINE from a dev worktree must not move main HEAD');
+    assert(G.git(tmp, ['status', '--porcelain', '--untracked-files=no'], { env }).stdout.toString().trim() === '',
+      '#1098 T11: OFFLINE must not stage anything in main');
+    const state = fs.readFileSync(path.join(archDir, 'workflow-state.md'), 'utf8');
+    assert(state.includes('pr_url: OFFLINE_PLACEHOLDER'),
+      '#1098 T11: the placeholder must still be recorded, got:\n' + state);
+    console.log('testSinkPrOfflineDoesNotCommitOnMain: PASSED');
+  } finally {
+    try { G.git(tmp, ['worktree', 'remove', '--force', wt], { env }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+  }
+}
+
 // #1098 T8a — MERGED with the archive already on origin: the main checkout is fast-forwarded
 // under the publish lock (its own byte-identical untracked archive moved aside), publication is
 // `published`, closeout is per-member, and the NEXT watch-pr no longer sees the run (tracked at
@@ -8693,6 +8855,82 @@ function testWatchPrReconcilesLocalOnlyArchive() {
     assert(G.git(tmp, ['ls-files', '--', 'kaola-workflow/archive/issue-40/'], { env }).stdout.toString().trim() === '',
       '#1098 T8e: the local_only archive stays untracked');
     console.log('testWatchPrReconcilesLocalOnlyArchive: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 F3 — the reconciliation advance is a FAST-FORWARD, so it must never drop a local commit that
+// origin never received. The CAS `update-ref` arm of advanceCheckedOutDefault used to check only the
+// OLD ref value: when the main checkout was switched to a side branch and local `main` carried an
+// unpushed commit L, the arm replaced `main` with origin/main and still reported `advanced`, silently
+// discarding L. `watch-pr` runs silently at every `next` startup, so nothing surfaced it.
+function testWatchPrReconcileRefusesToRewindLocalDefault() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-rewind-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    plantArchivedPrRun(tmp, env, 'issue-41', 41, { merged: true, carryArchive: true });
+    // Local main gains an UNPUSHED commit, then the checkout moves to a side branch so `main` is not
+    // checked out anywhere — the exact precondition for the CAS arm.
+    fs.writeFileSync(path.join(tmp, 'local-only.txt'), 'L\n');
+    G.git(tmp, ['add', 'local-only.txt'], { env });
+    G.git(tmp, ['commit', '-m', 'L unpushed'], { env });
+    const localMain = G.git(tmp, ['rev-parse', 'main'], { env }).stdout.toString().trim();
+    G.git(tmp, ['checkout', '-b', 'side'], { env });
+    // The archive must exist in the side branch's tree for the reconcile face to see it.
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-41');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nissue_number: 41\n\n## Sink\nbranch: workflow/issue-41\nsink: pr\n'
+      + 'pr_url: https://github.com/test/repo/pull/41\n');
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'MERGED', issueStates: { '41': 'closed' } });
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    const rec = (result.reconciled || []).find(r => r.folder === 'issue-41');
+    assert(rec, '#1098 F3: the archived run must be reported, got: ' + JSON.stringify(result.reconciled));
+    assert(/^behind/.test(String(rec.main_checkout)),
+      '#1098 F3: an unpushed local default must report behind, never advanced, got: ' + rec.main_checkout);
+    const after = G.git(tmp, ['rev-parse', 'main'], { env }).stdout.toString().trim();
+    assert(after === localMain,
+      '#1098 F3: the local default branch must not be rewound, ' + localMain + ' -> ' + after);
+    const isAncestor = G.git(tmp, ['merge-base', '--is-ancestor', localMain, after], { env });
+    assert(isAncestor.status === 0,
+      '#1098 F3: the unpushed commit must remain reachable from main');
+    console.log('testWatchPrReconcileRefusesToRewindLocalDefault: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1098 F7 — a run whose archive is already present on the LOCAL default branch must leave the
+// bounded scan even when origin does not carry it. The HEAD-only predicate never matched that shape,
+// so such a run was re-probed with gh, re-cleared its claims and re-removed its worktree forever.
+// Widening the SAME stateless predicate to the local default branch bounds it. (The narrower case of
+// a merged run whose archive is on NEITHER origin NOR the local default is genuinely unbounded by a
+// stateless predicate; see docs/api.md — bounding it would require the marker file the design
+// forbids, so it is reported as a known limit rather than papered over.)
+function testWatchPrLocalOnlyRunIsBoundedAfterReconcile() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watch-rec-bounded-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    // The merge commit carries the archive and it lands on the local default branch. The run's own
+    // folder sits in the archive band, untracked, as the reconciliation face expects.
+    plantArchivedPrRun(tmp, env, 'issue-42', 42, { merged: true, carryArchive: true });
+    G.git(tmp, ['fetch', 'origin'], { env });
+    G.git(tmp, ['reset', '--hard', 'origin/main'], { env });
+    const binDir = path.join(tmp, 'bin');
+    writeWatchPrGhMock(binDir, { prState: 'MERGED', issueStates: { '42': 'closed' } });
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(!(result.reconciled || []).some(r => r.folder === 'issue-42'),
+      '#1098 F7: an archive already on the local default branch must leave the bounded scan, got: '
+      + JSON.stringify(result.reconciled));
+    console.log('testWatchPrLocalOnlyRunIsBoundedAfterReconcile: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(remotePath, { recursive: true, force: true });
@@ -12458,11 +12696,16 @@ function buildRegistry() {
   add('testSinkPrReuseRefusesMissingCloses',              testSinkPrReuseRefusesMissingCloses);
   add('testSinkPrReuseRefusesBaseMismatch',               testSinkPrReuseRefusesBaseMismatch);
   add('testSinkPrLinkedPosturePublishesArchive',          testSinkPrLinkedPosturePublishesArchive);
+  add('testSinkPrRePushesArchiveAfterRefusedPush',        testSinkPrRePushesArchiveAfterRefusedPush);
+  add('testSinkPrProbeFailureFailsClosed',                testSinkPrProbeFailureFailsClosed);
+  add('testSinkPrOfflineDoesNotCommitOnMain',             testSinkPrOfflineDoesNotCommitOnMain);
   add('testWatchPrReconcilesMergedPublishedRun',          testWatchPrReconcilesMergedPublishedRun);
   add('testWatchPrReconcilesOpenRunPending',               testWatchPrReconcilesOpenRunPending);
   add('testWatchPrReconcilesClosedRunUntouched',           testWatchPrReconcilesClosedRunUntouched);
   add('testWatchPrReconcilesForeignDirtBehind',           testWatchPrReconcilesForeignDirtBehind);
   add('testWatchPrReconcilesLocalOnlyArchive',            testWatchPrReconcilesLocalOnlyArchive);
+  add('testWatchPrReconcileRefusesToRewindLocalDefault',  testWatchPrReconcileRefusesToRewindLocalDefault);
+  add('testWatchPrLocalOnlyRunIsBoundedAfterReconcile',   testWatchPrLocalOnlyRunIsBoundedAfterReconcile);
   add('testClaimNormalizesForeignSinkNoun',               testClaimNormalizesForeignSinkNoun);
   add('testClosureAuditOfflineRemoteClassesSkipped',      testClosureAuditOfflineRemoteClassesSkipped);
   add('testClosureAuditArchiveContentDrift832',           testClosureAuditArchiveContentDrift832);

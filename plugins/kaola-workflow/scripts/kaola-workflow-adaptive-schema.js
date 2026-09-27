@@ -2415,6 +2415,23 @@ function advanceCheckedOutDefault(mainRoot, defBranch, candidate, opts) {
     old = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'refs/heads/' + def],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch (_) {}
+  // #1098 F3: the CAS arm below replaces the ref wholesale, so a compare-and-swap on the OLD VALUE
+  // alone is not enough — it would drop a local commit that origin never received and still report
+  // `advanced`. This is a fast-forward mechanism, so require the local ref to be an ancestor of the
+  // candidate first; when it is not, the honest answer is `behind` and the ref is left untouched.
+  if (old) {
+    let ancestor = true;
+    try {
+      execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', old, sha],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (_) { ancestor = false; }
+    if (!ancestor) {
+      return {
+        advanced: false, strategy: 'ref', reason: 'behind',
+        detail: def + ' has unpushed commits that origin/' + def + ' does not contain'
+      };
+    }
+  }
   const args = ['-C', mainRoot, 'update-ref', 'refs/heads/' + def, sha];
   if (old) args.push(old);
   try {
@@ -2426,6 +2443,148 @@ function advanceCheckedOutDefault(mainRoot, defBranch, candidate, opts) {
       detail: firstLine((err && err.stderr) || (err && err.message)) || 'ref update refused'
     };
   }
+}
+
+// #1098 F5: the paths under `pathspec` git would REFUSE to stage — untracked AND covered by an
+// ignore rule (#901 granularity). NUL-split and nothing else; sink-merge carries a byte-identical
+// copy of this rule for its own archive arm, and the two must stay in step.
+function ignoredUntrackedUnder(mainRoot, pathspec) {
+  const { execFileSync } = require('child_process');
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', pathspec],
+      { encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// The members of `rels` ignored BY NAME ALONE — a rule about what a file is called is never
+// overridden by pushing an archive; location rules (#901's authorization) are.
+function repoWideIgnoredNames(root, rels) {
+  const { execFileSync } = require('child_process');
+  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
+  if (!names.length) return new Set();
+  try {
+    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
+      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: VALIDATION_GIT_MAX_BUFFER,
+        stdio: ['pipe', 'pipe', 'ignore'] });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch (_) { return new Set(); }
+}
+
+// #1098 F5: the ARCHIVE-RIDES-THE-REQUEST mechanism, forge-neutral and written once. All three
+// request sinks (GitHub sink-pr, GitLab sink-mr, Gitea sink-pr) call this instead of carrying their
+// own ~100-line copy, so the push/re-entry rules below are fixed in one place.
+//
+// Non-linked posture (main checkout HEAD == branch): the caller's own working tree IS the branch, so
+// staging `pathspec` and committing on HEAD is correct and unchanged.
+//
+// Linked posture (HEAD != branch): the archive commit is built from the main checkout's working tree
+// through a private index onto the branch tip, the local branch is advanced (ff-only in whichever
+// worktree holds it, CAS update-ref otherwise), then pushed. The main checkout's index and HEAD are
+// never touched and the push is never forced.
+//
+// #1098 F1: re-entry MUST re-push. When the archive commit is already the tip (a previous run's
+// commit succeeded and only the push was refused), commitPathsOntoCandidate reports `committed:null`
+// and there is nothing new to build — but local and origin may still differ, so the branch is pushed
+// whenever the local tip differs from the remote tip. A push of an already-current branch is a no-op.
+//
+// Returns { ok:true, pushed:boolean, committed?:string } or { ok:false, error, detail }.
+function publishPathsOntoRequestBranch(mainRoot, opts) {
+  const { execFileSync, spawnSync } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  const options = opts || {};
+  const root = String(mainRoot || '').trim();
+  const branch = String(options.branch || '').trim();
+  const pathspec = String(options.pathspec || '').trim();
+  const project = String(options.project || '').trim();
+  const message = String(options.message || '');
+  const forcePush = options.forcePush === true; // test contexts that stub the push away
+  if (!root || !branch || !pathspec) {
+    return { ok: false, error: 'publish_args', detail: 'mainRoot, branch and pathspec are required' };
+  }
+  let head = '';
+  try {
+    head = execFileSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {}
+
+  if (head === branch) {
+    // Legacy non-linked flow: this checkout is the branch.
+    spawnSync('git', ['-C', root, 'add', '--', pathspec], { stdio: 'pipe' });
+    const diff = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    if (diff.status !== 0) {
+      const commit = spawnSync('git', ['-C', root, 'commit', '-m', message], { stdio: 'pipe' });
+      if (commit.status !== 0) {
+        return { ok: false, error: 'commit_failed', detail: firstLine(commit) };
+      }
+    }
+    if (!forcePush) {
+      const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
+      if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push) };
+    }
+    return { ok: true, pushed: !forcePush };
+  }
+
+  // A live (not yet archived) project has no archive band to publish; its records stay with the
+  // finalize transaction, and a re-entry after archive publishes them.
+  if (!fs.existsSync(path.join(root, pathspec))) return { ok: true, pushed: false };
+
+  let tip = '';
+  try {
+    tip = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'refs/heads/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {
+    return { ok: false, error: 'branch_missing', detail: branch };
+  }
+
+  const ignoredHere = ignoredUntrackedUnder(root, pathspec);
+  const byName = repoWideIgnoredNames(root, ignoredHere);
+  const forcePaths = ignoredHere.filter(p => {
+    const base = p.split('/').pop();
+    return !byName.has(base) && base !== 'sink-receipt.json' && base !== 'sink-fallback.json';
+  });
+  const commitRes = commitPathsOntoCandidate(root, {
+    candidate: tip,
+    arms: [{
+      paths: [pathspec],
+      excludes: [
+        ':(exclude,glob)' + pathspec + '**/sink-receipt.json',
+        ':(exclude,glob)' + pathspec + '**/sink-fallback.json'
+      ]
+    }],
+    forcePaths: forcePaths,
+    message: message
+  });
+  if (commitRes.error) return { ok: false, error: 'commit_failed', detail: commitRes.error };
+
+  // F1: even when the tree is already the tip (nothing new to commit), the local branch may still
+  // be unpushed from the run whose push was refused — so advance/push are driven by the REMOTE tip.
+  let newTip = commitRes.committed || tip;
+  if (commitRes.committed) {
+    const holder = worktreeCheckedOutBranch(root, branch);
+    if (holder) {
+      const merge = spawnSync('git', ['-C', holder, 'merge', '--ff-only', '--no-edit', commitRes.committed], { stdio: 'pipe' });
+      if (merge.status !== 0) return { ok: false, error: 'ff_refused', detail: firstLine(merge) };
+    } else {
+      const cas = spawnSync('git', ['-C', root, 'update-ref', 'refs/heads/' + branch, commitRes.committed, tip], { stdio: 'pipe' });
+      if (cas.status !== 0) return { ok: false, error: 'cas_refused', detail: firstLine(cas) };
+    }
+  }
+
+  if (forcePush) return { ok: true, pushed: false, committed: commitRes.committed || null };
+
+  // Push whenever origin does not already carry the local tip: a normal, non-forced push, which is a
+  // no-op when the branch is current.
+  let remoteTip = '';
+  try {
+    remoteTip = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'refs/remotes/origin/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) { remoteTip = ''; }
+  if (remoteTip === newTip) return { ok: true, pushed: false, committed: commitRes.committed || null };
+  const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
+  if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push) };
+  return { ok: true, pushed: true, committed: commitRes.committed || null };
 }
 
 module.exports = {
@@ -2450,7 +2609,15 @@ module.exports = {
   integrationWorktreePath,
   ensureIntegrationWorktree,
   removeIntegrationWorktree,
+  // #1098: which worktree holds a given branch — the request sinks use it to tell the NON-LINKED
+  // posture (the branch is checked out in the main checkout) from the linked one.
+  worktreeCheckedOutBranch,
   commitPathsOntoCandidate,
+  // #1098 F5: the forge-neutral request-archive mechanism the three request sinks share, plus the
+  // two ignore-rule helpers it composes.
+  publishPathsOntoRequestBranch,
+  ignoredUntrackedUnder,
+  repoWideIgnoredNames,
   acquirePublishLock,
   releasePublishLock,
   publishLockPath,

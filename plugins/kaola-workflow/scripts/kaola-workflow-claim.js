@@ -6572,6 +6572,13 @@ function cmdVerifySink() {
 // remainder by hand only after the merge is verified), and the archive is never moved or deleted.
 // OPEN stays pending; CLOSED-unmerged is the orchestrator's decision and nothing is modified.
 function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+  // #1098 F7: at most ONE fetch per reconciliation, however many MERGED runs are scanned.
+  let fetched = false;
+  const fetchedOnce = () => {
+    if (fetched) return;
+    fetched = true;
+    try { execFileSync('git', ['-C', resolveMainRoot(cwdRoot) || cwdRoot, 'fetch', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (_) {}
+  };
   const root = resolveMainRoot(cwdRoot);
   const archiveBand = path.join(root, 'kaola-workflow', 'archive');
   if (!fs.existsSync(archiveBand)) return [];
@@ -6611,9 +6618,22 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
       execFileSync('git', ['-C', root, 'cat-file', '-e', 'HEAD:' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
       trackedAtHead = true;
     } catch (_) { trackedAtHead = false; }
+    // #1098 F7: `local_only` runs never become tracked at HEAD (their archive never reached origin),
+    // so the HEAD predicate alone left them re-probed on every scan forever. Widen the SAME stateless
+    // predicate to the local default branch as well: after a reconciliation advances the checkout to
+    // the merge point, or the operator merges the archive by hand, the archive is present there and
+    // the run leaves the scan. Nothing is written to make this true.
+    let trackedInDefault = trackedAtHead;
+    if (!trackedInDefault) {
+      const defHere = defaultBranch(root) || 'main';
+      try {
+        execFileSync('git', ['-C', root, 'cat-file', '-e', 'refs/heads/' + defHere + ':' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+        trackedInDefault = true;
+      } catch (_) { trackedInDefault = false; }
+    }
     // Bounded: only runs not yet reconciled into main — unless the operator explicitly asks for
     // this issue by number.
-    if (trackedAtHead && !args.issue) continue;
+    if (trackedInDefault && !args.issue) continue;
 
     let state = '';
     try {
@@ -6638,7 +6658,7 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
     // 1. Publication evidence: the archive on origin's default branch (a merged PR whose archive
     //    never reached origin is the pre-#1098 legacy shape — reported local_only, not repaired).
     const defBranch = defaultBranch(root) || 'main';
-    try { execFileSync('git', ['-C', root, 'fetch', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (_) {}
+    fetchedOnce();
     let archiveOnOrigin = false;
     try {
       execFileSync('git', ['-C', root, 'cat-file', '-e', 'origin/' + defBranch + ':' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });

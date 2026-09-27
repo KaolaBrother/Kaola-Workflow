@@ -5910,7 +5910,7 @@ function watchMergeRequests(root, args) {
       cleanups.push(cleanupEntry2);
     }
   }
-  return { watched, warnings, cleanups, probeErrors, archiveRefusals, reconciled: reconcileArchivedMrRuns(root, args, liveProcessed) };
+  return { watched, warnings, cleanups, probeErrors, archiveRefusals, reconciled: reconcileArchivedMrRuns(root, args, liveProcessed, probeErrors) };
 }
 
 // #1098 §2.2 — post-merge reconciliation of ARCHIVED `sink: mr` runs. The standard MR path archives
@@ -5922,7 +5922,14 @@ function watchMergeRequests(root, args) {
 // (#617 — the orchestrator closes the remainder by hand only after the merge is verified), and the
 // archive is never moved or deleted. OPEN stays pending; CLOSED-unmerged is the orchestrator's
 // decision and nothing is modified.
-function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed) {
+function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+  // #1098 F7: at most ONE fetch per reconciliation, however many MERGED runs are scanned.
+  let fetched = false;
+  const fetchedOnce = () => {
+    if (fetched) return;
+    fetched = true;
+    try { execFileSync('git', ['-C', resolveMainRoot(cwdRoot) || cwdRoot, 'fetch', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (_) {}
+  };
   const root = resolveMainRoot(cwdRoot) || cwdRoot;
   const archiveBand = path.join(root, 'kaola-workflow', 'archive');
   if (!fs.existsSync(archiveBand)) return [];
@@ -5963,9 +5970,20 @@ function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed) {
       execFileSync('git', ['-C', root, 'cat-file', '-e', 'HEAD:' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
       trackedAtHead = true;
     } catch (_) { trackedAtHead = false; }
+    // #1098 F7: local_only runs never become tracked at HEAD, so widen the SAME stateless
+    // predicate to the local default branch — once the archive is there (a prior reconciliation
+    // advanced the checkout, or the operator merged by hand) the run leaves the scan.
+    let trackedInDefault = trackedAtHead;
+    if (!trackedInDefault) {
+      const defHere = defaultBranch(root) || 'main';
+      try {
+        execFileSync('git', ['-C', root, 'cat-file', '-e', 'refs/heads/' + defHere + ':' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+        trackedInDefault = true;
+      } catch (_) { trackedInDefault = false; }
+    }
     // Bounded: only runs not yet reconciled into main — unless the operator explicitly asks for
     // this issue by number.
-    if (trackedAtHead && !args.issue) continue;
+    if (trackedInDefault && !args.issue) continue;
 
     const mrIid = mrIidFromFolder({ mr_iid: field(content, 'mr_iid'), mr_url: mrUrl });
     if (!mrIid) continue;
@@ -5974,7 +5992,11 @@ function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed) {
     let state = '';
     try {
       state = forge.normalizeState(forge.viewMergeRequest(mrIid).state);
-    } catch (_) { continue; }
+    } catch (e) {
+      // #1098 F8: a reconcile probe failure is reported like any other, not swallowed (GitHub parity).
+      if (probeErrors) probeErrors.push({ folder: name, mr_iid: mrIid, error: (e && e.message) ? e.message : String(e) });
+      continue;
+    }
 
     if (state === 'open') {
       out.push({ folder: name, mr_url: mrUrl, publication: 'pending' });
@@ -5991,7 +6013,7 @@ function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed) {
     // 1. Publication evidence: the archive on origin's default branch (a merged MR whose archive
     //    never reached origin is the pre-#1098 legacy shape — reported local_only, not repaired).
     const defBranch = defaultBranch(root) || 'main';
-    try { execFileSync('git', ['-C', root, 'fetch', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (_) {}
+    fetchedOnce();
     let archiveOnOrigin = false;
     try {
       execFileSync('git', ['-C', root, 'cat-file', '-e', 'origin/' + defBranch + ':' + stateRel], { stdio: ['ignore', 'ignore', 'ignore'] });

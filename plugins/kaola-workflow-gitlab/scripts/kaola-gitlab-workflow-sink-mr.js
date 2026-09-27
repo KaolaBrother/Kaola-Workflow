@@ -183,12 +183,6 @@ function routeMergeRequestState(mr) {
   return 'unknown';
 }
 
-function findMergeRequestForBranch(branch) {
-  return forge.listMergeRequests({ state: 'opened' }).find(mr =>
-    mr.source_branch === branch && routeMergeRequestState(mr) === 'open'
-  ) || null;
-}
-
 // #1098 §2.1-2: the durable identity of this project's MR — the .cache record first, then the
 // state Sink block's mr_url. An OFFLINE placeholder is not an identity. Returns '' when none.
 function readRecordedMrUrl(projectFolder, stateFile) {
@@ -249,153 +243,27 @@ function listOpenMrs(branch) {
   } catch (_) { return []; }
 }
 
-// #1098 §2.1-4 helpers — the archive-commit path rules mirror sink-merge's archive_commit arm.
-
-// The paths under `pathspec` git would REFUSE to stage — untracked AND covered by an ignore rule.
-function ignoredUntrackedUnder(mainRoot, pathspec) {
-  try {
-    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', pathspec],
-      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\0').filter(Boolean);
-  } catch (_) { return []; }
-}
-
-// The members of `rels` ignored BY NAME ALONE — a rule about what a file is called is never
-// overridden by this sink. Location rules are; name rules (.DS_Store, *.log) are not ours to force.
-function repoWideIgnoredNames(root, rels) {
-  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
-  if (!names.length) return new Set();
-  try {
-    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
-      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
-        stdio: ['pipe', 'pipe', 'ignore'] });
-    return new Set(out.split('\0').filter(Boolean));
-  } catch (_) { return new Set(); }
-}
-
-// The worktree that has `branch` checked out, or null.
-function worktreeHoldingBranch(mainRoot, branch) {
-  let out = '';
-  try {
-    out = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch (_) { return null; }
-  let current = null;
-  for (const line of String(out).split('\n')) {
-    if (line.indexOf('worktree ') === 0) { current = line.slice('worktree '.length); continue; }
-    if (line === 'branch refs/heads/' + branch) return current;
-  }
-  return null;
-}
-
-function firstLineOf(result) {
-  const text = String((result && (result.stderr || result.stdout)) || '');
-  return text.split('\n').map(l => l.trim()).filter(Boolean)[0] || 'unknown error';
-}
-
-// #1098 §2.1-4: the run's archive rides the MR. NON-LINKED posture (main checkout HEAD == branch):
-// the legacy commit-on-HEAD flow, staging the whole resolved project dir instead of two files.
-// LINKED posture (HEAD != branch): the archive commit is built from the main checkout's working
-// tree through the kernel's private index onto the branch tip, the local branch is advanced
-// (ff-only merge in the worktree that holds it, CAS update-ref otherwise), then pushed. The main
-// checkout's index and HEAD are never touched; the default branch is never pushed; a push is never
-// forced. A refusal is reported and thrown — never retried, never forced.
+// #1098 F5: the archive-rides-the-MR mechanism now lives once in the kernel
+// (publishPathsOntoRequestBranch), shared by all three request sinks, so the re-push and
+// fail-closed rules are fixed in one place. The non-linked posture is the legacy commit-on-HEAD
+// flow; the linked posture commits onto the branch tip and pushes without touching main.
 function publishArchiveWithMr(root, project, branch, projectFolder, mrUrl, options) {
-  const options_ = options || {};
-  let head = '';
-  try {
-    head = execFileSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) {}
   const relDir = path.relative(root, projectFolder).split(path.sep).join('/');
-  if (head === branch) {
-    spawnSync('git', ['-C', root, 'add', '--', relDir], { stdio: 'pipe' });
-    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
-    if (diffResult.status !== 0) {
-      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
-        'chore: record MR metadata for ' + project], { stdio: 'pipe' });
-      if (commitResult.status !== 0) {
-        throw new Error(
-          'MR at ' + mrUrl + ' but metadata commit failed.\n' +
-          'Manual recovery: git add ' + relDir +
-          " && git commit -m 'chore: record MR metadata for " + project + "'" +
-          ' && git push origin ' + branch
-        );
-      }
-      if (!options_.skipPush) {
-        const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-        if (pushResult.status !== 0) {
-          throw new Error(
-            'MR at ' + mrUrl + ' but metadata push failed.\n' +
-            'Manual recovery: git push origin ' + branch
-          );
-        }
-      }
-    }
-    return;
-  }
-  const archiveRel = 'kaola-workflow/archive/' + project + '/';
-  // A live (not yet archived) project has no archive band to publish; its records stay with the
-  // finalize transaction, and a re-entry after archive publishes them.
-  if (!fs.existsSync(path.join(root, archiveRel))) return;
-  if (options_.skipPush) return; // test context without a real remote/branch
-  let tip = '';
-  try {
-    tip = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'refs/heads/' + branch],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) {
-    throw new Error(
-      'MR at ' + mrUrl + ' but the local branch ' + branch + ' is missing — the archive cannot ride the MR.\n' +
-      'Manual recovery: re-create the branch from the MR head, then re-run sink-mr (the MR record is durable).'
-    );
-  }
-  const ignoredHere = ignoredUntrackedUnder(root, archiveRel);
-  const byName = repoWideIgnoredNames(root, ignoredHere);
-  const forcePaths = ignoredHere.filter(p => {
-    const base = p.split('/').pop();
-    return !byName.has(base) && base !== 'sink-receipt.json' && base !== 'sink-fallback.json';
+  const opts = options || {};
+  const res = adaptiveSchema.publishPathsOntoRequestBranch(root, {
+    branch: branch,
+    pathspec: relDir,
+    project: project,
+    message: 'chore: record MR metadata for ' + project,
+    forcePush: opts.skipPush === true
   });
-  const commitRes = adaptiveSchema.commitPathsOntoCandidate(root, {
-    candidate: tip,
-    arms: [{
-      paths: [archiveRel],
-      excludes: [
-        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-receipt.json',
-        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-fallback.json'
-      ]
-    }],
-    forcePaths: forcePaths,
-    message: 'chore: record MR metadata for ' + project
-  });
-  if (commitRes.error) {
-    throw new Error('MR at ' + mrUrl + ' but the archive commit failed: ' + commitRes.error +
-      '\nNot retried, not forced; re-run sink-mr to continue from here (the MR record is durable).');
-  }
-  if (!commitRes.committed) return; // tree identical to the tip — a re-entry is a no-op
-  const holder = worktreeHoldingBranch(root, branch);
-  if (holder) {
-    const merge = spawnSync('git', ['-C', holder, 'merge', '--ff-only', '--no-edit', commitRes.committed], { stdio: 'pipe' });
-    if (merge.status !== 0) {
-      throw new Error(
-        'MR at ' + mrUrl + ' but the fast-forward of ' + branch + ' in ' + holder + ' was refused (' +
-        firstLineOf(merge) + ').\nNot retried, not forced; clear the worktree and re-run sink-mr.'
-      );
+  if (!res.ok) {
+    if (res.error === 'branch_missing') {
+      throw new Error('MR at ' + mrUrl + ' but the local branch ' + branch + ' is missing — the archive cannot ride the MR.\n' +
+        'Manual recovery: re-create the branch from the MR head, then re-run sink-mr (the MR record is durable).');
     }
-  } else {
-    const cas = spawnSync('git', ['-C', root, 'update-ref', 'refs/heads/' + branch, commitRes.committed, tip], { stdio: 'pipe' });
-    if (cas.status !== 0) {
-      throw new Error(
-        'MR at ' + mrUrl + ' but the compare-and-swap update of refs/heads/' + branch + ' was refused (' +
-        firstLineOf(cas) + ').\nNot retried, not forced; re-run sink-mr to continue from here.'
-      );
-    }
-  }
-  const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-  if (push.status !== 0) {
-    throw new Error(
-      'MR at ' + mrUrl + ' but the archive push to origin/' + branch + ' was refused (' +
-      firstLineOf(push) + ').\nNot retried, not forced; re-run sink-mr to continue from here.'
-    );
+    throw new Error('MR at ' + mrUrl + ' but the archive could not ride the MR (' + res.error + ': ' + (res.detail || '') + ').\n' +
+      'Not retried, not forced; re-run sink-mr to continue from here (the MR record is durable).');
   }
 }
 
@@ -447,16 +315,23 @@ function ensureMergeRequest(args, opts) {
     const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
     updateStateSinkBlock(stateFile, mrUrl, mrIid);
     appendSummary(summaryFile, mrUrl, mrIid);
-    const relState = path.relative(root, stateFile);
-    const relSummary = path.relative(root, summaryFile);
-    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
-    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
-    if (diffResult.status !== 0) {
-      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
-        'chore: record MR metadata for ' + args.project], { stdio: 'pipe' });
-      if (commitResult.status !== 0) {
-        process.stderr.write('[offline] metadata commit skipped: ' +
-          (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+    // #1098 F6: OFFLINE changes no git history. In the LINKED posture the run branch lives in a
+    // worktree other than `root` (the MAIN checkout), where committing would land a metadata commit
+    // on main's HEAD — never touching main's index or HEAD is the sink's contract, so the files are
+    // left written for the caller. Every other shape keeps the legacy local metadata commit.
+    const branchHolder = adaptiveSchema.worktreeCheckedOutBranch(root, args.branch);
+    if (!(branchHolder && branchHolder !== root)) {
+      const relState = path.relative(root, stateFile);
+      const relSummary = path.relative(root, summaryFile);
+      spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+      const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+      if (diffResult.status !== 0) {
+        const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+          'chore: record MR metadata for ' + args.project], { stdio: 'pipe' });
+        if (commitResult.status !== 0) {
+          process.stderr.write('[offline] metadata commit skipped: ' +
+            (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+        }
       }
     }
     return { mr_url: mrUrl, mr_iid: mrIid };
@@ -491,7 +366,18 @@ function ensureMergeRequest(args, opts) {
   // first; record-less discovery scans open MRs for this source branch.
   let existing = null;
   const recordedUrl = readRecordedMrUrl(projectFolder, stateFile);
-  if (recordedUrl) existing = viewRecordedMr(recordedUrl);
+  if (recordedUrl) {
+    existing = viewRecordedMr(recordedUrl);
+    // #1098 F2: a durable record proves an MR exists. If its state cannot be read right now (a
+    // transient `glab mr view` failure), discovery is not a safe fallback: the record's MR may
+    // already be merged with its branch deleted, so the discovery path would push that branch back
+    // and open a SECOND MR. Fail closed — refuse, report, modify nothing.
+    assert(existing,
+      'sink-mr: refusing: a durable MR record exists (' + recordedUrl + ') but its current state ' +
+      'could not be read (mr_probe_failed). Refusing to fall back to discovery, which could push a ' +
+      'deleted branch back and reopen a merged MR. Retry once the forge is reachable; nothing was ' +
+      'pushed or created.');
+  }
   if (!existing) {
     const open = listOpenMrs(args.branch);
     if (open.length > 0) existing = open[0];
@@ -543,7 +429,8 @@ function ensureMergeRequest(args, opts) {
       web_url: existing.url,
       state: 'opened',
       source_branch: existing.head,
-      target_branch: existing.base
+      target_branch: existing.base,
+      reused: true
     };
   }
 
@@ -586,9 +473,17 @@ function maybeAutoMergeFromConfig(mr, configOverride) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const mr = ensureMergeRequest(args);
+  // #1098 F4: a MERGED MR is never merged again. Auto-merge (and an explicit --merge) apply only to
+  // an OPEN request — §2.1-5 — so the already-merged lane returns before either call, exactly as the
+  // GitHub sink does. The result token tells the caller which lane it took.
+  const lane = mr.already_merged ? 'already_merged' : (mr.reused ? 'reused' : 'created');
+  if (mr.already_merged) {
+    process.stdout.write('sink_mr: already_merged\nMR URL: ' + (mr.mr_url || mr.web_url) + '\nMR IID: ' + mr.mr_iid + '\n');
+    return;
+  }
   if (args.merge && !OFFLINE) mergeMergeRequest(mr.mr_iid, args);
   else if (!OFFLINE) maybeAutoMergeFromConfig(mr);
-  process.stdout.write('MR URL: ' + (mr.mr_url || mr.web_url) + '\nMR IID: ' + mr.mr_iid + '\n');
+  process.stdout.write('sink_mr: ' + lane + '\nMR URL: ' + (mr.mr_url || mr.web_url) + '\nMR IID: ' + mr.mr_iid + '\n');
 }
 
 if (require.main === module) {
@@ -601,7 +496,6 @@ module.exports = {
   closesBody,
   appendSummary,
   ensureMergeRequest,
-  findMergeRequestForBranch,
   maybeAutoMergeFromConfig,
   mergeMergeRequest,
   routeMergeRequestState,

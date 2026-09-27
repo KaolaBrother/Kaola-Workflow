@@ -167,9 +167,14 @@ withForge({
     gitExec(bin, args) { calls.push([bin, args]); return ''; }
   });
   assert.strictEqual(mr.mr_iid, 8);
-  // #1098: the lookup precedes the push, so REUSE issues no push at all (the pre-#1098 sink pushed
-  // unconditionally before noticing the MR, which is the ordering this contract reverses).
-  assert.deepStrictEqual(calls, [], '#1098: reuse must not push — the lookup precedes the push');
+  // #1098 F1: MEANING CHANGED. The lookup precedes the push, so reuse never pushes the CREATE path's
+  // pre-flight push — but it MUST still be able to publish a branch that origin has not received
+  // (that is the archive-push retry). This case passes `gitExec`, i.e. the skipPush/stub context, so
+  // no push is issued; the real re-push contract is covered end-to-end by the walkthrough's
+  // testSinkPrRePushesArchiveAfterRefusedPush. What this assertion now pins is that reuse did NOT
+  // take the create path.
+  assert(Array.isArray(calls) && calls.every(c => JSON.stringify(c) !== JSON.stringify(['git', ['push', 'origin', 'feature']])),
+    '#1098: reuse must not take the create path\'s pre-flight push');
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: mr'));
   assert(state.includes('mr_url: https://gitlab.example/group/project/-/merge_requests/8'));
@@ -3412,6 +3417,61 @@ function gl1098WriteTaskFixture(root, project, issueIid) {
   assert.strictEqual(recordB, recordA, '#1098: a re-entry must not rewrite the durable record');
   assert.strictEqual((stateB.match(/^mr_iid:/gm) || []).length, 1,
     '#1098: the Sink block must hold exactly one mr_iid line');
+}
+
+// #1098 F2: a durable MR record whose probe FAILS must fail CLOSED — never fall through to
+// discovery + create, which could push a deleted branch back and reopen a merged MR.
+{
+  const root = tempRoot('kw-gl-1098-probefail-');
+  const dir = gl1098WriteTaskFixture(root, 'probefail-project', 688);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'probefail-project', branch: 'feature-probefail',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/88', mr_iid: 88 }, null, 2) + '\n');
+  let refused = null;
+  const created = [];
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() { throw new Error('HTTP 502: transient'); },
+    createMergeRequest() { created.push(1); throw new Error('must not create after a probe failure'); }
+  }, () => {
+    try {
+      sinkMr.ensureMergeRequest({ branch: 'feature-probefail', project: 'probefail-project', issue: 688 },
+        { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098 F2: a failed probe of a RECORDED MR must fail closed');
+  assert(/mr_probe_failed/.test(refused.message),
+    '#1098 F2: the refusal must name mr_probe_failed, got: ' + refused.message);
+  assert.deepStrictEqual(created, [], '#1098 F2: no create may follow a probe failure');
+}
+
+// #1098 F4: an already-merged MR must NOT be merged again — auto-merge applies only to an OPEN
+// request (§2.1-5). `ensureMergeRequest` reports already_merged, and main() must return before the
+// merge call.
+{
+  const root = tempRoot('kw-gl-1098-mergedauto-');
+  const dir = gl1098WriteTaskFixture(root, 'mergedauto-project', 689);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'mergedauto-project', branch: 'feature-mergedauto',
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/89', mr_iid: 89 }, null, 2) + '\n');
+  let mergeCalls = 0;
+  withForge({
+    listMergeRequests() { return []; },
+    viewMergeRequest() {
+      return { mr_iid: 89, mr_url: 'https://gitlab.example/group/project/-/merge_requests/89',
+        web_url: 'https://gitlab.example/group/project/-/merge_requests/89', state: 'merged',
+        source_branch: 'feature-mergedauto', target_branch: 'main', description: 'Closes #689' };
+    },
+    mergeMergeRequest() { mergeCalls++; return {}; },
+    createMergeRequest() { throw new Error('must not create'); }
+  }, () => {
+    const out = sinkMr.ensureMergeRequest({ branch: 'feature-mergedauto', project: 'mergedauto-project', issue: 689 },
+      { root, skipPush: true });
+    assert.strictEqual(out.already_merged, true, '#1098 F4: the merged lane must report already_merged');
+  });
+  assert.strictEqual(mergeCalls, 0, '#1098 F4: a MERGED MR must never be merged again');
 }
 
 console.log('GitLab #1098 §2.1 MR-identity tests passed');

@@ -167,9 +167,14 @@ withForge({
   });
   assert.strictEqual(pr.pr_number, 8);
   assert.strictEqual(project.full_name, 'group/project');
-  // #1098: the lookup precedes the push, so REUSE issues no push at all (the pre-#1098 sink pushed
-  // unconditionally before noticing the PR, which is the ordering this contract reverses).
-  assert.deepStrictEqual(calls, [], '#1098: reuse must not push — the lookup precedes the push');
+  // #1098 F1: MEANING CHANGED. The lookup precedes the push, so reuse never pushes the CREATE path's
+  // pre-flight push — but it MUST still be able to publish a branch that origin has not received
+  // (that is the archive-push retry). This case passes `gitExec`, i.e. the skipPush/stub context, so
+  // no push is issued; the real re-push contract is covered end-to-end by the walkthrough's
+  // testSinkPrRePushesArchiveAfterRefusedPush. What this assertion now pins is that reuse did NOT
+  // take the create path.
+  assert(Array.isArray(calls) && calls.every(c => JSON.stringify(c) !== JSON.stringify(['git', ['push', 'origin', 'feature']])),
+    '#1098: reuse must not take the create path\'s pre-flight push');
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: pr'));
   assert(state.includes('pr_url: https://gitea.example/group/project/pulls/8'));
@@ -3341,6 +3346,56 @@ function gt1098SeedRecord(dir, project, branch, prUrl, prNumber) {
   assert.strictEqual(recordB, recordA, '#1098: a re-entry must not rewrite the durable record');
   assert.strictEqual((stateB.match(/^pr_number:/gm) || []).length, 1,
     '#1098: the Sink block must hold exactly one pr_number line');
+}
+
+// #1098 F2: a durable PR record whose probe FAILS must fail CLOSED — never fall through to
+// discovery + create, which could push a deleted branch back and reopen a merged PR.
+{
+  const root = tempRoot('kw-gt-1098-probefail-');
+  const dir = gt1098WriteTaskFixture(root, 'probefail-project', 688);
+  gt1098SeedRecord(dir, 'probefail-project', 'feature-probefail', 'https://gitea.example/group/project/pulls/88', 88);
+  let refused = null;
+  const created = [];
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() { throw new Error('HTTP 502: transient'); },
+    createPullRequest() { created.push(1); throw new Error('must not create after a probe failure'); }
+  }, () => {
+    try {
+      sinkPr.ensurePullRequest({ branch: 'feature-probefail', project: 'probefail-project', issue: 688 },
+        { root, skipPush: true });
+    } catch (e) { refused = e; }
+  });
+  assert(refused, '#1098 F2: a failed probe of a RECORDED PR must fail closed');
+  assert(/pr_probe_failed/.test(refused.message),
+    '#1098 F2: the refusal must name pr_probe_failed, got: ' + refused.message);
+  assert.deepStrictEqual(created, [], '#1098 F2: no create may follow a probe failure');
+}
+
+// #1098 F4: an already-merged PR must NOT be merged again — auto-merge applies only to an OPEN
+// request (§2.1-5). `ensurePullRequest` reports already_merged, and main() must return before the
+// merge call.
+{
+  const root = tempRoot('kw-gt-1098-mergedauto-');
+  const dir = gt1098WriteTaskFixture(root, 'mergedauto-project', 689);
+  gt1098SeedRecord(dir, 'mergedauto-project', 'feature-mergedauto', 'https://gitea.example/group/project/pulls/89', 89);
+  let mergeCalls = 0;
+  withForge({
+    listPullRequests() { return []; },
+    discoverProject() { return GT1098_PROJECT; },
+    viewPullRequest() {
+      return { pr_number: 89, pr_url: 'https://gitea.example/group/project/pulls/89',
+        state: 'merged', source_branch: 'feature-mergedauto', target_branch: 'main', body: 'Closes #689' };
+    },
+    mergePullRequest() { mergeCalls++; return {}; },
+    createPullRequest() { throw new Error('must not create'); }
+  }, () => {
+    const out = sinkPr.ensurePullRequest({ branch: 'feature-mergedauto', project: 'mergedauto-project', issue: 689 },
+      { root, skipPush: true });
+    assert.strictEqual(out.already_merged, true, '#1098 F4: the merged lane must report already_merged');
+  });
+  assert.strictEqual(mergeCalls, 0, '#1098 F4: a MERGED PR must never be merged again');
 }
 
 console.log('Gitea #1098 §2.1 PR-identity tests passed');

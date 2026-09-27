@@ -4,6 +4,24 @@
 
 ### Changed
 
+- **Request sinks retry a refused archive push, fail closed on a failed probe, and share one kernel
+  mechanism (#1098, review round).** A re-entry now re-pushes: when a previous run built the archive
+  commit but the remote refused the push, the next run found the tree already identical to the tip and
+  previously exited `0`/`reused` while origin still lacked the archive — it now pushes whenever the
+  local branch tip differs from `origin/<branch>` (a no-op when current). If a durable PR/MR record
+  exists but its state cannot be read (a transient forge failure), the sink **refuses**
+  (`pr_probe_failed` / `mr_probe_failed`) instead of falling through to discovery, which could push a
+  branch deleted by a squash-merge back and reopen a merged request. GitLab and Gitea now return
+  before auto-merge on an already-merged request (auto-merge is for OPEN requests only) and print a
+  `sink_mr:` / `sink_pr:` lane token. The archive-rides-the-request mechanism and its ignore-rule
+  helpers moved into the kernel as `publishPathsOntoRequestBranch` (with `ignoredUntrackedUnder` /
+  `repoWideIgnoredNames` exported), replacing ~100 near-identical lines in each of the three sinks, so
+  these rules are fixed once. Reconciliation no longer rewinds the local default branch: the CAS
+  `update-ref` arm of `advanceCheckedOutDefault` now requires the local ref to be an ancestor of the
+  candidate and otherwise reports `behind`. Offline runs from a linked worktree no longer commit onto
+  main's HEAD, a reconciliation scan runs at most one `git fetch` and also treats an archive present
+  on the local default branch as reconciled, and reconcile probe failures are reported in
+  `probe_errors` on every forge.
 - **The PR/MR sink reuses the request it already opened and carries the archive with it (#1098).** The
   request sinks (`kaola-workflow-sink-pr.js`, `kaola-gitlab-workflow-sink-mr.js`,
   `kaola-gitea-workflow-sink-pr.js`) now resolve the existing PR/MR **before** any push — the durable

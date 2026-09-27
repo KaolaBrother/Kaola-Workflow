@@ -187,12 +187,6 @@ function routePullRequestState(pr) {
   return 'unknown';
 }
 
-function findPullRequestForBranch(branch) {
-  return forge.listPullRequests({ state: 'opened' }).find(pr =>
-    pr.source_branch === branch && routePullRequestState(pr) === 'open'
-  ) || null;
-}
-
 // #1098 §2.1-2: the durable identity of this project's PR — the .cache record first, then the
 // state Sink block's pr_url. An OFFLINE placeholder is not an identity. Returns '' when none.
 function readRecordedPrUrl(projectFolder, stateFile) {
@@ -246,149 +240,27 @@ function listOpenPrs(branch) {
   } catch (_) { return []; }
 }
 
-// #1098 §2.1-4 helpers — the archive-commit path rules mirror sink-merge's archive_commit arm.
-
-function ignoredUntrackedUnder(mainRoot, pathspec) {
-  try {
-    const out = execFileSync('git', ['-C', mainRoot, 'ls-files', '-o', '-i', '--exclude-standard', '-z', '--', pathspec],
-      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\0').filter(Boolean);
-  } catch (_) { return []; }
-}
-
-function repoWideIgnoredNames(root, rels) {
-  const names = Array.from(new Set(rels.map(r => String(r).split('/').pop()).filter(Boolean)));
-  if (!names.length) return new Set();
-  try {
-    const out = execFileSync('git', ['-C', root, 'check-ignore', '--stdin', '-z', '--no-index'],
-      { input: names.join('\0') + '\0', encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
-        stdio: ['pipe', 'pipe', 'ignore'] });
-    return new Set(out.split('\0').filter(Boolean));
-  } catch (_) { return new Set(); }
-}
-
-function worktreeHoldingBranch(mainRoot, branch) {
-  let out = '';
-  try {
-    out = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch (_) { return null; }
-  let current = null;
-  for (const line of String(out).split('\n')) {
-    if (line.indexOf('worktree ') === 0) { current = line.slice('worktree '.length); continue; }
-    if (line === 'branch refs/heads/' + branch) return current;
-  }
-  return null;
-}
-
-function firstLineOf(result) {
-  const text = String((result && (result.stderr || result.stdout)) || '');
-  return text.split('\n').map(l => l.trim()).filter(Boolean)[0] || 'unknown error';
-}
-
-// #1098 §2.1-4: the run's archive rides the PR. NON-LINKED posture (main checkout HEAD == branch):
-// the legacy commit-on-HEAD flow, staging the whole resolved project dir instead of two files.
-// LINKED posture (HEAD != branch): the archive commit is built from the main checkout's working
-// tree through the kernel's private index onto the branch tip, the local branch is advanced
-// (ff-only merge in the worktree that holds it, CAS update-ref otherwise), then pushed. The main
-// checkout's index and HEAD are never touched; the default branch is never pushed; a push is never
-// forced. A refusal is reported and thrown — never retried, never forced.
+// #1098 F5: the archive-rides-the-PR mechanism now lives once in the kernel
+// (publishPathsOntoRequestBranch), shared by all three request sinks, so the re-push and
+// fail-closed rules are fixed in one place. The non-linked posture is the legacy commit-on-HEAD
+// flow; the linked posture commits onto the branch tip and pushes without touching main.
 function publishArchiveWithPr(root, project, branch, projectFolder, prUrl, options) {
-  const options_ = options || {};
-  let head = '';
-  try {
-    head = execFileSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) {}
   const relDir = path.relative(root, projectFolder).split(path.sep).join('/');
-  if (head === branch) {
-    spawnSync('git', ['-C', root, 'add', '--', relDir], { stdio: 'pipe' });
-    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
-    if (diffResult.status !== 0) {
-      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
-        'chore: record PR metadata for ' + project], { stdio: 'pipe' });
-      if (commitResult.status !== 0) {
-        throw new Error(
-          'PR at ' + prUrl + ' but metadata commit failed.\n' +
-          'Manual recovery: git add ' + relDir +
-          " && git commit -m 'chore: record PR metadata for " + project + "'" +
-          ' && git push origin ' + branch
-        );
-      }
-      if (!options_.skipPush) {
-        const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-        if (pushResult.status !== 0) {
-          throw new Error(
-            'PR at ' + prUrl + ' but metadata push failed.\n' +
-            'Manual recovery: git push origin ' + branch
-          );
-        }
-      }
-    }
-    return;
-  }
-  const archiveRel = 'kaola-workflow/archive/' + project + '/';
-  // A live (not yet archived) project has no archive band to publish; its records stay with the
-  // finalize transaction, and a re-entry after archive publishes them.
-  if (!fs.existsSync(path.join(root, archiveRel))) return;
-  if (options_.skipPush) return; // test context without a real remote/branch
-  let tip = '';
-  try {
-    tip = execFileSync('git', ['-C', root, 'rev-parse', '--verify', 'refs/heads/' + branch],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) {
-    throw new Error(
-      'PR at ' + prUrl + ' but the local branch ' + branch + ' is missing — the archive cannot ride the PR.\n' +
-      'Manual recovery: re-create the branch from the PR head, then re-run sink-pr (the PR record is durable).'
-    );
-  }
-  const ignoredHere = ignoredUntrackedUnder(root, archiveRel);
-  const byName = repoWideIgnoredNames(root, ignoredHere);
-  const forcePaths = ignoredHere.filter(p => {
-    const base = p.split('/').pop();
-    return !byName.has(base) && base !== 'sink-receipt.json' && base !== 'sink-fallback.json';
+  const opts = options || {};
+  const res = adaptiveSchema.publishPathsOntoRequestBranch(root, {
+    branch: branch,
+    pathspec: relDir,
+    project: project,
+    message: 'chore: record PR metadata for ' + project,
+    forcePush: opts.skipPush === true
   });
-  const commitRes = adaptiveSchema.commitPathsOntoCandidate(root, {
-    candidate: tip,
-    arms: [{
-      paths: [archiveRel],
-      excludes: [
-        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-receipt.json',
-        ':(exclude,glob)kaola-workflow/archive/' + project + '/**/sink-fallback.json'
-      ]
-    }],
-    forcePaths: forcePaths,
-    message: 'chore: record PR metadata for ' + project
-  });
-  if (commitRes.error) {
-    throw new Error('PR at ' + prUrl + ' but the archive commit failed: ' + commitRes.error +
-      '\nNot retried, not forced; re-run sink-pr to continue from here (the PR record is durable).');
-  }
-  if (!commitRes.committed) return; // tree identical to the tip — a re-entry is a no-op
-  const holder = worktreeHoldingBranch(root, branch);
-  if (holder) {
-    const merge = spawnSync('git', ['-C', holder, 'merge', '--ff-only', '--no-edit', commitRes.committed], { stdio: 'pipe' });
-    if (merge.status !== 0) {
-      throw new Error(
-        'PR at ' + prUrl + ' but the fast-forward of ' + branch + ' in ' + holder + ' was refused (' +
-        firstLineOf(merge) + ').\nNot retried, not forced; clear the worktree and re-run sink-pr.'
-      );
+  if (!res.ok) {
+    if (res.error === 'branch_missing') {
+      throw new Error('PR at ' + prUrl + ' but the local branch ' + branch + ' is missing — the archive cannot ride the PR.\n' +
+        'Manual recovery: re-create the branch from the PR head, then re-run sink-pr (the PR record is durable).');
     }
-  } else {
-    const cas = spawnSync('git', ['-C', root, 'update-ref', 'refs/heads/' + branch, commitRes.committed, tip], { stdio: 'pipe' });
-    if (cas.status !== 0) {
-      throw new Error(
-        'PR at ' + prUrl + ' but the compare-and-swap update of refs/heads/' + branch + ' was refused (' +
-        firstLineOf(cas) + ').\nNot retried, not forced; re-run sink-pr to continue from here.'
-      );
-    }
-  }
-  const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-  if (push.status !== 0) {
-    throw new Error(
-      'PR at ' + prUrl + ' but the archive push to origin/' + branch + ' was refused (' +
-      firstLineOf(push) + ').\nNot retried, not forced; re-run sink-pr to continue from here.'
-    );
+    throw new Error('PR at ' + prUrl + ' but the archive could not ride the PR (' + res.error + ': ' + (res.detail || '') + ').\n' +
+      'Not retried, not forced; re-run sink-pr to continue from here (the PR record is durable).');
   }
 }
 
@@ -446,16 +318,23 @@ function ensurePullRequest(args, opts) {
     const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
     updateStateSinkBlock(stateFile, prUrl, prNumber, project.full_name, project.html_url);
     appendSummary(summaryFile, prUrl, prNumber);
-    const relState = path.relative(root, stateFile);
-    const relSummary = path.relative(root, summaryFile);
-    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
-    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
-    if (diffResult.status !== 0) {
-      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
-        'chore: record PR metadata for ' + args.project], { stdio: 'pipe' });
-      if (commitResult.status !== 0) {
-        process.stderr.write('[offline] metadata commit skipped: ' +
-          (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+    // #1098 F6: OFFLINE changes no git history. In the LINKED posture the run branch lives in a
+    // worktree other than `root` (the MAIN checkout), where committing would land a metadata commit
+    // on main's HEAD — never touching main's index or HEAD is the sink's contract, so the files are
+    // left written for the caller. Every other shape keeps the legacy local metadata commit.
+    const branchHolder = adaptiveSchema.worktreeCheckedOutBranch(root, args.branch);
+    if (!(branchHolder && branchHolder !== root)) {
+      const relState = path.relative(root, stateFile);
+      const relSummary = path.relative(root, summaryFile);
+      spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+      const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+      if (diffResult.status !== 0) {
+        const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+          'chore: record PR metadata for ' + args.project], { stdio: 'pipe' });
+        if (commitResult.status !== 0) {
+          process.stderr.write('[offline] metadata commit skipped: ' +
+            (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+        }
       }
     }
     return { pr: { pr_url: prUrl, pr_number: prNumber }, project };
@@ -491,7 +370,18 @@ function ensurePullRequest(args, opts) {
   // first; record-less discovery scans open PRs for this source branch.
   let existing = null;
   const recordedUrl = readRecordedPrUrl(projectFolder, stateFile);
-  if (recordedUrl) existing = viewRecordedPr(recordedUrl);
+  if (recordedUrl) {
+    existing = viewRecordedPr(recordedUrl);
+    // #1098 F2: a durable record proves a PR exists. If its state cannot be read right now (a
+    // transient `tea pr view` failure), discovery is not a safe fallback: the record's PR may
+    // already be merged with its branch deleted, so the discovery path would push that branch back
+    // and open a SECOND PR. Fail closed — refuse, report, modify nothing.
+    assert(existing,
+      'sink-pr: refusing: a durable PR record exists (' + recordedUrl + ') but its current state ' +
+      'could not be read (pr_probe_failed). Refusing to fall back to discovery, which could push a ' +
+      'deleted branch back and reopen a merged PR. Retry once the forge is reachable; nothing was ' +
+      'pushed or created.');
+  }
   if (!existing) {
     const open = listOpenPrs(args.branch);
     if (open.length > 0) existing = open[0];
@@ -544,7 +434,8 @@ function ensurePullRequest(args, opts) {
       web_url: existing.url,
       state: 'open',
       source_branch: existing.head,
-      target_branch: existing.base
+      target_branch: existing.base,
+      reused: true
     };
   }
 
@@ -587,10 +478,20 @@ function maybeAutoMergeFromConfig(pr, project, configOverride) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const { pr, project } = ensurePullRequest(args);
+  const out = ensurePullRequest(args);
+  const pr = out.pr;
+  const project = out.project;
+  // #1098 F4: a MERGED PR is never merged again. Auto-merge (and an explicit --merge) apply only to
+  // an OPEN request — §2.1-5 — so the already-merged lane returns before either call, exactly as the
+  // GitHub sink does. The result token tells the caller which lane it took.
+  const lane = out.already_merged ? 'already_merged' : (pr.reused ? 'reused' : 'created');
+  if (out.already_merged) {
+    process.stdout.write('sink_pr: already_merged\nPR URL: ' + (pr.pr_url || pr.web_url) + '\nPR Number: ' + pr.pr_number + '\n');
+    return;
+  }
   if (args.merge && !OFFLINE) mergePullRequest(pr, project, args);
   else if (!OFFLINE) maybeAutoMergeFromConfig(pr, project);
-  process.stdout.write('PR URL: ' + (pr.pr_url || pr.web_url) + '\nPR Number: ' + pr.pr_number + '\n');
+  process.stdout.write('sink_pr: ' + lane + '\nPR URL: ' + (pr.pr_url || pr.web_url) + '\nPR Number: ' + pr.pr_number + '\n');
 }
 
 if (require.main === module) {
@@ -603,7 +504,6 @@ module.exports = {
   closesBody,
   appendSummary,
   ensurePullRequest,
-  findPullRequestForBranch,
   maybeAutoMergeFromConfig,
   mergePullRequest,
   routePullRequestState,

@@ -1418,10 +1418,11 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
   is always a member. A singleton claim writes exactly `Closes #N`, as before. Keep-open stays
   merge-sink-only: the sink refuses a project carrying `issue_action: comment_keep_open`.
-- **Exit codes**: `0` created/reused/recorded · `1` push, creation, or a reuse/closed-unmerged refusal.
-- **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` commit instead of real
-  metadata. A placeholder is never treated as an identity by the reuse lookup.
-- The folder stays active until `watch-pr` / `watch-mr` observes MERGED or CLOSED; both archive it.
+- **Exit codes**: `0` created/reused/already-merged and recorded · `1` push, creation, probe failure
+  (`pr_probe_failed` / `mr_probe_failed` on a durable record), or a reuse/closed-unmerged refusal.
+- **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` record instead of real
+  metadata, and changes no git history in the linked posture (main's index and HEAD stay untouched).
+  A placeholder is never treated as an identity by the reuse lookup.
 - The PR sink emits no closure receipt — the authoritative receipt for a `sink: pr` project is
   emitted by the watcher at merge. This is documented behavior, not a gap.
 
@@ -1618,10 +1619,13 @@ standard PR-path run again, because finalize archives it before the sink runs. `
 second face: it scans the MAIN checkout's archive band for archived `sink: pr` / `sink: mr` runs
 carrying a real `pr_url`/`mr_url` (never an `OFFLINE_PLACEHOLDER`, never another sink kind) and
 reports each against actual forge state. The scan is bounded and stateless: a run leaves it the
-moment its archive becomes tracked at `HEAD`, and an explicit `--issue N` reaches an already-tracked
-run. Publication and closeout are reported separately, and reconciliation never re-merges, re-creates,
-pushes the mainline, or closes members by hand — manual closure of any remaining member is the
-orchestrator's call once the merge is verified.
+moment its archive becomes tracked at `HEAD` **or** on the local default branch, and an explicit
+`--issue N` reaches an already-tracked run. At most one `git fetch` runs per scan, however many
+MERGED runs it walks. (Known limit: a merged run whose archive reached neither origin nor the local
+default branch is reported on every scan — bounding it would need the durable marker file this design
+deliberately does not write.) Publication and closeout are reported separately, and reconciliation
+never re-merges, re-creates, pushes the mainline, or closes members by hand — manual closure of any
+remaining member is the orchestrator's call once the merge is verified.
 
 ```json
 {
