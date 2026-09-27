@@ -49,12 +49,18 @@ function makeHome(name) {
   return home;
 }
 
+// The bound generated-tree root (KAOLA_EDITION_TREE_ROOT/FOR, see runtime-edition-forge.js) is the
+// one KAOLA_ setting that must survive the scrub: without it the installers under test refresh the
+// MAIN checkout's shared edition trees when this suite runs from a worktree.
+const EDITION_TREE_ENV = Object.fromEntries(['KAOLA_EDITION_TREE_ROOT', 'KAOLA_EDITION_TREE_FOR']
+  .filter(k => process.env[k]).map(k => [k, process.env[k]]));
+
 function childEnv(home) {
   const env = Object.assign({}, process.env);
   for (const key of Object.keys(env)) if (key.startsWith('KAOLA_')) delete env[key];
   for (const key of ['OPENCODE_CONFIG_DIR', 'KIMI_HOME', 'GROK_HOME', 'CURSOR_HOME', 'ZCODE_HOME', 'CODEX_HOME']) delete env[key];
   env.HOME = home;
-  return env;
+  return Object.assign(env, EDITION_TREE_ENV);
 }
 
 function run(cmd, args, home) {

@@ -75,6 +75,10 @@ function sandbox(label) {
     KAOLA_CURSOR_APP_PATH: path.join(root, 'no-Cursor.app'),
     KAOLA_ZCODE_APP_PATH: path.join(root, 'no-ZCode.app'),
     KAOLA_CANDIDATE_SHA: '0'.repeat(40),
+    // The bound generated-tree root (runtime-edition-forge.js) passes through, or the installers
+    // under test refresh the MAIN checkout's shared edition trees when this runs from a worktree.
+    ...Object.fromEntries(['KAOLA_EDITION_TREE_ROOT', 'KAOLA_EDITION_TREE_FOR']
+      .filter(k => process.env[k]).map(k => [k, process.env[k]])),
   };
   const box = {
     root, home, bin, env,

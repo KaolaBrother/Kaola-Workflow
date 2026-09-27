@@ -95,6 +95,12 @@ function makeHome(label) {
   return home;
 }
 
+// The bound generated-tree root (KAOLA_EDITION_TREE_ROOT/FOR, see runtime-edition-forge.js) is the
+// one KAOLA_ setting that must survive the scrub: without it the installers under test refresh the
+// MAIN checkout's shared edition trees when this suite runs from a worktree.
+const EDITION_TREE_ENV = Object.fromEntries(['KAOLA_EDITION_TREE_ROOT', 'KAOLA_EDITION_TREE_FOR']
+  .filter(k => process.env[k]).map(k => [k, process.env[k]]));
+
 const NODE_DIR = path.dirname(process.execPath);
 function childEnv(home, extra) {
   const env = {};
@@ -107,7 +113,7 @@ function childEnv(home, extra) {
   env.TMPDIR = path.join(SANDBOX, 'tmp');
   fs.mkdirSync(env.TMPDIR, { recursive: true });
   for (const v of Object.values(extra || {})) if (path.isAbsolute(v)) fs.mkdirSync(v, { recursive: true });
-  return Object.assign(env, extra || {});
+  return Object.assign(env, EDITION_TREE_ENV, extra || {});
 }
 
 function run(script, args, home, extraEnv) {

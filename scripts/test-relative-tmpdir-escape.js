@@ -91,6 +91,12 @@ const repoBefore = new Set(fs.readdirSync(repoRoot));
 // A hermetic child environment: a developer's own KAOLA_*/KW_* exports must not reach the
 // children under test (a leaked KW_TMPDIR or offline flag silently changes what a scenario
 // measures), and fixture git commands must not read developer git config.
+// The bound generated-tree root (KAOLA_EDITION_TREE_ROOT/FOR, see runtime-edition-forge.js) is the
+// one KAOLA_ setting that must survive the scrub: without it the installers under test refresh the
+// MAIN checkout's shared edition trees when this suite runs from a worktree.
+const EDITION_TREE_ENV = Object.fromEntries(['KAOLA_EDITION_TREE_ROOT', 'KAOLA_EDITION_TREE_FOR']
+  .filter(k => process.env[k]).map(k => [k, process.env[k]]));
+
 function childEnv(extra) {
   const base = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -99,7 +105,7 @@ function childEnv(extra) {
   }
   base.GIT_CONFIG_GLOBAL = '/dev/null';
   base.GIT_CONFIG_NOSYSTEM = '1';
-  return Object.assign(base, extra);
+  return Object.assign(base, EDITION_TREE_ENV, extra);
 }
 
 // ---------------------------------------------------------------------------------------------
