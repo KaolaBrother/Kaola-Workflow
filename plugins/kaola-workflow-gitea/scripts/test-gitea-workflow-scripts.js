@@ -1716,6 +1716,104 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 2e (#1102): the pin must resolve the run that OWNS the worktree. #1100 composed the
+  // receipt path from `'issue-' + issueNumber`, a name the BRANCH spells; a bundle or custom-named
+  // run owns its folder under another name, so both reads missed and the pin was silently inert.
+  // The owner is resolved from the run records that already exist, and an unresolvable or conflicting
+  // owner keeps today's behavior (unpinned) rather than guessing.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc2e-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    const wtPath = path.join(kwRoot, 'bundle-401-402');
+    const writeState = (projectDir, extras) => {
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-401-402', 'status: active', '']
+          .concat(extras).join('\n') + '\n');
+    };
+    const writeReceipt = (projectDir, states) => {
+      fs.mkdirSync(path.join(projectDir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(projectDir, '.cache', 'sink-receipt.json'), JSON.stringify({
+        project: 'bundle-401-402',
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+          stash_restore: 'done', archive_commit: 'done', push_main: states, closure: states }
+      }, null, 2) + '\n');
+    };
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      // workflow/gitea-issue-401 is the branch a bundle run of issue 401 really creates; the FOLDER
+      // is bundle-401-402, so no `issue-401` folder exists anywhere.
+      addWorktree(tmp, 'workflow/gitea-issue-401', wtPath);
+      const ownDir = path.join(wtPath, 'kaola-workflow', 'bundle-401-402');
+      writeState(ownDir, [
+        '## Sink', 'branch: workflow/gitea-issue-401', 'issue_number: 401', 'sink: merge',
+        'run_posture: worktree', 'main_root: ' + tmp, 'claim_ts: 2026-09-27T00:00:00.000Z',
+        'worktree_path: ' + wtPath, 'issue_numbers: 401,402', 'bundle_id: bundle-401-402', ''
+      ]);
+      writeReceipt(ownDir, 'pending');
+      const out1 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(out1.dry_run === false, 'sc2e: dry_run must be false, got: ' + JSON.stringify(out1));
+      assert(fs.existsSync(wtPath),
+        'sc2e: a bundle-named run\'s mid-flight receipt must pin its lane worktree — the receipt lives in kaola-workflow/bundle-401-402, so a name derived as issue-401 can never find it');
+      assert(!Array.isArray(out1.removed) || !out1.removed.some(p => p === wtPath),
+        'sc2e: removed must NOT contain the bundle run\'s lane worktree, got: ' + JSON.stringify(out1.removed));
+      assert(!Array.isArray(out1.deleted_branch) || !out1.deleted_branch.includes('workflow/gitea-issue-401'),
+        'sc2e: the pinned lane worktree\'s branch must NOT be deleted either, got: ' + JSON.stringify(out1.deleted_branch));
+      // All-done keeps today's behavior for the same custom-named run: receipt-driven, never a
+      // blanket exemption.
+      writeReceipt(ownDir, 'done');
+      const out2 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(!fs.existsSync(wtPath),
+        'sc2e: a completed custom-named run\'s leftover lane worktree must sweep exactly as before');
+      assert(Array.isArray(out2.removed) && out2.removed.some(p => p === wtPath),
+        'sc2e: removed must contain the completed run\'s lane worktree, got: ' + JSON.stringify(out2.removed));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 2f (#1102): IDENTITY SAFETY. `workflow/gitea-issue-<N>` is REUSED across runs of the
+  // same issue, so an OLD run's leftover receipt (archived under the derived name that run really
+  // used) must never pin the NEW run's worktree when the new run holds no receipt of its own.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc2f-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    const wtPath = path.join(kwRoot, 'bundle-401-402');
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      addWorktree(tmp, 'workflow/gitea-issue-401', wtPath);
+      fs.mkdirSync(path.join(wtPath, 'kaola-workflow', 'bundle-401-402'), { recursive: true });
+      fs.writeFileSync(path.join(wtPath, 'kaola-workflow', 'bundle-401-402', 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: bundle-401-402', 'status: active', '',
+          '## Sink', 'branch: workflow/gitea-issue-401', 'run_posture: worktree',
+          'worktree_path: ' + wtPath, 'claim_ts: 2026-09-27T02:00:00.000Z', ''].join('\n') + '\n');
+      const staleDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-401');
+      fs.mkdirSync(path.join(staleDir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(staleDir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: issue-401', 'status: closed', '',
+          '## Sink', 'branch: workflow/gitea-issue-401', 'issue_number: 401',
+          'worktree_path: ' + wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z', ''].join('\n') + '\n');
+      fs.writeFileSync(path.join(staleDir, '.cache', 'sink-receipt.json'), JSON.stringify({
+        project: 'issue-401',
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+          stash_restore: 'done', archive_commit: 'done', push_main: 'pending', closure: 'pending' }
+      }, null, 2) + '\n');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(!fs.existsSync(wtPath),
+        'sc2f: an OLD run\'s mid-flight receipt under archive/issue-401 must NOT pin a NEW run\'s worktree that owns bundle-401-402 and has no receipt of its own');
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc2f: removed must contain the unpinned lane worktree, got: ' + JSON.stringify(out.removed));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   // Sub-case 2d (#1100): with NO sink receipt at all the closed-issue lane worktree sweeps exactly
   // as before — the pin covers a resumable sink, it is not an unknown-exemption.
   {
