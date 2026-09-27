@@ -424,6 +424,38 @@ try {
       'the new authority receipt records no agent');
   });
 
+  // The Cursor CLI's startup/resume Repo prep runs the INSTALLED --ensure-target (claim.js spawns
+  // it). A project materialized by the previous release must migrate there too, not only through
+  // an explicit install-cursor.sh --target.
+  section('C2 cursor: the installed --ensure-target migrates a project materialized by the previous release', () => {
+    const home = makeHome('cursor-ensure');
+    const g0 = run(RT.cursor.script, RT.cursor.install, home);
+    check(g0.status === 0, `the upgraded global install exits 0\n${g0.out}`);
+    plant(CURRENT, 'cproj/.cursor', home, path.join(home, 'proj', '.cursor'));
+    const projReceipt = path.join(home, 'proj', '.cursor', 'kaola-workflow-materialization.json');
+    fs.writeFileSync(projReceipt, readText(projReceipt).split(path.join(home, 'cproj')).join(path.join(home, 'proj')));
+    const pdir = path.join(home, 'proj', '.cursor', 'agents');
+    const edited = path.join(pdir, 'implementer.md');
+    fs.appendFileSync(edited, '\nmine\n');
+    const planted = mdFiles(pdir).filter(n => n !== 'implementer.md');
+    check(planted.length > 0 && Object.keys(JSON.parse(readText(projReceipt)).files).some(rel => rel.startsWith('agents/')),
+      'fixture: the previous release materialized agents into the project and recorded them');
+    const helper = path.join(home, '.cursor', 'kaola-workflow', 'scripts', 'kaola-workflow-cursor-surface.js');
+    check(fs.existsSync(helper), 'the global install placed the Cursor materialization helper');
+    // spawn-class: environment
+    const e = spawnSync(process.execPath, [helper, '--ensure-target', path.join(home, 'proj'), '--forge=github', '--json'],
+      { cwd: path.join(home, 'cwd'), env: childEnv(home), encoding: 'utf8' });
+    const out = (e.stdout || '') + (e.stderr || '');
+    check(e.status === 0, `--ensure-target exits 0\n${out}`);
+    for (const name of planted) check(!fs.existsSync(path.join(pdir, name)), `ensure-target: released ${name} removed`);
+    check(fs.existsSync(edited) && readText(edited).endsWith('\nmine\n'),
+      'ensure-target: the edited retired agent is kept byte-for-byte');
+    check(!Object.keys(JSON.parse(readText(projReceipt)).files).some(rel => rel.startsWith('agents/')),
+      'ensure-target: the rewritten project receipt records no agent');
+    check(fs.existsSync(path.join(home, 'proj', '.cursor', 'commands', 'workflow-next.md')),
+      'ensure-target: the project still receives its commands');
+  });
+
   // Forges: the gitea Grok project fixture migrates through --forge=gitea.
   section('C12 grok --forge=gitea project upgrade retires the gitea renders', () => {
     const home = makeHome('grok-gitea');
