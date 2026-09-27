@@ -252,10 +252,17 @@ AGENT_MANIFEST_NAME=".kaola-workflow-agent-manifest"
 #     SKILL.md bytes are a released render (any release, not only v9.17.2) is removed.
 # Every other Kaola-named entry is kept and reported; a symlinked or non-directory carrier is
 # reported and never followed, and does not block the rest of the install or uninstall.
+# The scope root the retirement judges symlinks below (#1101 N5): the runtime home for --global,
+# the project for a project scope (<project>/<layout>/agents).
+retire_scope_root() {
+  if [[ "$GLOBAL" -eq 1 ]]; then dirname "$1"; else dirname "$(dirname "$1")"; fi
+}
+
 sweep_retired_native_agents() {
   local agents_dest="$1"
   node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime kimi \
-    --dir "$agents_dest" --record "$agents_dest/$AGENT_MANIFEST_NAME" || {
+    --dir "$agents_dest" --record "$agents_dest/$AGENT_MANIFEST_NAME" \
+    --root "$(retire_scope_root "$agents_dest")" || {
     echo "error: retired Kimi agent sweep failed for $agents_dest" >&2
     exit 1
   }

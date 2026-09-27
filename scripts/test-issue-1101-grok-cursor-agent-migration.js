@@ -456,6 +456,24 @@ try {
       'ensure-target: the project still receives its commands');
   });
 
+  // A symlinked project `.grok` is not retired through (#1101 N5): the scope root is the project, so
+  // a symlinked component below it keeps the whole agents dir, reported non_regular — the same
+  // rule the Codex installer applies to a symlinked `.codex`.
+  section('C12 grok: agents behind a symlinked project .grok are kept and reported', () => {
+    const home = makeHome('grok-symlinked-layout');
+    const target = plant(CURRENT, 'gproj/.grok', home, path.join(home, 'elsewhere', 'grok'));
+    fs.symlinkSync(target, path.join(home, 'proj', '.grok'));
+    const agentsBehind = path.join(target, 'agents');
+    const before = snapshot(agentsBehind);
+    const r = run(RT.grok.script, RT.grok.project(path.join(home, 'proj')), home);
+    check(r.status === 0, `the install exits 0\n${r.out}`);
+    check(Object.keys(before).length > 0 && JSON.stringify(snapshot(agentsBehind)) === JSON.stringify(before),
+      'no agent behind the symlinked .grok is removed');
+    check(countPrefix(r.out, REMOVED) === 0, 'no removal is reported');
+    check(hasLine(r.out, PRESERVED('non_regular') + path.join(home, 'proj', '.grok', 'agents')),
+      'the agents dir behind the symlinked .grok is reported as non_regular');
+  });
+
   // Forges: the gitea Grok project fixture migrates through --forge=gitea.
   section('C12 grok --forge=gitea project upgrade retires the gitea renders', () => {
     const home = makeHome('grok-gitea');

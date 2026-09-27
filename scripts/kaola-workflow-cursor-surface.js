@@ -427,7 +427,10 @@ function retireCursorAgents(root, receiptInfo, apply) {
       if (match) rows.set(match[1], record.sha256);
     }
   }
-  const result = retired.retireAgentDir({ runtime: 'cursor', dir, rows, apply: apply !== false });
+  // The scope root the retirement judges symlinks below (#1101 N5): the Cursor home itself, or the
+  // project holding a <project>/.cursor layout.
+  const scopeRoot = path.basename(root) === '.cursor' ? path.dirname(root) : root;
+  const result = retired.retireAgentDir({ runtime: 'cursor', dir, rows, root: scopeRoot, apply: apply !== false });
   if (apply !== false && inspectPath(dir).status === 'directory') {
     try { fs.rmdirSync(dir); } catch (_) { /* a kept or foreign file keeps the dir */ }
   }

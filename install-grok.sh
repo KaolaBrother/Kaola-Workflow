@@ -190,9 +190,16 @@ remove_retired_compact_prompt_file() {
 # Kaola role name whose sha256 is a render some release shipped (the frozen Grok catalog in
 # kaola-workflow-retired-agents.js) is removed; any other Kaola-named file is kept and reported.
 # A symlinked or non-directory agents carrier is reported and never followed.
+# The scope root the retirement judges symlinks below (#1101 N5): the runtime home for --global,
+# the project for a project scope (<project>/<layout>/agents).
+retire_scope_root() {
+  if [[ "$GLOBAL" -eq 1 ]]; then dirname "$1"; else dirname "$(dirname "$1")"; fi
+}
+
 retire_grok_agents() {
   local dest="$1"
-  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime grok --dir "$dest" || {
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime grok --dir "$dest" \
+    --root "$(retire_scope_root "$dest")" || {
     echo "Install error: retired Grok agent sweep failed for $dest" >&2
     exit 1
   }

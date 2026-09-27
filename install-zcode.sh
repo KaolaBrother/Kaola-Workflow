@@ -173,9 +173,18 @@ is_plain_basename() {
 # Kaola-named file whose sha256 is a render some release shipped is removed; an edited or
 # unrecorded Kaola-named file is kept and reported (the managed marker alone is not proof — a
 # copied or edited file keeps it). A symlinked or non-directory carrier is reported, not followed.
+# The scope root the retirement judges symlinks below (#1101 N5): the directory holding the agents
+# carrier's layout — the ZCode home itself, or the project for <project>/.zcode/agents.
+retire_scope_root() {
+  local layout
+  layout="$(dirname "$1")"
+  if [[ "$(basename "$layout")" == ".zcode" ]]; then dirname "$layout"; else printf '%s\n' "$layout"; fi
+}
+
 remove_retired_agents() {
   local dest="$1"
-  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime zcode --dir "$dest" || {
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime zcode --dir "$dest" \
+    --root "$(retire_scope_root "$dest")" || {
     echo "error: retired ZCode agent sweep failed for $dest" >&2
     exit 1
   }

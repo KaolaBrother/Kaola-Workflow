@@ -231,9 +231,16 @@ check_support_scripts() {
 }
 
 # Remove the agent profiles an older release deployed, on byte proof (see the header).
+# The scope root the retirement judges symlinks below (#1101 N5): the runtime home for --global,
+# the project for a project scope (<project>/<layout>/agents).
+retire_scope_root() {
+  if [[ "$GLOBAL" -eq 1 ]]; then dirname "$1"; else dirname "$(dirname "$1")"; fi
+}
+
 sweep_retired_devin_agents() {
   local agents_dest="$1"
-  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime devin --dir "$agents_dest" || {
+  node "$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js" retire --runtime devin --dir "$agents_dest" \
+    --root "$(retire_scope_root "$agents_dest")" || {
     echo "error: retired Devin agent sweep failed for $agents_dest" >&2
     exit 1
   }

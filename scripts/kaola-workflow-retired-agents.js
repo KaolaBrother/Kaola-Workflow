@@ -19,7 +19,9 @@
 //
 // CLI
 //   node kaola-workflow-retired-agents.js retire --runtime <runtime> --dir <agents-dir>
-//        [--record <file>] [--check]
+//        [--record <file>] [--root <scope-root>] [--check]
+//   --root: a symlinked or non-directory component below the scope root (for example a symlinked
+//   <project>/.grok) keeps the whole agents dir, reported non_regular; nothing is retired through it.
 //   node kaola-workflow-retired-agents.js retire-skills --runtime kimi --dir <skills-dir> [--check]
 //   node kaola-workflow-retired-agents.js report-bindings --runtime opencode --config <opencode.json>
 //   --check changes nothing and exits 1 while a proven retired file or a record is still installed.
@@ -88,13 +90,34 @@ function readRecord(file) {
 // Decide one dir. Pure apart from the reads and (when apply) the unlinks it reports. `rows` (a
 // Map of file name -> sha256) replaces reading `record` when the caller owns a non-TSV record
 // (the Cursor receipts); the caller then retires that record itself.
-function retireAgentDir({ runtime, dir, record, rows, apply = true, ext = '.md' }) {
+// A symlinked or non-directory component strictly below the scope root `root`, on the way to
+// `target` (exclusive), or null. The scope root itself is the caller's choice and is not judged.
+function symlinkBelow(root, target) {
+  if (!root) return null;
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  let current = path.resolve(root);
+  for (const segment of relative.split(path.sep).slice(0, -1)) {
+    current = path.join(current, segment);
+    const st = lstat(current);
+    if (!st) return null;
+    if (st.isSymbolicLink() || !st.isDirectory()) return current;
+  }
+  return null;
+}
+
+function retireAgentDir({ runtime, dir, record, rows, root, apply = true, ext = '.md' }) {
   const spec = RUNTIMES[runtime];
   if (!spec) throw new Error(`unknown runtime: ${runtime}`);
   const catalog = CATALOG[runtime] || {};
   const result = { removed: [], preserved: [], warnings: [], recordRemoved: null, dir };
   const carrier = lstat(dir);
   if (!carrier) return result;
+  // Nothing is retired through a symlinked parent below the scope root (#1101 N5).
+  if (symlinkBelow(root, dir) || (record && symlinkBelow(root, record))) {
+    result.preserved.push({ reason: 'non_regular', file: dir });
+    return result;
+  }
   if (!carrier.isDirectory()) {
     result.preserved.push({ reason: 'non_regular', file: dir });
     return result;
@@ -218,14 +241,14 @@ function parseArgs(argv) {
   while (args.length) {
     const a = args.shift();
     if (a === '--check') opts.check = true;
-    else if (a === '--runtime' || a === '--dir' || a === '--record' || a === '--config') {
+    else if (a === '--runtime' || a === '--dir' || a === '--record' || a === '--config' || a === '--root') {
       if (!args.length) throw new Error(`${a} needs a value`);
       opts[a.slice(2)] = args.shift();
     } else throw new Error(`unknown argument: ${a}`);
   }
   const known = ['retire', 'retire-skills', 'report-bindings'].includes(opts.command);
   if (!known || !opts.runtime || !RUNTIMES[opts.runtime] || (opts.command === 'report-bindings' ? !opts.config : !opts.dir)) {
-    throw new Error('usage: kaola-workflow-retired-agents.js retire|retire-skills --runtime <runtime> --dir <dir> [--record <file>] [--check] | report-bindings --runtime <runtime> --config <file>');
+    throw new Error('usage: kaola-workflow-retired-agents.js retire|retire-skills --runtime <runtime> --dir <dir> [--record <file>] [--root <scope-root>] [--check] | report-bindings --runtime <runtime> --config <file>');
   }
   return opts;
 }
@@ -246,6 +269,7 @@ function main(argv) {
       : retireAgentDir({
         runtime: opts.runtime, dir: path.resolve(opts.dir),
         record: opts.record ? path.resolve(opts.record) : null, apply: !opts.check,
+        root: opts.root ? path.resolve(opts.root) : null,
       });
     for (const line of report(result, opts.check)) console.log(line);
     return opts.check && (result.removed.length || result.recordRemoved) ? 1 : 0;

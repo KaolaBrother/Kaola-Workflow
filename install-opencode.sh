@@ -275,7 +275,8 @@ retire_opencode_agents() {
   local dest_root="$1" layout_root="$2" global="$3" dir
   local sweep="$SCRIPT_DIR/scripts/kaola-workflow-retired-agents.js"
   for dir in "$layout_root/agents" "$layout_root/agent"; do
-    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" || {
+    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" \
+      --root "$dest_root" || {
       echo "error: retired OpenCode agent sweep failed for $dir" >&2
       exit 1
     }
@@ -283,7 +284,8 @@ retire_opencode_agents() {
   done
   if [[ "$global" -eq 1 ]]; then
     dir="$dest_root/.opencode/agent"
-    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" || {
+    node "$sweep" retire --runtime opencode --dir "$dir" --record "$dir/$AGENT_MANIFEST_NAME" \
+      --root "$dest_root" || {
       echo "error: retired OpenCode agent sweep failed for $dir" >&2
       exit 1
     }
