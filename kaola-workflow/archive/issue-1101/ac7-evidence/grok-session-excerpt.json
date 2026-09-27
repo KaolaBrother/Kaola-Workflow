@@ -1,0 +1,46 @@
+{
+ "note": "Curated excerpt from the Grok session store (~/.grok/sessions/<cwd>/); the raw session files stay on the smoke machine.",
+ "child_session": {
+  "id": "01a0e18b-1e4c-72c0-a6cc-43ca5328a984",
+  "session_kind": "subagent",
+  "cwd": "/private/tmp/kw1101-smoke/grok",
+  "created_at": "2026-09-27T06:26:26.015032Z",
+  "current_model_id": "grok-4.7",
+  "session_summary": "Read nonce.txt exact file contents"
+ },
+ "child_nonce_read_updates": [
+  {
+   "sessionId": "01a0e18b-1e4c-72c0-a6cc-43ca5328a984",
+   "sessionUpdate": "tool_call",
+   "toolCallId": "call-ffed93c3-ed5b-48c5-aad2-66002bafd398-0",
+   "title": "read_file",
+   "rawInput": {
+    "target_file": "/private/tmp/kw1101-smoke/grok/nonce.txt"
+   }
+  },
+  {
+   "sessionId": "01a0e18b-1e4c-72c0-a6cc-43ca5328a984",
+   "sessionUpdate": "tool_call_update",
+   "toolCallId": "call-ffed93c3-ed5b-48c5-aad2-66002bafd398-0",
+   "title": "Read `/private/tmp/kw1101-smoke/grok/nonce.txt`",
+   "rawInput": {
+    "variant": "ReadFile",
+    "target_file": "/private/tmp/kw1101-smoke/grok/nonce.txt"
+   }
+  },
+  {
+   "sessionId": "01a0e18b-1e4c-72c0-a6cc-43ca5328a984",
+   "sessionUpdate": "tool_call_update",
+   "toolCallId": "call-ffed93c3-ed5b-48c5-aad2-66002bafd398-0",
+   "status": "completed",
+   "rawOutput": "{\"type\":\"ReadFile\",\"FileContent\":{\"content\":\"1→KW1101-GROK-391b881a688c\\n\",\"content_concise\":\"1→KW1101-GROK-391b881a688c\\n\",\"absolute_path\":\"/private/tmp/kw1101-smoke/grok/nonce.txt\",\"offset\":null,\"raw_output\":\"KW1101-GROK-391b881a688c\\n\",\"total_lines\":2}}"
+  }
+ ],
+ "parent_session": {
+  "id": "01a0e189-d84e-78e2-8b8a-550808292290",
+  "prompt_context_loaded_files": [
+   "~/.grok/rules/kaola-workflow-global.md",
+   "~/.claude/rules/kaola-workflow-global.md"
+  ]
+ }
+}

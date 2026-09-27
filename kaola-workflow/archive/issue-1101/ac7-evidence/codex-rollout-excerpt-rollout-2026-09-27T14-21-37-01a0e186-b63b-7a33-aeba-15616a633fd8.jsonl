@@ -1,0 +1,6 @@
+{"type":"session_meta","id":"01a0e186-b63b-7a33-aeba-15616a633fd8","source":"exec","cli_version":"0.157.1"}
+{"type":"turn_context","model":"gpt-6-astra"}
+{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"read_nonce\",\"agent_type\":\"default\",\"fork_turns\":\"none\",\"message\":\"<encrypted>\"}"}
+{"type":"function_call_output","output":"\"{\\\"task_name\\\":\\\"/root/read_nonce\\\"}\""}
+{"type":"function_call","name":"wait_agent","arguments":"{\"timeout_ms\":10000}"}
+{"type":"function_call_output","output":"\"{\\\"message\\\":\\\"Wait timed out.\\\",\\\"timed_out\\\":true}\""}

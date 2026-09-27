@@ -1,0 +1,7 @@
+Bounded smoke test of this project's Delegation rules (project AGENTS.md). Do exactly this and nothing else:
+1. Delegate exactly one item to a subagent through this host's native subagent mechanism, as the Delegation section and the Runtime adapter facts in AGENTS.md instruct, choosing a type this host actually exposes. The child's item: read the file nonce.txt in the project root and return its exact contents. Do not read nonce.txt yourself.
+2. After the child returns, reply with exactly these four lines and nothing else:
+TOOL=<name of the native tool you called to delegate>
+TYPE=<subagent type/profile you passed, or none>
+CATALOG=<comma-separated subagent types your delegation tool offered, as the host listed them>
+CHILD_RESULT=<exactly what the child returned>

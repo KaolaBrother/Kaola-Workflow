@@ -1,0 +1,1 @@
+timestamp=2026-09-27T06:40:52.687Z level=INFO run=07c491e6 message="cli starting" version=2.0.18 channel=latest local=false args="[\"serve\",\"--stdio\",\"--port\",\"0\"]" role=cli

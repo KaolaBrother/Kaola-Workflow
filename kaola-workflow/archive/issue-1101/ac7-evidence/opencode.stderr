@@ -1,0 +1,6 @@
+Error: Timed out waiting for the background service to start
+    at <anonymous> (/$bunfs/root/chunk-v1kbst05.js:3:5692)
+    at service.ensure (/$bunfs/root/chunk-5yxx76t7.js:3:704)
+    at service.ensure (definition) (/$bunfs/root/chunk-v1kbst05.js:3:3955)
+    at cli.server-connection.resolve (/$bunfs/root/chunk-5v0am7v0.js:2:900)
+    at cli.server-connection.resolve (definition) (/$bunfs/root/chunk-5yxx76t7.js:2:399)

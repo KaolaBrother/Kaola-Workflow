@@ -1,0 +1,23 @@
+Reading additional input from stdin...
+2026-09-27T06:20:14.855499Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:14.861127Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:19.864394Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:19.890112Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.891043Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.891648Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.892267Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.892879Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.893306Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.893989Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.894553Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.895165Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.895440Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:19.895708Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-09-27T06:20:33.745293Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:39.882891Z  WARN codex_core_plugins::manager: failed to refresh cached remote plugin catalog error=failed to send remote plugin catalog request to https://chatgpt.com/backend-api/ps/plugins/list?scope=GLOBAL&limit=200: error decoding response body scope=Global
+2026-09-27T06:20:43.044665Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:52.685623Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:58.437038Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:59.410793Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:20:59.436020Z  WARN codex_core::hook_runtime: failed to resolve parent transcript path for subagent hook parent_thread_id=01a0e185-881a-7f32-a6d2-b3aeaa97231c error=invalid thread-store request: no rollout found for thread id 01a0e185-881a-7f32-a6d2-b3aeaa97231c
+2026-09-27T06:21:05.745263Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out

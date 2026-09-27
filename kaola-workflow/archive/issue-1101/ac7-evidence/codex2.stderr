@@ -1,0 +1,11 @@
+Reading additional input from stdin...
+2026-09-27T06:21:32.208341Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:32.209701Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:37.211015Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:46.332803Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:51.759316Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:56.525478Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:21:57.234713Z  WARN codex_core_plugins::manager: failed to refresh cached remote plugin catalog error=failed to send remote plugin catalog request to https://chatgpt.com/backend-api/ps/plugins/list?scope=GLOBAL&limit=200: error decoding response body scope=Global
+2026-09-27T06:22:02.743083Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:22:07.172562Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out
+2026-09-27T06:22:12.722903Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out

@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/private/tmp/kw1101-smoke/cursor","session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3","model":"Grok 4.7 256K Extra High","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word OK."}]},"session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3"}
+{"type":"thinking","subtype":"delta","text":"I will reply with the","session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3","timestamp_ms":1790491123298}
+{"type":"thinking","subtype":"delta","text":" single word \"OK\".","session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3","timestamp_ms":1790491123701}
+{"type":"thinking","subtype":"completed","session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3","timestamp_ms":1790491124429}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3"}
+{"type":"result","subtype":"success","duration_ms":15738,"duration_api_ms":15738,"is_error":false,"result":"OK","session_id":"aa202b3a-e65b-4fbf-8510-d63bc47d7ba3","request_id":"26476b4d-d725-4e5b-a423-e901887f4fc3","usage":{"inputTokens":21283,"outputTokens":119,"cacheReadTokens":3840,"cacheWriteTokens":0}}

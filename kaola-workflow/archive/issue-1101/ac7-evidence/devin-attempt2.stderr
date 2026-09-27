@@ -1,0 +1,3 @@
+Error: session/set_config_option (model) failed: Resource not found: {
+  "uri": "Model not found: swe-2-high. Available models: "
+}

@@ -1,0 +1,2 @@
+[2m2026-09-27T06:24:01.789464Z[0m [31mERROR[0m tool_error: tool_output_error [3msession_id[0m[2m=[0m01a0e188-8e0f-7a22-8405-5e4c0495900e [3mtool_name[0m[2m=[0m"list_dir" [3meffective_tool_name[0m[2m=[0m"list_dir" [3mmodel_id[0m[2m=[0m"grok-4.7" [3merror_kind[0m[2m=[0m"tool_output_error"
+[2m2026-09-27T06:24:07.998338Z[0m [33m WARN[0m proactive bundle sync failed [3merror[0m[2m=[0mNetwork error: error decoding response body

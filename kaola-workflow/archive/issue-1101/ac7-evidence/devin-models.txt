@@ -1,0 +1,8 @@
+Available models (52 families)
+[trimmed: only the SWE-2 family is kept; the full list is 52 families]
+SWE-2 (swe-2)
+  aliases: swe
+  swe-2-high                                                               SWE-2 High  [262K context, Free]
+  swe-2-medium                                                             SWE-2 Medium  [262K context, Free]
+  swe-2-max                                                                SWE-2 Max  [262K context, Free]
+
