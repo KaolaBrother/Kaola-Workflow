@@ -191,8 +191,11 @@ Those claim.js no longer `unknown_flag`. `--forge` is not a claim.js flag. Claim
 resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested
 cwd and not the write-worktree unless they are that demonstrated opened dir. Repo prep
 materializes the project's commands, Rule, and hooks, never agents; there is no pre-dispatch
-materialization before a child, and Finalize runs no `--ensure-target`. The helper
-derives project bytes only
+materialization before a child, and Finalize runs no `--ensure-target`. The premise that the CLI
+needs this project materialization (CLI global discovery `unsupported`) was measured on
+2026-08-27 against Kaola's named agents and has not been re-measured since #1101 removed them;
+the behavior is kept unchanged until a new probe of commands, the Rule, and hooks decides it. The
+helper derives project bytes only
 from the receipt-verified global authority, returns `current` without writing when already fresh,
 returns `materialized` when it safely writes (the claim/resume `cursor_prep` report carries
 restart_boundary `new_process_same_chat`), and

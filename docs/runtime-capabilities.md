@@ -75,6 +75,12 @@ carriers. Unknown stays `unknown`; a documented path is not a live PASS.
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live App Task catalog, 2026-08-27 |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live saved-Build Task catalog from a new same-repository parent, 2026-08-28 |
 
+The "Required project materialization" answers for Cursor were measured in the role-catalog era
+(2026-08-27/28), when the question was whether Kaola's named agents reached the live Task catalog.
+They have not been re-measured since #1101 removed those agents, so whether commands, the Rule,
+and hooks alone still need project materialization is unmeasured; the behavior is unchanged until
+a new probe says otherwise.
+
 On the measured standalone Cursor CLI only, Workflow `startup`/`resume` run Repo prep — the
 installed safe materializer `--ensure-target` — from all four claim trees (canonical GitHub,
 COMMON_SCRIPTS Codex copy, GitLab
