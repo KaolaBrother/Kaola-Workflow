@@ -2312,6 +2312,80 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 2i (#1103 repair round): the default set must read the ONE archive the SINK would
+  // resume. The integration arm always uses it, and the lane arm uses it when no record names the
+  // branch, so widening it to every `archive/<project>.archived-*` sibling let ANY archive's
+  // mid-flight receipt pin — including an older abandoned run's, which the sink's own
+  // `currentArchiveDir` never resumes (it throws `archive_authority_ambiguous`). Ambiguous ⇒ no pin.
+  {
+    const mkRepo = () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-2i-')));
+      const binDir = path.join(tmp, 'bin');
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wPath = path.join(tmp, '.kw', 'integrate', 'issue-400');
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      const rW = G.git(tmp, ['worktree', 'add', '--detach', '--', wPath, 'HEAD'], { encoding: 'utf8' });
+      assert.strictEqual(rW.status, 0, 'sc2i: worktree add failed: ' + rW.stderr);
+      return { tmp, binDir, wPath };
+    };
+    const cleanup2i = (fx) => { fs.rmSync(fx.tmp, { recursive: true, force: true }); };
+    const state2i = (dir, ts) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+        ['# Kaola-Workflow State', '', '## Project', 'name: issue-400', 'status: active', '', '## Sink',
+          'branch: workflow/gitea-issue-400', 'claim_ts: ' + ts, ''].join('\n'));
+    };
+    const receipt2i = (dir, obj) => {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj));
+    };
+    const rel2i = (root, dir) => path.relative(root, dir).split(path.sep).join('/');
+    const isStaleW = (fx) => {
+      const o = runClaimOnline(['stale-worktree-check'], fx.tmp, fx.binDir);
+      return Array.isArray(o.stale_integration_worktrees) && o.stale_integration_worktrees.some(w => w.path === fx.wPath);
+    };
+    const AR2I = ['kaola-workflow', 'archive'];
+    const PENDING2I = { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' };
+    const DONE2I = { preflight: 'done', merge: 'done', push_main: 'done', closure: 'done' };
+
+    // 2i-A — run 1 exact all-done, run 2 suffixed mid-flight, run 3 suffixed all-done (the current
+    // run, so the W is its leftover garbage). The sink cannot name one current archive here.
+    {
+      const fx = mkRepo();
+      try {
+        const plain = path.join(fx.tmp, ...AR2I, 'issue-400');
+        const t2 = path.join(fx.tmp, ...AR2I, 'issue-400.archived-2026-09-25T00-00-00-000Z');
+        const t3 = path.join(fx.tmp, ...AR2I, 'issue-400.archived-2026-09-27T00-00-00-000Z');
+        state2i(plain, '2026-09-20T00:00:00.000Z');
+        receipt2i(plain, { project: 'issue-400', branch: 'workflow/gitea-issue-400', claim_ts: '2026-09-20T00:00:00.000Z', steps: DONE2I });
+        state2i(t2, '2026-09-25T00:00:00.000Z');
+        receipt2i(t2, { project: 'issue-400', branch: 'workflow/gitea-issue-400', claim_ts: '2026-09-25T00:00:00.000Z', archive_dest: rel2i(fx.tmp, t2), steps: PENDING2I });
+        state2i(t3, '2026-09-27T00:00:00.000Z');
+        receipt2i(t3, { project: 'issue-400', branch: 'workflow/gitea-issue-400', claim_ts: '2026-09-27T00:00:00.000Z', archive_dest: rel2i(fx.tmp, t3), steps: DONE2I });
+        assert(isStaleW(fx),
+          'sc2i-A: an OLD abandoned run\'s mid-flight receipt must NOT pin the integration W when the sink cannot name one current archive — the W must classify STALE');
+      } finally { cleanup2i(fx); }
+    }
+
+    // 2i-B — two suffixed archives, both mid-flight, neither anchored: still ambiguous ⇒ no pin.
+    {
+      const fx = mkRepo();
+      try {
+        for (const [name, ts] of [
+          ['issue-400.archived-2026-09-26T00-00-00-000Z', '2026-09-26T00:00:00.000Z'],
+          ['issue-400.archived-2026-09-27T00-00-00-000Z', '2026-09-27T00:00:00.000Z'],
+        ]) {
+          const dir = path.join(fx.tmp, ...AR2I, name);
+          state2i(dir, ts);
+          receipt2i(dir, { project: 'issue-400', branch: 'workflow/gitea-issue-400', claim_ts: ts, steps: PENDING2I });
+        }
+        assert(isStaleW(fx),
+          'sc2i-B: two unanchored suffixed archives are ambiguous for the sink, so neither may pin the integration W — it must classify STALE');
+      } finally { cleanup2i(fx); }
+    }
+  }
+
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc3-')));

@@ -6270,9 +6270,15 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
 // The name convention is not new: the same file already matches archives with
 // `name.startsWith(project + '.archived-')` (`findArchiveAuthorities`, the #429 receipt resolver,
 // the #694 `readCurrentClaimTs` scan). #1102's identity rules are reused verbatim — this block adds
-// ONLY the suffixed archive to the folder set, and never a parallel ownership mechanism. Identity
-// safety still holds: with several archives of one issue, the pin reads the folders of the ONE
-// resolved current run; when no run can be determined it reads nothing from the ambiguous set.
+// ONLY the archive the sink would actually resume from, and never a parallel ownership mechanism.
+//
+// (repair round) The FIRST attempt widened the default set to EVERY `archive/<project>.archived-*`
+// sibling. That read a folder the sink itself would never resume from: with several archives of one
+// project, an older abandoned run's not-all-done receipt pinned the current run's leftover W
+// forever, while the sink's own `currentArchiveDir` would have refused to choose between them
+// (`archive_authority_ambiguous`). The default set therefore asks the sink's question — the live
+// `.cache` first, then the ONE archive `currentArchiveDir` resolves — and reads NO archive receipt
+// when that resolution is ambiguous, exactly as #1102 refuses to pin on an undeterminable owner.
 {
   const { execFileSync: execFS1103, spawnSync: spawnS1103 } = require('child_process');
   const CLAIM1103 = path.join(__dirname, 'kaola-workflow-claim.js');
@@ -6516,6 +6522,101 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }
+  }
+
+  // --- J/K/L (repair round): the default set reads the ONE receipt the SINK would resume ---------
+  // The integration arm always uses the default set, and so does the lane arm when no record names the
+  // branch. Widening it to every `archive/<project>.archived-*` sibling therefore let ANY archive's
+  // mid-flight receipt pin — including an older, abandoned run's, which the sink's own
+  // `currentArchiveDir` would never resume (it would throw `archive_authority_ambiguous`). The pin has
+  // to ask the sink's question and, when the sink cannot choose, pin nothing.
+
+  const receiptPathJ = (dir) => path.join(dir, '.cache', 'sink-receipt.json');
+  const relDestJ = (root, dir) => path.relative(root, dir).split(path.sep).join('/');
+
+  // J — THE THREE-ARCHIVE SCENARIO. run 1 (exact archive) all-done; run 2 (suffixed t2) abandoned
+  // mid-flight; run 3 (suffixed t3) the CURRENT run, all-done, so its leftover `.kw/integrate` W is
+  // garbage. No live folder. `currentArchiveDir` cannot name one run (the plain archive has no receipt
+  // anchor, run 2's `archive_dest` names t2, run 3's names t3 → two anchors), so the sink would
+  // refuse; the pin must refuse with it. Pre-repair, run 2's receipt pinned this W forever.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-int-j-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+    try {
+      g1103(root, ['init', '-b', 'main']);
+      g1103(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1103(root, ['add', 'README.md']);
+      g1103(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1103(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      const plain = path.join(root, ...AR1103, 'issue-96401');
+      const t2 = path.join(root, ...AR1103, 'issue-96401.archived-2026-09-25T00-00-00-000Z');
+      const t3 = path.join(root, ...AR1103, 'issue-96401.archived-2026-09-27T00-00-00-000Z');
+      state1103(plain, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-20T00:00:00.000Z']);
+      receipt1103(plain, { project: 'issue-96401', branch: 'workflow/issue-96401',
+        claim_ts: '2026-09-20T00:00:00.000Z', steps: DONE_1103 });
+      state1103(t2, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-25T00:00:00.000Z']);
+      receipt1103(t2, { project: 'issue-96401', branch: 'workflow/issue-96401',
+        claim_ts: '2026-09-25T00:00:00.000Z', archive_dest: relDestJ(root, t2), steps: PENDING_1103 });
+      state1103(t3, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt1103(t3, { project: 'issue-96401', branch: 'workflow/issue-96401',
+        claim_ts: '2026-09-27T00:00:00.000Z', archive_dest: relDestJ(root, t3), steps: DONE_1103 });
+      const c = cls1103(root, wPath);
+      assert(classifyIntegration1103(c.out, wPath),
+        '#1103 J: the sink cannot name one current archive among three, so an OLD abandoned run\'s mid-flight receipt must NOT pin the integration W — it must classify STALE, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // K — two suffixed archives, BOTH mid-flight, neither carrying a receipt anchor. `currentArchiveDir`
+  // still cannot name one run, so again the pin reads nothing and the W is stale.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1103-int-k-')));
+    const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+    try {
+      g1103(root, ['init', '-b', 'main']);
+      g1103(root, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+      g1103(root, ['add', 'README.md']);
+      g1103(root, ['commit', '-m', 'init']);
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      g1103(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+      for (const [name, ts] of [
+        ['issue-96401.archived-2026-09-26T00-00-00-000Z', '2026-09-26T00:00:00.000Z'],
+        ['issue-96401.archived-2026-09-27T00-00-00-000Z', '2026-09-27T00:00:00.000Z'],
+      ]) {
+        const dir = path.join(root, ...AR1103, name);
+        state1103(dir, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: ' + ts]);
+        receipt1103(dir, { project: 'issue-96401', branch: 'workflow/issue-96401', claim_ts: ts, steps: PENDING_1103 });
+      }
+      const c = cls1103(root, wPath);
+      assert(classifyIntegration1103(c.out, wPath),
+        '#1103 K: two suffixed archives with no anchoring receipt are ambiguous for the sink, so neither may pin the integration W — it must classify STALE, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // L — LANE DERIVED FALLBACK (no record names the branch): an older suffixed archive holds an
+  // abandoned mid-flight receipt while a NEWER suffixed archive is the current run with an all-done
+  // receipt. As in J the sink cannot choose between them, so the older receipt must not pin the lane
+  // worktree. Pre-repair it did, because every suffixed sibling was read. NO workflow-state.md is
+  // written anywhere on purpose: a readable record is the #1102 path, and this case is the other one.
+  {
+    const fx = makeRepo1103();
+    try {
+      const t2 = path.join(fx.root, ...AR1103, 'issue-96401.archived-2026-09-25T00-00-00-000Z');
+      const t3 = path.join(fx.root, ...AR1103, 'issue-96401.archived-2026-09-27T00-00-00-000Z');
+      receipt1103(t2, { project: 'issue-96401', branch: 'workflow/issue-96401',
+        claim_ts: '2026-09-25T00:00:00.000Z', archive_dest: relDestJ(fx.root, t2), steps: PENDING_1103 });
+      receipt1103(t3, { project: 'issue-96401', branch: 'workflow/issue-96401',
+        claim_ts: '2026-09-27T00:00:00.000Z', archive_dest: relDestJ(fx.root, t3), steps: DONE_1103 });
+      const c = cls1103(fx.root, fx.wtPath);
+      assert(c.stalled && !c.active,
+        '#1103 L: with the owner undeterminable the derived fallback must read no archive receipt — an older suffixed archive\'s mid-flight receipt must NOT pin the lane worktree, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+    } finally { cleanup1103(fx); }
   }
 
   fs.rmSync(binDir1103, { recursive: true, force: true });
