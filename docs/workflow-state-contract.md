@@ -295,13 +295,12 @@ resumable. An `ambiguous` lane, or more than one candidate, triggers the resume-
 
 ### Execution shape (Codex)
 
-Execution shape is a per-mission judgment, not persisted workflow state. Dispatch is appropriate
-when it materially reduces main-context residue, supplies independent judgment, or enables genuine
-parallelism. Inline execution or one production owner is appropriate for cohesive feed-forward work
-when handoff and integration cost dominate. Both are first-class, and the mission ledger's
-`details` records the chosen dispatch locator (`self` for inline work) without a gate, count, cap, or
-fallback stigma. Kaola defines no subagent roles or model and effort bindings: the host's native
-defaults and the user's explicit instructions decide a child's model and effort.
+Whether to use a subagent is not persisted workflow state. It belongs to the running harness and
+the user's instructions
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). The mission ledger's `details`
+records what went out and where the output was to land. Kaola defines no subagent roles or model
+and effort bindings: the host's native defaults and the user's explicit instructions decide a
+child's model and effort.
 
 ## Bundle Project State Fields
 

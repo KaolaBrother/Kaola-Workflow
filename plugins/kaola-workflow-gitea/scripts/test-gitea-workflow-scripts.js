@@ -4050,8 +4050,8 @@ function testGiteaPreflight571() {
       assert.strictEqual(r.status, 0,
         '#571 gt test(a): a clean HOME with V2 off must pass preflight, got ' + r.status + '\n' + r.stdout);
       assert.strictEqual(r.json.status, 'ok', '#571 gt test(a): status must be ok, got ' + r.json.status);
-      assert.ok(r.json.multi_agent_v2_enabled === false && r.json.dispatch_mode === null && r.json.dispatch_posture === 'none',
-        '#1101 gt test(a): V2 off must be reported (false/null/none), got ' + JSON.stringify(r.json));
+      assert.ok(r.json.multi_agent_v2_enabled === false && r.json.dispatch_mode === null && r.json.dispatch_posture === null,
+        '#1111 gt test(a): V2 off is reported as enabled false, dispatch_mode null, dispatch_posture null, got ' + JSON.stringify(r.json));
       assert.strictEqual(r.json.scopes_checked[0], path.join(tempHome571a, '.codex'),
         '#571 gt test(a): the global scope must be checked first, got ' + JSON.stringify(r.json.scopes_checked));
       assert.ok(!fs.existsSync(path.join(emptyProject571a, '.codex')),

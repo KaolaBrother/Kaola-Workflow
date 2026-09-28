@@ -24,8 +24,10 @@
   or a `.cache/doc-docking.md` `DOCKED`/`BLOCKED` ledger. The same issue's follow-up reports
   Claude `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` as the env or settings value read, not as a
   teams/classic capability, and drops the resume re-dispatch prescription, the finalize
-  description's documentation-docking wording, and the edition docs' mandatory-dispatch claim. See
-  [ADR 0030](docs/decisions/0030-forge-and-engineering-lifecycle.md).
+  description's documentation-docking wording, and the edition docs' mandatory-dispatch claim.
+  The always-loaded compact carriers are smaller after that subtraction (Grok 4889 B, Cursor
+  4943 B). `docs/workflow-state-contract.md` no longer teaches a dispatch-versus-inline policy.
+  See [ADR 0030](docs/decisions/0030-forge-and-engineering-lifecycle.md).
 
 ## [12.3.1] - 2026-09-27
 

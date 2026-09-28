@@ -50,9 +50,8 @@ reads. Missing, stale, or failed evidence is a reported finding: that mechanical
 itself reject finalize, and it does not turn an unrun check into `verdict: pass`.
 
 On failure, return the repair to the responsible owner with the outcome and the evidence: the exact
-failure, the evidence path, the working directory, custody, and the stop boundary. A repair may
-change acceptance meaning only where you hold that meaning; a fix that follows a review finding
-waits for your own verdict on the finding.
+failure, the evidence path, the working directory, custody, and the stop boundary. A repair may change acceptance meaning only where you hold that meaning; a fix that
+follows a review finding waits for your own verdict on the finding.
 
 The runner **measures** the receipt and **reports** what it found; you own the verdict. The finalize
 transaction writes its typed validation finding under `## Validation` in `finalization-summary.md`;

@@ -96,13 +96,13 @@ for (const forge of FORGES) {
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);
     if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
-      // Measured per-runtime ceilings, re-measured at #1101 when the native-only dispatch contract
-      // dropped the role roster, profile lookup, and subagent-default lines from the adapter block:
-      // grok 7202 B -> 6293 B, cursor 7820 B -> 6348 B. The floor stays above the deferred-dispatch
-      // bound (5.5 KB) so a carrier that lost its dispatch/adapter content still fails here.
+      // Re-measured at #1111, when the dispatch contract dropped its policy text. Always-loaded
+      // carriers: grok 6293 B -> 4889 B, cursor 6348 B -> 4943 B, identical on all three forges.
+      // Dropping the dispatch block leaves 3483 B; the deferred claude/codex carrier is 3644 B.
+      // The floor stays above both of those, under the new measurement, and the render is not padded.
       const ceiling = { grok: 7500, cursor: 7500 }[runtime] || 7500;
-      assert(bytes(prompt) >= 5800 && bytes(prompt) <= ceiling,
-        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 5.8 KB–${(ceiling / 1000).toFixed(1)} KB budget (got ${bytes(prompt)} B)`);
+      assert(bytes(prompt) >= 4500 && bytes(prompt) <= ceiling,
+        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 4.5 KB–${(ceiling / 1000).toFixed(1)} KB budget (got ${bytes(prompt)} B)`);
     } else {
       // claude/codex defer the dispatch/adapter content to the full Next/Finalize reload, so their
       // recovery render is smaller by roughly that content's size; bounded loosely (not pinned to
