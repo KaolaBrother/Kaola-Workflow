@@ -49,8 +49,8 @@ byte-compares; `--refresh-present` updates only edition trees already present.
 ## Compact recovery (#1079)
 
 ZCode is an always-loaded-carrier runtime: the machine-global transaction renders the full
-compact-recovery prompt (global contract, Workflow Next resume, dispatch contract, and the ZCode
-adapter) into the managed region of `${ZCODE_HOME:-~/.zcode}/AGENTS.md`. That prefix survives
+compact-recovery prompt (global contract, Workflow Next resume, native-boundary contract, and the
+ZCode adapter) into the managed region of `${ZCODE_HOME:-~/.zcode}/AGENTS.md`. That prefix survives
 compaction, so after a compact the region itself routes recovery to a native
 `/kaola-workflow-next` or `/kaola-workflow-finalize` Skill invocation, which emits a fresh Skill
 tool call and reloads the complete prompt. A real `/compact` completes, and both a
@@ -59,7 +59,7 @@ exposes no `available_commands_update`, so no command-catalog visibility is clai
 auto-compact leg was not run and is explicitly unverified.
 
 The generated skills carry only the one-line pointer to that carrier — they do not restate the
-dispatch contract or adapter facts.
+native-boundary contract or adapter facts.
 
 ## Model and dispatch adapter
 
@@ -67,12 +67,13 @@ Kaola pins no ZCode subagent model or effort and invents no per-call model field
 the main Agent's model. (Before #1062, rendered profiles pinned `model: GLM-5.3` plus a
 `thoughtLevel` key.)
 
-ZCode's native routes are full `general-purpose` and read-only `Explore`, reached through automatic
-subagent selection or native `@` dispatch; foreground or background choice stays runtime-owned. If
-a live session exposes an Agent call with named types, its schema wins. The public documentation
-does not publish one complete JSON call schema, so the adapter names no unverified call fields.
-Subagents cannot spawn children, but the root runtime's other native routes remain available.
-Kaola installing no profile is never evidence that ZCode lacks subagent capability.
+The rendered ZCode adapter follows the live host schema and does not name types, models, nesting,
+or a concurrency count ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated
+measurements of `general-purpose`, read-only `Explore`, and `@` dispatch through 2026-09-19 are in
+[runtime capabilities](runtime-capabilities.md#zcode). If a live session exposes an Agent call with
+named types, its schema wins. The public documentation does not publish one complete JSON call
+schema, so the adapter names no unverified call fields. Kaola installing no profile is never
+evidence that ZCode lacks subagent capability.
 
 ## Discovery and installation
 

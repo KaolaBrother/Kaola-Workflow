@@ -165,17 +165,17 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // Resume is the property the whole design was sized to. `dispatched`
-    // records what went out, not whether it is alive, so the recovery rule is
-    // to check the LOCATOR rather than probe the worker.
+    // Resume reconciles the ledger locator. The ledger records what went out
+    // and where the output was to land. Reuse, retry, and handoff belong to
+    // the running harness.
     block_id: 'nx-resume-rule',
     topic: 'next',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       'Look for the work, not for the worker.',
-      'if the output the dispatch promised has landed',
-      're-dispatch, unless you can positively show',
+      'where that output was to land',
+      'belongs to the running harness.',
     ],
   },
   {

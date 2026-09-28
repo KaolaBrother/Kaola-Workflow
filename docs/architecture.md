@@ -67,7 +67,8 @@ a reload concern rather than a hidden script migration state.
 Compact recovery is also subtractive. Claude/Codex directly inject one pre-rendered V2 artifact at
 `SessionStart(source=compact)`; Grok/Cursor keep that same artifact in one persistent Rule. V2
 contains the global contract, a thin durable-state router that completely reloads Workflow Next or
-Finalization, the mandatory dispatch contract, and the measured runtime adapter. Inference runs no
+Finalization, and the measured runtime adapter. The reloaded operation carries the native-boundary
+contract. Inference runs no
 prompt-composition script, and ordinary tool use injects nothing.
 
 ## The mission ledger
@@ -109,9 +110,9 @@ because all of that is decided when the item is reached, with everything learned
 
 **Resuming** is reading the file top to bottom: the issue is the goal, `done` lines and their
 `details` are what is known, `todo` lines are what remains, and `in-flight` lines are the only
-decision. The rule there is *look for the work, not for the worker*: the dispatch locator in
-`details` records what went out, not whether it is still running, so check the locator — if the promised output landed, close the item;
-if not, re-dispatch unless the dispatch is positively still alive.
+decision. The rule there is *look for the work, not for the worker*: the locator in `details`
+records what went out and where the output was to land. Whether to reuse that work, retry it, or
+hand it back belongs to the running harness.
 
 This design exists because of one observed failure: an orchestrator running six concurrent subagents
 from context alone lost all six at once to a usage limit, and with them what was in flight and what
@@ -538,16 +539,14 @@ skipping executable helpers and hooks.
 
 The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is
 [`runtime-capabilities.md`](runtime-capabilities.md). It distinguishes direct loading from a bridge,
-records hook scope, native subagent routes and their availability, the compact carrier, and install
-scope, and keeps unproved facts as `unknown`.
-Its routing-only guidance additionally exposes built-in/generic routes and native background,
-parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
-does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
+records hook scope, the compact carrier, and install scope, and keeps unproved facts as `unknown`.
+Rendered delegation guidance does not name type catalogs, models, nesting, or concurrency counts.
+Dated route measurements stay in [`runtime-capabilities.md`](runtime-capabilities.md).
 
 Runtimes and forges remain independent axes. The closed adapter inventory has ten runtime families
 and twelve adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, ZCode, Devin, Droid, and DSH. None installs a Kaola role profile; every adapter
-dispatches through the host's own subagent harness. Additive installers still take `--forge` to
+Grok, Cursor, ZCode, Devin, Droid, and DSH. None installs a Kaola role profile. Subagent use
+belongs to the running harness. Additive installers still take `--forge` to
 select routing/forge prose; that does not create another adapter.
 
 ### No Kaola roles
@@ -581,13 +580,10 @@ contract: dispatch through the host's native tool, schema, and type catalog, und
 meaning; the host's defaults, limits, and permissions and the user's explicit instructions decide
 model, effort, tools, nesting, concurrency, isolation, and resume. Kaola adds no runtime limits on
 automatic, background, parallel, resume, nesting, history, or service-tier behavior, and installing
-no profile is never evidence that the host lacks subagent capability. Current native routes and
-limits are documented in [`runtime-capabilities.md`](runtime-capabilities.md) and each additive
-edition guide.
-
-Execution choice is local: dispatch or inline is decided again for each mission item, and one
-item's choice never becomes a run-wide default. A dispatched built-in or generic child keeps its
-real identity within the brief's task, custody, evidence, and stop boundaries.
+no profile is never evidence that the host lacks subagent capability. Dated route measurements
+are in [`runtime-capabilities.md`](runtime-capabilities.md). Rendered guidance does not name a
+type catalog. A brief that leaves this session names the outcome, evidence, custody, and stop
+condition.
 
 ## Testing
 

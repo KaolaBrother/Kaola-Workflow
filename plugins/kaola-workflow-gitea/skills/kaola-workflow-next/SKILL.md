@@ -122,8 +122,8 @@ choice goes back to the user.
 ## Resume
 
 On resume, read the mission ledger top to bottom and reconcile in-flight locators.
-Look for the work, not for the worker. Check the locator: if the output the dispatch promised has
-landed, close it; otherwise re-dispatch, unless you can positively show the dispatch is alive.
+Look for the work, not for the worker. The ledger records what went out and where that output
+was to land. Whether to reuse it, retry it, or hand it back belongs to the running harness.
 
 ## Write the mission ledger
 

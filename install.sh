@@ -503,21 +503,24 @@ verify_executable_file() {
   fi
 }
 
-# Report-only Claude dispatch-posture detection (agent teams vs. classic subagents). Mirrors the
-# Codex installer's dispatch-posture report: NEVER fatal (always exits 0 into the caller), and
-# NEVER writes any settings file — it only reads. A live session's CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-# is itself often sourced from a settings "env" block, so an explicit env var is authoritative
-# when present; only when it is absent do we fall back to scanning the settings files' "env"
-# blocks for the same flag (user settings, then project settings, then project-local settings).
-detect_claude_dispatch_posture() {
-  if [[ "${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}" == "1" ]]; then
-    echo "teams"
-    return 0
+# Report-only read of CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS. Mirrors the Codex installer's config
+# report: NEVER fatal, and NEVER writes any settings file — it only reads. The process env and
+# each readable settings "env" block are separate facts. A missing value stays absent. This is
+# not a session tool inventory, a capability verdict, or an authorization.
+report_claude_agent_teams_config() {
+  local env_value="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS-}"
+  if [[ -z "$env_value" ]]; then
+    echo "  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (process env): absent"
+  else
+    printf '  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (process env): %s\n' "$env_value"
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$HOME/.claude/settings.json" "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json" <<'PY'
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (settings env): not read (python3 absent)"
+  else
+    local settings_report
+    settings_report="$(python3 - "$HOME/.claude/settings.json" "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json" <<'PY'
 import json, sys
-
+found = []
 for settings_path in sys.argv[1:]:
     try:
         with open(settings_path) as f:
@@ -527,14 +530,26 @@ for settings_path in sys.argv[1:]:
     if not isinstance(settings, dict):
         continue
     env = settings.get("env")
-    if isinstance(env, dict) and str(env.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "")) == "1":
-        print("teams")
-        sys.exit(0)
-print("classic")
+    if not isinstance(env, dict) or "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in env:
+        continue
+    found.append(str(env.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")) + "\t" + settings_path)
+if not found:
+    print("absent")
+else:
+    print("\n".join(found))
 PY
-    return 0
+)"
+    if [[ "$settings_report" == "absent" ]]; then
+      echo "  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (settings env): absent"
+    else
+      local value path
+      while IFS=$'\t' read -r value path; do
+        [[ -n "$value" ]] || continue
+        printf '  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (settings env): %s in %s\n' "$value" "$path"
+      done <<< "$settings_report"
+    fi
   fi
-  echo "classic"
+  echo "  This report reads that env var and settings env blocks only. It is not a session tool inventory, a capability verdict, or an authorization. Kaola-Workflow neither requires nor writes this setting."
 }
 
 verification_failed=0
@@ -586,18 +601,8 @@ echo "Open any Claude Code session and run:  /workflow-init"
 echo "Then run implementation cycles with:  /workflow-next"
 echo ""
 
-CLAUDE_DISPATCH_POSTURE="$(detect_claude_dispatch_posture)"
-echo "Kaola-Workflow Claude dispatch posture:"
-echo "  claude_dispatch_posture: $CLAUDE_DISPATCH_POSTURE"
-if [[ "$CLAUDE_DISPATCH_POSTURE" = "teams" ]]; then
-  echo "  Agent teams (experimental) is enabled — teammate-mode orchestration is available."
-else
-  echo "  Classic subagents (the Task tool) are always available — this needs no setup."
-  echo "  Agent teams is an experimental Claude Code capability; to enable teammate-mode"
-  echo "  orchestration, set CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your shell environment,"
-  echo "  or in a settings \"env\" block (~/.claude/settings.json, project .claude/settings.json,"
-  echo "  or .claude/settings.local.json)."
-fi
+echo "Kaola-Workflow Claude config:"
+report_claude_agent_teams_config
 echo ""
 if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"

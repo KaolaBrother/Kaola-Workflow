@@ -46,16 +46,17 @@ observed then. They are not copied into Next, Finalization, or compact recovery.
 | Droid CLI | Live `Task` schema | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | A spawned route resolves its model from the invoking route and the parent's complexity routing and inherits the parent when unpinned; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
 | DSH | Live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background, depth, and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
 
-Cursor and ZCode do not publish one complete Task/Agent call schema. Their adapter facts name the
-verified routes, then tell the orchestrator to use the current session's exposed schema and
-catalog. Cursor's IDE documentation, supported CLI, and measured Cloud Agent catalogs demonstrably
-expose different built-ins, so no one list is treated as universal. Static request fields whose
-names or shapes remain unverified are not emitted.
+Cursor and ZCode do not publish one complete Task/Agent call schema. The rows above are the
+measurement through 2026-09-19. Rendered adapter facts do not name those routes, types, or counts
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). The live host schema wins.
+Cursor's IDE documentation, supported CLI, and measured Cloud Agent catalogs exposed different
+built-ins, so no one list was treated as universal. Static request fields whose names or shapes
+were unverified were not emitted.
 
-Cursor keeps its field spaces separate: the controller call uses only the flat fields exposed by
-the live `Task` schema, including `subagent_type`; `providerOptions.cursor.modelName` is
-post-dispatch provider evidence; and internal provider encodings such as `subagentType.custom.name`
-are not construction instructions.
+The measured Cursor field spaces stayed separate: the controller call used the flat fields the
+live `Task` schema exposed, including `subagent_type`; `providerOptions.cursor.modelName` was
+post-dispatch provider evidence; internal provider encodings such as `subagentType.custom.name`
+were not construction instructions.
 
 ## Runtime/surface install matrix
 
@@ -127,12 +128,12 @@ host cannot inherit a local user carrier. It installs no Cursor hook.
 ## Compact recovery carriers
 
 The invariant is model-visible content, not hook symmetry: after a real compact and before the next
-model inference, restore the active Workflow Next or Finalization operation rule plus the dispatch
-contract. No runtime needs Kaola context before or after every tool.
+model inference, reload the active Workflow Next or Finalization operation. That operation carries
+the native-boundary contract. No runtime needs Kaola context before or after every tool.
 
 | Family | Measured compact-recovery carrier |
 | --- | --- |
-| Claude / Codex | One `SessionStart(source=compact)` command directly prints static V2: global contract, operation reload route, mandatory dispatch contract, and runtime adapter. No compact-time JS or tool/Stop recovery hooks. |
+| Claude / Codex | One `SessionStart(source=compact)` command directly prints static V2: global contract, operation reload route, and runtime adapter. The reloaded operation carries the native-boundary contract. No compact-time JS or tool/Stop recovery hooks. |
 | Grok | One machine-global native Rule at `$GROK_HOME/rules/kaola-workflow-global.md`. Rules enter every interaction while passive hook stdout is ignored. Edition installs emit no duplicate Rule or compact/tool/Stop hook. |
 | Cursor CLI / App local / App Cloud | One V2 `alwaysApply` Rule: local CLI/App share the user carrier; Cloud explicitly materializes identical bytes in the selected repository. Cloud has no `sessionStart`, and `preCompact` cannot inject. Cursor hooks stay empty. |
 | OpenCode | No new Issue #1044 prompt lifecycle; the initial command remains authority and the existing compact-state behavior is unchanged. |
@@ -149,18 +150,13 @@ JS, native session token, sidecar, chunk bitmap, or acknowledgement state.
 ## Native subagents only
 
 Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings on
-any runtime ([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Each adapter's
-`delegation_guidance` records only the host's native routes and their availability. The host's own
-defaults, limits, and permissions, and the user's explicit instructions, decide model, effort,
-tools, nesting, concurrency, isolation, and resume. Where a native schema requires a type, the
-orchestrator passes one the host reports, under its real meaning. Kaola installing no profile is
-never evidence that the host lacks subagent capability. Native automatic, background, parallel,
-resume, nesting, history, service-tier, and model choices stay available wherever the runtime
-actually supports them.
-
-Dispatch-vs-inline is decided again for every mission item; one item's choice never establishes a
-run-wide default. A cohesive production owner owns only that production surface; independent
-research, test authorship, documentation, and review remain separately dispatchable.
+any runtime ([ADR 0029](decisions/0029-native-subagents-only.md), #1101;
+[ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md), #1111). Rendered
+`delegation_guidance` does not name type catalogs, models, nesting, or concurrency counts. Dated
+route measurements stay in the capability map above. The host's own defaults, limits, and
+permissions, and the user's explicit instructions, decide model, effort, tools, nesting,
+concurrency, isolation, and resume. Kaola installing no profile is never evidence that the host
+lacks subagent capability.
 
 Before #1101, Claude, the three Codex variants, Grok, and Cursor installed generated Kaola role
 profiles with one pinned subagent model; ADR 0029 records what was retired.

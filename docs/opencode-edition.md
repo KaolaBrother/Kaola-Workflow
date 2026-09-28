@@ -48,7 +48,7 @@ Everything under `.opencode/` is **generated from canonical** by
 
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
-| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked runtime dispatch block carries the native-only dispatch contract plus the OpenCode adapter facts — native `task`/`@name` routes and limit guidance. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked runtime dispatch block carries the native-boundary contract plus the OpenCode adapter. The adapter follows the live host schema and does not name routes or limits. Dated `task`/`@name` measurements are in [runtime capabilities](runtime-capabilities.md#opencode). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 
 No Kaola role profiles are rendered or installed (OpenCode has been native-only since #1062). A
 subagent inherits the session's model and variant, and OpenCode's own harness is the dispatch
@@ -93,16 +93,14 @@ omit or mirror here.
 
 ## Runtime-native orchestration guidance
 
-`workflow-next` and `kaola-workflow-finalize` carry the native-only dispatch contract plus an
-OpenCode adapter block. It routes through OpenCode's own harness: the broad `general`, read-only
-local `explore`, and read-only external-research `scout` routes via `task`/`subagent_type` or direct
-`@name`, plus `task_id` resume, experimental background work, effective permissions, and the default
-one-child depth. These are OpenCode capabilities, not Kaola mandates; user configuration may change
-or hide them.
+`workflow-next` and `kaola-workflow-finalize` carry the native-boundary contract plus an OpenCode
+adapter block. The adapter follows the live host schema and does not name types, models, nesting,
+or a concurrency count ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated
+measurements of `task`, `@name`, and the routes observed through 2026-09-19 are in
+[runtime capabilities](runtime-capabilities.md#opencode).
 
-Kaola installing no profile is never evidence that OpenCode lacks subagent capability: dispatch a
-native route per item when its actual task, custody, evidence, and stop boundaries fit, or work
-inline. The generated block never invents per-call model or effort fields.
+Kaola installing no profile is never evidence that OpenCode lacks subagent capability. The
+generated block never invents per-call model or effort fields.
 
 > `opencode.json` is **user-owned**: `--write` regenerates commands/plugins but
 > **preserves** this file. Use `--write-config` to reset it from the template.

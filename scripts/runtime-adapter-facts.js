@@ -3,8 +3,9 @@
 // runtime-adapter-facts.js — the measured runtime adapter facts and their rendered form.
 //
 // templates/agents/runtime-capabilities.json records, per runtime, what the host itself provides:
-// how it loads instructions, which hook scope it offers, its native subagent routes and their
-// availability, its compact-recovery carrier, and its install scope. Kaola-Workflow defines no
+// how it loads instructions, which hook scope it offers, its compact-recovery carrier, and its
+// install scope. Rendered delegation guidance does not name type catalogs. Dated route
+// measurements stay in docs/runtime-capabilities.md. Kaola-Workflow defines no
 // subagent roles, role profiles, or subagent model and effort bindings (ADR 0029), so an adapter
 // carries no role, profile, or model-binding capability; validateRuntimeAdapters() rejects one.
 //

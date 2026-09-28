@@ -32,20 +32,20 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
   role profiles), session inheritance, permissions, hooks, and installer behavior.
 - [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, vendor-native dispatch (no Kaola
   role profiles), session-owned model/thinking, hooks, and installer behavior.
-- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, native `spawn_subagent`
-  dispatch (no Kaola role profiles), and hooks.
-- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, native `Task` dispatch (no
-  Kaola role profiles), CLI vs App product surfaces (App local IDE vs saved Cloud environments),
-  host-specific install/reload carriers, and hooks.
+- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, no Kaola role profiles, dated
+  route measurements in [runtime capabilities](runtime-capabilities.md), and hooks.
+- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, no Kaola role profiles,
+  CLI vs App product surfaces (App local IDE vs saved Cloud environments), host-specific
+  install/reload carriers, and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, vendor-native
   dispatch (no Kaola role profiles), known hook limits, and explicit version/relocation unknowns.
 - [Devin CLI Edition](devin-edition.md) — live-schema vendor-harness dispatch (no Kaola role
   profiles), inline skills, managed global contract, and UserPromptSubmit recovery after
   compaction drops rules.
-- [Droid CLI Edition](droid-edition.md) — live-schema native Task dispatch (no Kaola role
-  profiles), inline skills, managed global contract, and no hooks or other harness additions.
-- [DSH Edition](dsh-edition.md) — DeepSeek Harness (`dsh`) live-schema `subagent` dispatch (no
-  Kaola role profiles), inline skills, managed global contract, and no writes to user DSH config.
+- [Droid CLI Edition](droid-edition.md) — live host schema (no Kaola role profiles), inline skills,
+  managed global contract, and no hooks or other harness additions.
+- [DSH Edition](dsh-edition.md) — DeepSeek Harness (`dsh`) live host schema (no Kaola role
+  profiles), inline skills, managed global contract, and no writes to user DSH config.
 
 ## Decisions
 

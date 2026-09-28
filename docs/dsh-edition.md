@@ -1,11 +1,12 @@
 # DSH (DeepSeek Harness) edition
 
 Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
-([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Dispatch goes through DSH's own
-native `subagent` and `subagent_fork` tools. Kaola installing no profile is never evidence that DSH
-lacks subagent capability: the orchestrator uses a native route or works inline per item. These
-surfaces are measured from DSH CLI `0.1.5-rc.2` and first-party package READMEs; the live schema
-wins over this document.
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). The rendered adapter follows the live
+host schema and does not name types
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Kaola installing no profile is
+never evidence that DSH lacks subagent capability. These surfaces are measured from DSH CLI
+`0.1.5-rc.2` and first-party package READMEs; the live schema wins over this document. Dated
+`subagent` and `subagent_fork` measurements are in [runtime capabilities](runtime-capabilities.md#dsh-deepseek-harness).
 
 This installer **never writes** user DSH configuration: `$DSH_HOME/.env`, `settings.yaml`,
 credentials, or model/provider settings. Those remain owner-owned.
@@ -72,11 +73,11 @@ acceptance suite is `node scripts/test-dsh-edition.js`.
 
 ## Dispatch and model ownership
 
-The live `subagent` schema owns the route. Shipped headless and web profiles expose `subagent`
-and `subagent_fork`; a child does not see the parent conversation unless the fork provider is
-used. Background execution, depth, and child model fields remain runtime-owned. Do not
-invent profile or model arguments the live schema does not expose. The universal dispatch
-contract lives in the always-loaded machine-global carrier.
+The live schema owns the route. Shipped headless and web profiles measured on DSH CLI `0.1.5-rc.2`
+expose `subagent` and `subagent_fork`; a child does not see the parent conversation unless the fork
+provider is used. Background execution, depth, and child model fields remain runtime-owned. Do not
+invent profile or model arguments the live schema does not expose. The always-loaded carrier states
+the native boundary and does not name a type catalog.
 
 ## Compact recovery and host guards
 

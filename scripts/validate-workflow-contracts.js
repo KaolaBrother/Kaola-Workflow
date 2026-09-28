@@ -190,15 +190,17 @@ for (const file of phaseCommands) {
   for (const token of retiredPathSelector) assertNotIncludes(file, token);
 }
 
-// #1101: a routed finalize repair goes through the host's native route with a self-sufficient
-// brief. The surface carries no dispatch card that names a Kaola role or pins a model.
+// #1111: a repair returns to the responsible owner with the outcome and the evidence. The surface
+// does not prescribe inline versus a native route, and it carries no dispatch card that names a
+// Kaola role or pins a model.
 const routedFixFiles = [
   'commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
-  assertIncludes(file, "dispatch the repair through the host's native");
+  assertIncludes(file, 'return the repair to the responsible owner');
+  assertNotIncludes(file, "dispatch the repair through the host's native");
   assert(!/^Agent\(/m.test(read(file)) && !read(file).includes('subagent_type='),
     file + ': the finalize surface must carry no role dispatch card (#1101)');
 }
@@ -275,10 +277,13 @@ for (const file of nextSurfaces) {
   assertNotIncludes(file, 'No dispatch count, cap, disjointness proof');
   assertNotIncludes(file, 'Choose dispatch or inline per item');
 
-  // RESUME. The property the whole design was sized to, and the rule that makes it work.
+  // RESUME. The ledger records the locator. Reuse, retry, and handoff belong to the harness.
   assertIncludes(file, 'Look for the work, not for the worker');
+  assertIncludes(file, 'belongs to the running harness');
+  assertNotIncludes(file, 're-dispatch, unless you can positively show');
   // #1054 item 27 (nx-resume-rule): 'if the output the dispatch promised has landed' was proven
   // duplicate by subtraction against required-blocks.js — see .cache/implementation-validators.md.
+  // #1111 retired the re-dispatch prescription that pin used to require.
 
   // CONSENT. The durable valve is gone; this sentence is the entire mechanism.
   assertIncludes(file, 'Irreversible and value-laden calls belong to the user');

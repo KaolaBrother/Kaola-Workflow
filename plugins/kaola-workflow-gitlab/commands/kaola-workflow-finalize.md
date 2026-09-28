@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Finalization. Final validation, documentation docking, closure, archive, commit, and sink.
+description: Kaola-Workflow Finalization. Record the acceptance evidence, write the summary, then close, archive, commit, and sink.
 argument-hint: <project name>
 ---
 # Kaola-Workflow Finalization
@@ -74,10 +74,10 @@ Pass the verdict you observed. When you record consumer evidence, the recorder w
 reads. Missing, stale, or failed evidence is a reported finding: that mechanical step does not
 itself reject finalize, and it does not turn an unrun check into `verdict: pass`.
 
-On failure, repair a trivial correction inline, or dispatch the repair through the host's native
-route with a brief naming the exact failure, evidence path, working directory, custody, and stop
-boundary. A repair may change acceptance meaning only where you hold that meaning; a fix that
-follows a review finding waits for your own verdict on the finding.
+On failure, return the repair to the responsible owner with the outcome and the evidence: the exact
+failure, the evidence path, the working directory, custody, and the stop boundary. A repair may
+change acceptance meaning only where you hold that meaning; a fix that follows a review finding
+waits for your own verdict on the finding.
 
 The runner **measures** the receipt and **reports** what it found; you own the verdict. The finalize
 transaction writes its typed validation finding under `## Validation` in `finalization-summary.md`;

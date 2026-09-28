@@ -1,13 +1,12 @@
 # Droid CLI edition
 
 Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
-([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Dispatch goes through Droid's own
-native `Task` routes — the built-in `worker` (general-purpose, all tools) and read-only `explorer`,
-or any user-defined custom droid from `~/.factory/droids/`. A spawned route resolves its model from
-the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and
-it cannot spawn further descendants. Kaola installing no profile is never evidence that Droid lacks
-subagent capability: the orchestrator uses a native route or works inline per item. These surfaces
-are measured from the live schema, which wins over this document.
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). The rendered adapter follows the live
+host schema and does not name types
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated measurements of Droid's
+`Task` routes are in [runtime capabilities](runtime-capabilities.md#droid-cli). Kaola installing no
+profile is never evidence that Droid lacks subagent capability. These surfaces are measured from
+the live schema, which wins over this document.
 
 ## Install
 
@@ -53,10 +52,11 @@ and `--check` report the `droid-local` target status when it is not `CURRENT`.
 The live `Task` schema owns the route. Droid ships built-in `worker` and `explorer` subagents and
 discovers custom droids from `~/.factory/droids/`; sibling `Task` calls run in parallel with their
 own context windows. Background execution and `resume` remain runtime-owned options. Do not invent
-profile or model arguments for a session mode that does not expose them. The universal dispatch
-contract (native routes only, dispatch or inline per item, handback as evidence) lives
-in the always-loaded machine-global carrier and is never restated in the generated skills — they
-carry only the always-loaded pointer once.
+profile or model arguments for a session mode that does not expose them. Dated route measurements
+are in [runtime capabilities](runtime-capabilities.md). The always-loaded carrier states the
+native boundary ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)) and does not name
+a type catalog or a dispatch-or-inline rule. Generated skills carry only the pointer to that
+carrier.
 
 ## Compact recovery and host guards
 

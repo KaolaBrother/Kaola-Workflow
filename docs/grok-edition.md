@@ -10,9 +10,10 @@ Rule under `.grok/rules/` — and is fully **additive**: it touches none of the 
 
 Grok loads root-to-cwd project rules including `AGENTS.md` directly. Kaola therefore installs no
 project-instruction bridge for Grok; root `AGENTS.md` remains the Agent-maintained project authority.
-The machine-global Rule supplies universal Workflow behavior, including the dispatch contract and
-the Grok adapter. Kaola ships no Grok agents: subagents are Grok's own `spawn_subagent` types.
-See [runtime capabilities](runtime-capabilities.md#grok-build) for first-party evidence and limits.
+The machine-global Rule supplies universal Workflow behavior, including the native-boundary
+contract and the Grok adapter. Kaola ships no Grok agents. Dated `spawn_subagent` measurements are
+in [runtime capabilities](runtime-capabilities.md#grok-build); the rendered adapter does not name a
+type catalog ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)).
 
 ## Forge axis
 
@@ -48,8 +49,8 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the dispatch contract and adapter facts. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
-| global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, mandatory dispatch contract, and Grok adapter. The edition emits no second Rule or compact hook. |
+| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the native-boundary contract and adapter facts. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
+| global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, and Grok adapter. The reloaded operation carries the native-boundary contract. The edition emits no second Rule or compact hook. |
 
 Regenerating the tree never seeds or rewrites `$GROK_HOME/config.toml`, including a user's
 `[subagents.models]` or `[subagents.roles.*]` sections there.
@@ -65,14 +66,14 @@ Before #1101 the edition rendered seven `.grok/agents/` profiles pinning one mod
 
 ## Runtime-native orchestration guidance
 
-The always-loaded Rule carries the Grok adapter: dispatch with `spawn_subagent`, whose
-`subagent_type` names a type from the live catalog — such as full `general-purpose`, read/shell
-`explore`, or read/shell `plan` — with native background, isolation, resume, and cwd options. Child
-model and effort follow Grok's own defaults. Grok children cannot spawn descendants, but Kaola adds
-no restriction to root-level native routes.
+The always-loaded Rule carries the Grok adapter. That adapter follows the live host schema and
+does not name types, models, nesting, or a concurrency count
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated measurements of
+`spawn_subagent` and the catalog observed through 2026-09-19 are in
+[runtime capabilities](runtime-capabilities.md#grok-build). Child model and effort follow Grok's
+own defaults and the user's configuration.
 
-Kaola installing no profile is never evidence that Grok lacks subagent capability. The orchestrator
-chooses a native route or inline work per item, and the next item starts with a fresh decision.
+Kaola installing no profile is never evidence that Grok lacks subagent capability.
 
 ## Path selection
 

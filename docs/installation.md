@@ -106,8 +106,10 @@ It then installs the global compact hook (`~/.codex/hooks.json`), its version-le
 updates each `kaola-workflow:` hook entry where it already stands, appends only a new one, and
 leaves every other entry at its index (only removing a retired `kaola-workflow:` entry shifts the
 entries after it), because Codex records hook trust by position. An unchanged reinstall reports
-`unchanged` and leaves `hooks.json` byte-identical. It also reports
-the dispatch posture and `multi_agent_v2` state it reads from `config.toml` but never writes them.
+`unchanged` and leaves `hooks.json` byte-identical. It also reports the `multi_agent_v2` and `model_reasoning_effort` values it reads from
+`config.toml`, and numeric V2 fields only when those fields are present. `dispatch_posture` stays
+null. It never writes those settings, and the report is not a session tool inventory or a dispatch
+authorization.
 While it replaces an existing `hooks.json`, it keeps the prior file as
 `~/.codex/hooks.json.kaola-backup-<pid>-<hex>` and removes that backup once the update succeeds.
 If the update fails, the installer restores `hooks.json` from the backup. A backup that no longer
@@ -140,8 +142,10 @@ doctor, then start a fresh working session. Automation that has independently ve
 may use `codex exec --dangerously-bypass-hook-trust` for that run; it does not persist approval.
 
 Kaola-Workflow requires no Codex dispatch mode and sets no Codex version floor. The installer and
-doctor report `multi_agent_v2`, the dispatch posture, and the V2 bounds as host facts, never as a
-refusal. Multi-agent configuration in `config.toml` stays user-owned.
+doctor report `multi_agent_v2` and `model_reasoning_effort` as the config values they read, and
+numeric V2 fields only when those fields are present. `dispatch_posture` stays null. The report is
+not a refusal and not a session tool inventory. Multi-agent configuration in `config.toml` stays
+user-owned.
 
 ### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH
 

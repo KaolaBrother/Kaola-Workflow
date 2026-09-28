@@ -21,7 +21,10 @@
   turn a missing flag or an effort value into a session capability, a dispatch posture, or an
   inferred concurrency cap. Finalization records candidate, acceptance evidence, known failures or
   unverified scope, and the existing validation measurement. It does not require a second QA pass
-  or a `.cache/doc-docking.md` `DOCKED`/`BLOCKED` ledger. See
+  or a `.cache/doc-docking.md` `DOCKED`/`BLOCKED` ledger. The same issue's follow-up reports
+  Claude `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` as the env or settings value read, not as a
+  teams/classic capability, and drops the resume re-dispatch prescription, the finalize
+  description's documentation-docking wording, and the edition docs' mandatory-dispatch claim. See
   [ADR 0030](docs/decisions/0030-forge-and-engineering-lifecycle.md).
 
 ## [12.3.1] - 2026-09-27

@@ -3343,8 +3343,9 @@ function closureBlockOf(dest) {
 // blank-line-separated form real orchestrators actually write, where the body is `\n`. Only a rule
 // that keys on `body.trim() === ''` satisfies both.
 //
-// THE HEADINGS ARE NOT SPELLED IN THIS FILE'S OWN CONVENTION. `STEP6_HEADINGS` below is the list
-// the finalize skeleton emits, and every planted fixture is built from it; the assertions read the
+// THE HEADINGS ARE NOT SPELLED IN THIS FILE'S OWN CONVENTION. `STEP6_HEADINGS` below is the planted
+// fixture list this file uses to exercise claim.js fill and preserve. It is not the heading block
+// the current finalize skeleton emits. Every planted fixture is built from it; the assertions read the
 // result back through this file's own `sectionBody`, which is the same first-occurrence, up-to-the-
 // next-`## ` grammar the writer commits to. A fixture written in a private spelling would pin the
 // test's idea of the format instead of the seam between the surface that plants the heading and the
@@ -3359,8 +3360,9 @@ function closureBlockOf(dest) {
 //     that writes nothing fails the fill half; `replace: true` fails the preserve half.
 // ---------------------------------------------------------------------------
 
-// The heading block `templates/routing/finalize.skeleton.md` Step 6 tells the orchestrator to
-// create, in its order. Three of these are written by the finalize transaction itself.
+// Planted claim.js inputs, not headings the current finalize skeleton emits. `## Validation` and
+// `## Changed Paths` are the two the finalize transaction itself writes; the others stay planted
+// so the fill/preserve seam is exercised.
 const STEP6_HEADINGS = Object.freeze([
   '## Delivered',
   '## Files Changed',
@@ -3375,7 +3377,7 @@ const STEP6_HEADINGS = Object.freeze([
 ]);
 // The two of them the script owns, i.e. the callers that pass no `replace`. `## Mission List` was
 // script-owned through v10.5.0; #1054 retired the auto-statistics writer (persistMissionListToSummary)
-// entirely, so that heading is now planted by Step 6 but filled by NOBODY but the orchestrator — see
+// entirely, so that heading is planted by this fixture and filled by nobody but the orchestrator — see
 // the "MISSION LIST STAYS UNTOUCHED" assertions below, which replace the old fill-and-count pins.
 const SCRIPT_OWNED_HEADINGS = Object.freeze(['## Validation', '## Changed Paths']);
 

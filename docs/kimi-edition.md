@@ -28,9 +28,10 @@ The edition uses one Kimi carrier:
 `$KIMI_CODE_HOME` defaults to `~/.kimi-code`.
 
 The command Skills keep their canonical basenames, so `/workflow-init`, `/workflow-next`, and
-`/kaola-workflow-finalize` remain the three entrypoints. Dispatch goes through Kimi's built-in
-agents (`coder`, `explore`, `plan`) with `Agent` or `AgentSwarm`, under their real identities;
-Kaola installs or impersonates no profile.
+`/kaola-workflow-finalize` remain the three entrypoints. Kaola installs or impersonates no
+profile. Dated measurements of Kimi's built-in agents are in
+[runtime capabilities](runtime-capabilities.md); the rendered adapter does not name them
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)).
 
 Kimi's documented custom-agent surface remains available to the user:
 [Custom agents](https://moonshotai.github.io/kimi-code/en/customization/agents.html). The documented
@@ -56,16 +57,14 @@ is inheritance of the session model and thinking effort.
 
 ## Runtime-native orchestration guidance
 
-The two execution commands expose Kimi's full relevant native surface: direct `Agent` dispatch,
-`AgentSwarm` parallel lists up to 128 items, resume/background
-options, and the writable `coder`, read-only `explore`, and non-shell `plan` built-ins. Built-ins are leaves;
-custom profiles may allowlist deeper agents. Kaola neither disables those routes nor silently
-enables the secondary-model section.
+The rendered Kimi adapter follows the live host schema and does not name types, models, nesting,
+or a concurrency count ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated
+measurements of `Agent`, `AgentSwarm`, and the built-ins observed through 2026-09-19 are in
+[runtime capabilities](runtime-capabilities.md). Kaola neither disables a route the host exposes
+nor silently enables the secondary-model section.
 
-Kaola installing no profile is never evidence that Kimi lacks subagent capability. The orchestrator
-chooses dispatch or inline work for the current item; a dispatched built-in keeps its real identity
-and must satisfy the actual task, custody, evidence, and stop boundaries. The next mission item is
-reconsidered independently.
+Kaola installing no profile is never evidence that Kimi lacks subagent capability. A brief that
+leaves this session still names the outcome, evidence, custody, and stop condition.
 
 ## Forge axis
 

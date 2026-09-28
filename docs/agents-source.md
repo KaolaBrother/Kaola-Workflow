@@ -1,17 +1,18 @@
 # Agent Sources and Provenance
 
 Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings
-([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Every runtime dispatches through its
-own native subagent tool, schema, and catalog. This page records what replaced the retired role
-authority and where the attribution for the retired material lives.
+([ADR 0029](decisions/0029-native-subagents-only.md), #1101). Whether to use a subagent, and which
+native tool or type, belongs to the running harness
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md), #1111). This page records what
+replaced the retired role authority and where the attribution for the retired material lives.
 
 ## Current sources
 
 | Source | Owns | Must not own |
 | --- | --- | --- |
-| `templates/agents/runtime-capabilities.json` (`schema_version: 2`) | Evidence-backed per-runtime facts: instruction loading, hook scope, native subagent routes and their availability, compact-recovery carrier, and install scope, for twelve adapter variants | Roles, profiles, subagent model or effort bindings, or dispatch policy |
-| `scripts/runtime-adapter-facts.js` | Loading and validating those facts (it rejects every retired role capability) and rendering the `KW-RUNTIME-DELEGATION` adapter section beside the dispatch contract | A role catalog or a second behavior source |
-| `templates/routing/dispatch-contract.md` | The native-only dispatch contract every Next/Finalization surface and always-loaded carrier renders | Runtime brands or native tool names |
+| `templates/agents/runtime-capabilities.json` (`schema_version: 2`) | Evidence-backed per-runtime facts: instruction loading, hook scope, compact-recovery carrier, and install scope, for twelve adapter variants. Rendered delegation guidance does not name native type catalogs; dated route measurements stay in [`runtime-capabilities.md`](runtime-capabilities.md) | Roles, profiles, subagent model or effort bindings, a type catalog, or dispatch policy |
+| `scripts/runtime-adapter-facts.js` | Loading and validating those facts (it rejects every retired role capability) and rendering the `KW-RUNTIME-DELEGATION` adapter section beside the native-boundary contract | A role catalog, a type catalog, or a second behavior source |
+| `templates/routing/dispatch-contract.md` | The native-boundary contract every Next/Finalization surface and always-loaded carrier renders. It names no type catalog and no dispatch policy | Runtime brands or native tool names |
 | `templates/agents/provenance.json` (`schema_version: 3`) | Attribution for the retired role contracts that remain readable in git history and `kaola-workflow/archive/` | Agent-facing prompt content or current behavior |
 
 The adapter facts span ten runtime families through twelve variants: Claude; Codex for GitHub,

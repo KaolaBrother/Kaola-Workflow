@@ -1642,11 +1642,27 @@ try {
     // #842 mechanism pins on the bounds note above cover the one string that still ships.)
   }
 
-  // #606: report-only Claude dispatch-posture detection (agent teams, gated by
-  // CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) mirrors the Codex dispatch-posture report above —
-  // env probe first, settings "env" block fallback, non-fatal, NEVER writes settings.
+  // #1111: Claude install reports the CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS value it actually
+  // read (process env, and settings env blocks). It does not infer teams/classic, does not claim
+  // a tool is always available, and NEVER writes settings. Non-fatal.
+  const claudeConfigSection = (stdout) => {
+    const start = stdout.indexOf('Kaola-Workflow Claude config:');
+    if (start < 0) return '';
+    const rest = stdout.slice(start);
+    const end = rest.indexOf('\n\n');
+    return end < 0 ? rest : rest.slice(0, end);
+  };
+  const noCapabilityVerdict = (stdout) => {
+    const section = claudeConfigSection(stdout);
+    return section.length > 0
+      && !/claude_dispatch_posture\s*:/.test(section)
+      && !/always available/i.test(section)
+      && !/teammate-mode/i.test(section)
+      && !/to enable/i.test(section)
+      && !/\b(?:teams|classic)\b/.test(section);
+  };
   {
-    // (a) env var set to "1" -> teams, regardless of settings state.
+    // (a) env var set to "1" is reported as that value, not as a capability.
     const teamsEnvHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-606-teams-env-'));
     try {
       // spawn-class: environment
@@ -1655,14 +1671,16 @@ try {
         env: { ...process.env, HOME: teamsEnvHome, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' },
         encoding: 'utf8'
       });
-      assert.strictEqual(result.status, 0, '#606: teams posture (env var) must not fail the install: ' + result.stderr);
-      assert(/claude_dispatch_posture: teams/.test(result.stdout),
-        '#606: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 must report claude_dispatch_posture: teams; got: ' + result.stdout);
+      assert.strictEqual(result.status, 0, '#1111: env-var config report must not fail the install: ' + result.stderr);
+      assert(/CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS \(process env\): 1/.test(result.stdout),
+        '#1111: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 must be reported as the process-env value; got: ' + result.stdout);
+      assert(/not a session tool inventory/.test(result.stdout),
+        '#1111: the Claude config report must say it is not a session tool inventory; got: ' + result.stdout);
+      assert(noCapabilityVerdict(result.stdout),
+        '#1111: the Claude config report must not infer a capability; got: ' + result.stdout);
     } finally { fs.rmSync(teamsEnvHome, { recursive: true, force: true }); }
 
-    // (b) env unset, no settings flag anywhere -> classic (the default posture), with the
-    // classic-led remediation: leads with the always-available classic subagents path, then
-    // qualifies agent teams as experimental + flag-gated.
+    // (b) env unset and no settings key -> both facts absent. No enablement tutorial.
     const classicHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-606-classic-'));
     try {
       const env = { ...process.env, HOME: classicHome };
@@ -1670,21 +1688,19 @@ try {
       // spawn-class: environment
       const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env, encoding: 'utf8' });
-      assert.strictEqual(result.status, 0, '#606: classic posture must not fail the install: ' + result.stderr);
-      assert(/claude_dispatch_posture: classic/.test(result.stdout),
-        '#606: no env var and no settings flag must report claude_dispatch_posture: classic; got: ' + result.stdout);
-      assert(/[Cc]lassic subagents.*always available/.test(result.stdout),
-        '#606: classic posture must lead with the always-available classic-subagents path; got: ' + result.stdout);
-      assert(/experimental/.test(result.stdout) && /CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1/.test(result.stdout),
-        '#606: classic remediation must qualify agent teams as experimental and name the flag; got: ' + result.stdout);
-      assert(/settings.*env/i.test(result.stdout),
-        '#606: classic remediation must mention the settings "env" block route; got: ' + result.stdout);
+      assert.strictEqual(result.status, 0, '#1111: absent config report must not fail the install: ' + result.stderr);
+      assert(/CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS \(process env\): absent/.test(result.stdout),
+        '#1111: an unset env var must be reported absent; got: ' + result.stdout);
+      assert(/CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS \(settings env\): absent/.test(result.stdout),
+        '#1111: no settings env key must be reported absent; got: ' + result.stdout);
+      assert(!/to enable/i.test(claudeConfigSection(result.stdout)),
+        '#1111: the report must not teach how to enable a mode; got: ' + claudeConfigSection(result.stdout));
+      assert(noCapabilityVerdict(result.stdout),
+        '#1111: an absent flag must not become a capability verdict; got: ' + result.stdout);
     } finally { fs.rmSync(classicHome, { recursive: true, force: true }); }
 
-    // (c)+(d) env unset but the sandboxed ~/.claude/settings.json "env" block carries the flag
-    // ("1") -> teams (the settings fallback), AND the settings file is byte-unchanged by the
-    // detection itself (--no-settings-merge disables the unrelated hooks-merge writer, isolating
-    // this assertion to the new detection code path only).
+    // (c) env unset but ~/.claude/settings.json "env" carries the key. Report that value and
+    // path, and leave the file byte-unchanged (--no-settings-merge isolates the hooks writer).
     const settingsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-606-settings-'));
     try {
       const settingsDir = path.join(settingsHome, '.claude');
@@ -1698,13 +1714,17 @@ try {
       // spawn-class: environment
       const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env, encoding: 'utf8' });
-      assert.strictEqual(result.status, 0, '#606: teams posture (settings fallback) must not fail the install: ' + result.stderr);
-      assert(/claude_dispatch_posture: teams/.test(result.stdout),
-        '#606: settings.json env block carrying the flag must report claude_dispatch_posture: teams; got: ' + result.stdout);
+      assert.strictEqual(result.status, 0, '#1111: settings config report must not fail the install: ' + result.stderr);
+      assert(result.stdout.includes('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (settings env): 1 in ' + settingsPath),
+        '#1111: a settings env value must be reported with its path; got: ' + result.stdout);
+      assert(/CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS \(process env\): absent/.test(result.stdout),
+        '#1111: an unset process env stays absent when settings carries the key; got: ' + result.stdout);
+      assert(noCapabilityVerdict(result.stdout),
+        '#1111: a settings value must not become a capability verdict; got: ' + result.stdout);
 
       const settingsAfter = fs.readFileSync(settingsPath, 'utf8');
       assert.strictEqual(settingsAfter, settingsBefore,
-        '#606: the report-only detection must never mutate settings.json; boundary broken');
+        '#1111: the report-only read must never mutate settings.json; boundary broken');
     } finally { fs.rmSync(settingsHome, { recursive: true, force: true }); }
   }
 } finally {

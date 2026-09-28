@@ -28,38 +28,28 @@ project-prompt bytes into a new template by another name.
 
 ## Orchestration seam
 
-The orchestrator dispatches subagents, judges what comes back, and runs the finalize transaction
-itself. There is no bookkeeping role and no mandatory planning agent — the run's coordination state
-is the mission ledger `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, written by the run's Main
-Orchestrator. Subagents are the host's own native types — Kaola-Workflow defines no roles
-([ADR 0029](decisions/0029-native-subagents-only.md)) — reached for at the moment they are needed,
-never pre-assigned to a schedule.
+The run's Main Orchestrator judges what comes back and runs the finalize transaction itself.
+There is no bookkeeping role and no mandatory planning agent — the run's coordination state
+is the mission ledger `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, written by that
+orchestrator. Kaola-Workflow defines no subagent roles
+([ADR 0029](decisions/0029-native-subagents-only.md)). Whether to use a subagent belongs to the
+running harness and the user's instructions
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)).
 
 `validate-workflow-contracts.js` and the three edition twins lock the finalize seam in BOTH
 directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract
 gate, and so does a dropped one-call transaction.
 
-**Execution mode is orchestrator judgment.** Custody answers who may decide meaning; dispatch
-answers where this item is most economically executed. They are independent. Dispatch-vs-inline is
-reconsidered for every mission item: dispatch when it materially reduces main-context residue,
-supplies independent judgment, or enables genuine parallelism; keep a cohesive production surface
-with one owner when handoff and integration cost dominate. That production scope does not absorb
-independent research, acceptance authorship, documentation, or review. Both modes are first-class.
-Nothing attaches to the choice — no justifier, evidence line, approval, checker, count, cap, or
-serial stigma. One item's choice never becomes a run-wide default. A mission names a recoverable outcome; one selector is not a mission. Converge the
-affected failure frontier before freezing a candidate and reviewing that exact hash as a batch.
+A mission names a recoverable outcome. Converge the affected failure frontier before freezing a
+candidate and reviewing that exact hash.
 
-## Codex subagent dispatch
+## Codex subagents
 
-Codex subagent dispatch uses the `spawn_agent` schema this host exposes, not Claude call syntax.
-`agent_type` names a type the host reports — such as the general `default`, implementation-owning
-`worker`, or read-heavy `explorer` — each under its real contract, and supported `fork_turns` and
-service-tier choices are preserved. Kaola installs no Codex profile and pins no subagent model or
-reasoning effort: child model and effort follow Codex's own defaults and the user's configuration,
-and the session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and
-nesting/concurrency limits stay host-owned.
-
-Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
+Codex subagent use belongs to the running Codex harness
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Kaola-Workflow installs no Codex
+profile and pins no subagent model or reasoning effort. Dated observations of Codex call fields
+stay in [runtime capabilities](runtime-capabilities.md); rendered adapter guidance does not name a
+type catalog. Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
 `install-codex-agent-profiles.js` keeps its name but installs no profile; it retires the ones
 earlier releases installed, only on proof (see
@@ -79,30 +69,23 @@ order, handoff schema, required
 block, parser, linter, grader, score, or approval gate. The mission ledger remains the recovery index:
 one JSON line per mission with `n`, `name`, `details`, and `status`.
 
-Next/finalize also carry the runtime adapter facts beside the dispatch contract, inline or through
-the always-loaded global carrier. Read them for the host's native routes and their true write,
-shell, web, background, resume, nesting, and session limits, then decide dispatch or inline for
-the current item. A dispatched type keeps its real identity under a custody brief. Kaola installing
-no profile is never evidence that the host lacks subagent capability. On Cursor, the live Task enum
-is the authority, and CLI, App local, and App Cloud are separate hosts. Do not add Kaola caps to
-runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
+Next and Finalization carry the runtime adapter facts beside the native-boundary contract, inline
+or through the always-loaded global carrier. Those facts do not name a type catalog. Follow the
+host's live schema. Kaola installing no profile is never evidence that the host lacks subagent
+capability. On Cursor, CLI, App local, and App Cloud are separate hosts.
 
 ## Prompt recovery across compact
 
-`workflow-next` and `kaola-workflow-finalize` always load the runtime dispatch contract before an
-execution-shape decision: on the always-loaded-carrier runtimes (Grok, Cursor, Devin) the persistent
-Rule/global carrier holds the contract and adapter facts and the command render carries one pointer
-sentence instead; other runtimes embed the contract in the command itself. Author universal dispatch
-wording once in
-`templates/routing/dispatch-contract.md`; operation skeletons and
-`compact-recovery.skeleton.md` consume that slot. Runtime adapters add only measured capability
-differences, and generation produces the complete per-runtime prompt. Edit sources, never rendered
-surfaces.
+Author the native-boundary contract once in `templates/routing/dispatch-contract.md`. Operation
+skeletons and `compact-recovery.skeleton.md` consume that slot. Runtime adapters add only measured
+capability differences, and generation produces the complete per-runtime prompt. Edit sources,
+never rendered surfaces. On always-loaded-carrier runtimes the persistent carrier holds the
+contract and adapter facts and the command or skill render carries one pointer sentence; other
+runtimes embed the contract in the command itself.
 
-The shared invariant is model-visible: after compact and before the next inference, V2 restores the
-machine-global contract and mandatory dispatch contract, rereads durable state, then completely
-reloads installed Workflow Next or Finalization. Do not translate that into PreToolUse, PostToolUse,
-or Stop gates. A compact carrier makes pre-rendered static text visible directly; it does not derive
+After compact and before the next inference, recovery rereads durable state and completely reloads
+installed Workflow Next or Finalization. Do not translate that into PreToolUse, PostToolUse, or
+Stop gates. A compact carrier makes pre-rendered static text visible directly; it does not derive
 the active operation, run a prompt parser, or add private session identity, token, generation, or
 acknowledgement fields to durable state.
 
@@ -111,16 +94,13 @@ Grok passive hook stdout is ignored; local Cursor CLI/App share one user `always
 explicitly materializes identical bytes in its selected project because it cannot inherit the local
 machine and lacks `sessionStart`. Edition installers emit no second recovery Rule. If a runtime has
 neither measured compact risk nor a valid injection surface, record that boundary instead of
-building a tool gate. Compress by one global source and measured byte budgets, never by making
-dispatch optional or erasing a runtime capability difference.
+building a tool gate. Compress by one global source and measured byte budgets.
 
-## Joining a dispatch
+## Resume locators
 
-Dispatching a subagent does not end at the spawn call, but nothing prescribes the join: how long to
-wait, when to nudge, when to interrupt, and when to re-dispatch are the orchestrator's judgment,
-made against the dispatch locator recorded in the mission ledger's `details`. **Look for the work, not for the
-worker** — if the output the dispatch promised has landed, close the item; if it has not,
-re-dispatch unless the dispatch is positively still alive.
+The mission ledger is the recovery index. **Look for the work, not for the worker** — `details`
+records what went out and where the output was to land. Whether to reuse that work, retry it, or
+hand it back belongs to the running harness.
 
 One thing worth knowing rather than rediscovering: an in-place writer sharing the parent worktree
 writes into the tree everything else is reading, so interrupting one leaves half-written work with
@@ -256,9 +236,10 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / the orchestrator's 
 **There is no agent set.** Kaola-Workflow defines no subagent roles
 ([ADR 0029](decisions/0029-native-subagents-only.md), #1101). A role, role profile, profile
 generator or manifest, role roster, role call card, or pinned subagent model or effort is a retired
-shape that `scripts/test-issue-1101-native-only.js` rejects. A change to a host's native routes is
-an evidence-backed edit to `templates/agents/runtime-capabilities.json` (see § Runtime adapter
-facts).
+shape that `scripts/test-issue-1101-native-only.js` rejects. A change to measured instruction loading, hook scope, compact recovery, or install scope is an
+evidence-backed edit to `templates/agents/runtime-capabilities.json` (see § Runtime adapter facts).
+Dated route measurements live in `docs/runtime-capabilities.md`; rendered guidance does not name a
+type catalog.
 
 ## Forge-Neutral Plugin Prose (issue #341)
 
@@ -273,8 +254,9 @@ facts).
 ## Runtime adapter facts
 
 1. Edit `templates/agents/runtime-capabilities.json` only for an evidence-backed native fact —
-   instruction loading, hook scope, native subagent routes and their availability, compact carrier,
-   or install scope — backed by an `evidence` record; an unknown stays `unknown`.
+   instruction loading, hook scope, compact carrier, or install scope — backed by an `evidence`
+   record; an unknown stays `unknown`. Rendered delegation guidance does not name a type catalog.
+   Dated route measurements belong in `docs/runtime-capabilities.md`.
    `templates/agents/provenance.json` holds attribution for retired role contracts only. Do not mix
    those axes.
 2. `scripts/runtime-adapter-facts.js` validates the file and rejects every retired role, profile,

@@ -2,12 +2,13 @@
 
 Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings
 ([ADR 0029](decisions/0029-native-subagents-only.md), #1101); the Devin edition has been
-native-only since #1062. Dispatch goes through whichever native route the live Devin schema
-exposes: `run_subagent` / `read_subagent` with the session-start profile catalog (the built-in
-`subagent_general` or a user-owned profile), or the Fusion `sidekick` route. Devin owns the child
-model: its "Default subagent model" setting routes every unpinned subagent through an organization
-router — measured to land on SWE-1.6 (vendor documentation fetched 2026-09-12; #1061). The main
-orchestrator uses the model selected by the user, including Adaptive.
+native-only since #1062. The rendered adapter follows the live schema and does not name types
+([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated measurements of
+`run_subagent`, `read_subagent`, and Fusion `sidekick` are in
+[runtime capabilities](runtime-capabilities.md). Devin owns the child model: its "Default subagent
+model" setting routes every unpinned subagent through an organization router — measured to land on
+SWE-1.6 (vendor documentation fetched 2026-09-12; #1061). The main orchestrator uses the model
+selected by the user, including Adaptive.
 
 ## Install
 
@@ -41,7 +42,7 @@ The global-contract step is the installer's last step and runs in per-target mod
 
 ## Dispatch and model ownership
 
-The live schema owns the route. Earlier measured sessions exposed `run_subagent(profile, is_background, resume)` with `read_subagent`, the built-in `subagent_general`, and session-start user profiles. A fresh Fusion session on 2026-09-12 instead exposed `sidekick`; its ACP event carried `cognition.ai/sidekick: true` on a completed read of the probe file. No child model telemetry was exposed. Do not transfer profile/model arguments between these different session modes. Kaola installing no profile is never evidence that Devin lacks subagent capability: the orchestrator uses a native route the session exposes or works inline per item.
+The live schema owns the route. Earlier measured sessions exposed `run_subagent(profile, is_background, resume)` with `read_subagent`, the built-in `subagent_general`, and session-start user profiles. A fresh Fusion session on 2026-09-12 instead exposed `sidekick`; its ACP event carried `cognition.ai/sidekick: true` on a completed read of the probe file. No child model telemetry was exposed. Do not transfer profile/model arguments between these different session modes. Those observations are dated measurements in [runtime capabilities](runtime-capabilities.md); the rendered adapter does not name them ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Kaola installing no profile is never evidence that Devin lacks subagent capability.
 
 A narrated child reply does not establish a dispatch: use the native tool event to establish
 that a child ran, and inspect its findings or artifacts separately to judge the outcome. A file

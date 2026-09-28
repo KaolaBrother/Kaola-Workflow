@@ -92,8 +92,8 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the dispatch contract and adapter facts. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, mandatory dispatch contract, and Cursor adapter. The global transaction owns it; the edition emits no duplicate Rule. |
+| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked runtime dispatch block becomes a one-line pointer to the always-loaded Rule, which carries the native-boundary contract and adapter facts. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
+| global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, and Cursor adapter. The reloaded operation carries the native-boundary contract. The global transaction owns it; the edition emits no duplicate Rule. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
 ## Subagents are Cursor's own
@@ -104,13 +104,12 @@ Kaola-Workflow defines no subagent roles, role profiles, or subagent model or ef
 generated tree. Before #1101 the edition rendered seven `.cursor/agents/` profiles pinning one model
 and effort.
 
-The Rule's Cursor adapter carries the native route: dispatch with `Task`, whose `subagent_type`
-names a type from the live catalog. Measured hosts exposed writable `generalPurpose` and
-host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a
-route this host reports, under its real identity and capability. The live Task catalog is
-authoritative; CLI, App local, and App Cloud are separate hosts, and a CLI catalog reload requires
-a new process. Explicit, automatic, parallel, and resume-by-agent-ID paths remain runtime-owned
-options.
+The Rule's Cursor adapter follows the live host schema and does not name types, models, nesting,
+or a concurrency count ([ADR 0030](decisions/0030-forge-and-engineering-lifecycle.md)). Dated
+catalog measurements, including hosts that exposed `Task` and `generalPurpose`, are in
+[runtime capabilities](runtime-capabilities.md#cursor) and in
+[Historical catalog probes](#historical-catalog-probes) below. CLI, App local, and App Cloud are
+separate hosts, and a CLI catalog reload requires a new process.
 
 Cursor's official model contract says `model` is either `inherit` or an exact model ID, bracket
 parameters carry options such as effort, and a custom subagent that omits `model` inherits the
@@ -121,9 +120,7 @@ live schema's flat fields; Kaola invents none, such as a parent-authored `subage
 When the host exposes `providerOptions.cursor.modelName`, that value is post-dispatch provider
 evidence for the resolved child; the TUI child transcript alone is insufficient.
 
-Kaola installing no profile is never evidence that Cursor lacks subagent capability. Dispatch or
-inline work is decided per mission item, and a cohesive production owner does not absorb
-independent research, test authorship, documentation, or review.
+Kaola installing no profile is never evidence that Cursor lacks subagent capability.
 
 ### Historical catalog probes
 
@@ -321,7 +318,7 @@ invalid-receipt paths are preserved. It never deletes the user's `hooks.json` fi
 
 Cursor Rules are system-level prompt context. The global transaction's V2 Rule has
 `alwaysApply: true` and contains the vendor-neutral contract, the durable-state operation reloader,
-the mandatory dispatch contract, the Cursor adapter, and `KW-COMPACT-RECOVERY-V2`. It completely
+the native-boundary contract, the Cursor adapter, and `KW-COMPACT-RECOVERY-V2`. It completely
 reloads the installed Workflow Next or Finalization prompt after rereading the durable run files.
 
 Local Cursor CLI and App share `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud cannot inherit
