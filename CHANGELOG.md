@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **Finalization no longer copies an unrelated untracked file from the main checkout into the run (#1110).** The residue mirror treated a file missing from the linked worktree as this run's forward residue, copied it, and then exempted that copy from attribution. An absent path is copied only when the run's current commit already contains that exact path. Any other main-only untracked file stays in the main checkout, with its bytes and untracked state unchanged, and is named on `residue_unattributed`. `finalize --check` reports the same declined paths. A forward edit of a file the worktree already holds, and the `#1077` overwrite refusal, are unchanged.
+- **Finalization no longer copies an unrelated untracked file from the main checkout into the run (#1110).** The residue mirror treated a file missing from the linked worktree as this run's forward residue, copied it, and then exempted that copy from attribution. An untracked path that is absent from the worktree is copied only when the run's current commit already contains that exact path. A path the main index already contains — a staged rename or a staged add — is still copied. Any other main-only untracked file stays in the main checkout, with its bytes and untracked state unchanged, and is named on `residue_unattributed`. `finalize --check` reports the same declined paths. A forward edit of a file the worktree already holds, and the `#1077` overwrite refusal, are unchanged.
 
 ## [12.3.1] - 2026-09-27
 

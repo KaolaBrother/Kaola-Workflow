@@ -3569,8 +3569,10 @@ function listResidueOutsideProject(mainRoot) {
 //   { copy: [<rel>…], conflicts: [{ path, reason, main_copy, worktree_copy }…],
 //     declined: [<rel>…] }
 //   reason ∈ 'worktree_authored' | 'worktree_created' | 'base_unavailable' | 'worktree_not_file'
-// #1110: `declined` is the absent-destination paths HEAD does not contain. They are not copied.
-// Absence, an untracked status, and a neighboring run-owned file are not ownership.
+// #1110: `declined` is an absent-destination path that neither this run's HEAD nor the main
+// index contains. It is not copied. An untracked status and a neighboring run-owned file are
+// not ownership. A path the main index already names (a staged rename or staged add) is not
+// untracked, and is still copied.
 // null = absent, undefined = present but not a regular file (a copy over it is never a plain
 // overwrite, so it is a conflict too).
 function readRegularFileOrNull(p) {
@@ -3588,6 +3590,15 @@ function headTreePaths(root) {
     return new Set(splitNulPaths(out));
   } catch (_) { return null; }
 }
+// Paths the main index already names. A staged rename or staged add is not an untracked file.
+// null means the probe failed — fail closed, do not treat the miss as admission.
+function indexPaths(root) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-files', '-z'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    return new Set(splitNulPaths(out));
+  } catch (_) { return null; }
+}
 function residueMirrorPlan(mainRoot, root) {
   const plan = { copy: [], conflicts: [], declined: [] };
   const rels = listResidueOutsideProject(mainRoot);
@@ -3601,16 +3612,21 @@ function residueMirrorPlan(mainRoot, root) {
   } catch (_) { baseSha = null; }
   let headPaths = null;
   let headProbed = false;
+  let indexSet = null;
+  let indexProbed = false;
   for (const rel of rels) {
     const src = readRegularFileOrNull(path.join(mainRoot, rel));
     if (!src) continue;
     const dest = readRegularFileOrNull(path.join(root, rel));
-    // #1110: absence is not ownership. Copy an absent file only when this run's HEAD names that
-    // exact path. A neighboring path, an untracked status, or mere presence in main does not.
-    // Declined paths are not copied; the caller reports them and leaves the main bytes alone.
+    // #1110: absence is not ownership. An untracked path is copied only when this run's HEAD
+    // names that exact path. A path the main index already contains (a staged rename or staged
+    // add) is not untracked and is still copied. A neighboring path or mere presence in main
+    // does not admit an untracked file. Declined paths are not copied; the caller reports them
+    // and leaves the main bytes alone.
     if (dest === null) {
       if (!headProbed) { headPaths = headTreePaths(root); headProbed = true; }
-      if (headPaths && headPaths.has(rel)) plan.copy.push(rel);
+      if (!indexProbed) { indexSet = indexPaths(mainRoot); indexProbed = true; }
+      if ((headPaths && headPaths.has(rel)) || (indexSet && indexSet.has(rel))) plan.copy.push(rel);
       else plan.declined.push(rel);
       continue;
     }
