@@ -29,8 +29,9 @@ home for a hermetic install) and, since #1112, into the shared `~/.agents` root:
   `--runtime droid` flag, no Droid-only dispatch prose. A runtime that also has its own Kaola
   edition installed may discover both copies of a workflow skill — Kaola never touches another
   runtime's copies. A same-name entry that is not a proven Kaola-Workflow copy (foreign,
-  owner-edited, or not a plain one-file `SKILL.md` dir) is refused before anything is
-  written; ownership is proven by `~/.factory/kaola-workflow/agents-skills.record`, by the
+  owner-edited, or not a plain one-file `SKILL.md` dir) is refused by a preflight before
+  anything is written — no skills, support scripts, former-root sweep, or carrier;
+  ownership is proven by `~/.factory/kaola-workflow/agents-skills.record`, by the
   staged render, or by the frozen catalog of released renders. Ownership-proven copies under
   the former `~/.factory/skills` root — still a supported Droid personal root — are removed,
   because the owner observed Droid flag same-name pairs across the two roots (its docs call

@@ -95,18 +95,27 @@ function classify(destDir, name, record, srcDigest, catalog) {
 const CONFLICT_LINE = p =>
   `Refused: ${p} is not a Kaola-Workflow Droid Skill (foreign, owner-edited, or not a plain one-file dir); move it aside and rerun`;
 
+// preflight: read-only conflict scan of every staged name against the shared dest root.
+// installSkills calls it before writing; install-droid.sh also runs it as the standalone
+// `preflight` command so a refusal exits before ANY artifact — support scripts included —
+// is written.
+function preflightSkills({ src, dest, record, catalog = LEGACY_CATALOG }) {
+  const rows = readRecord(record);
+  const conflicts = [];
+  for (const name of stagedNames(src)) {
+    if (classify(dest, name, rows, srcSha(src, name), catalog) === 'conflict') {
+      conflicts.push(path.join(dest, name));
+    }
+  }
+  return { ok: conflicts.length === 0, conflicts };
+}
+
 // install: preflight every staged name against the shared dest root; write nothing when
 // any entry conflicts. Otherwise replace each owned/absent dir with exactly the staged
 // SKILL.md and record every installed name atomically.
 function installSkills({ src, dest, record, catalog = LEGACY_CATALOG }) {
   const names = stagedNames(src);
-  const rows = readRecord(record);
-  const conflicts = [];
-  for (const name of names) {
-    if (classify(dest, name, rows, srcSha(src, name), catalog) === 'conflict') {
-      conflicts.push(path.join(dest, name));
-    }
-  }
+  const { conflicts } = preflightSkills({ src, dest, record, catalog });
   if (conflicts.length) return { ok: false, conflicts, installed: [] };
   fs.mkdirSync(dest, { recursive: true });
   const installed = [];
@@ -352,12 +361,13 @@ function parseArgs(argv) {
   }
   const need = {
     'install': ['src', 'dest', 'record'],
+    'preflight': ['src', 'dest', 'record'],
     'check': ['src', 'dest'],
     'uninstall': ['src', 'dest', 'record'],
     'retire-legacy': ['dir', 'src'],
   }[opts.command];
   if (!need || need.some(k => !opts[k])) {
-    throw new Error('usage: kaola-workflow-droid-skills.js install --src <dir> --dest <dir> --record <file> | check --src <dir> --dest <dir> [--record <file>] | uninstall --src <dir> --dest <dir> --record <file> | retire-legacy --dir <dir> --src <dir> [--shared <dir>] [--check]');
+    throw new Error('usage: kaola-workflow-droid-skills.js install --src <dir> --dest <dir> --record <file> | preflight --src <dir> --dest <dir> --record <file> | check --src <dir> --dest <dir> [--record <file>] | uninstall --src <dir> --dest <dir> --record <file> | retire-legacy --dir <dir> --src <dir> [--shared <dir>] [--check]');
   }
   return opts;
 }
@@ -377,6 +387,14 @@ function main(argv) {
       }
       for (const f of r.installed) console.log(`Installed Droid Skill: ${f}`);
       return 0;
+    }
+    if (opts.command === 'preflight') {
+      const r = preflightSkills({
+        src: path.resolve(opts.src), dest: path.resolve(opts.dest),
+        record: path.resolve(opts.record),
+      });
+      for (const c of r.conflicts) console.error(CONFLICT_LINE(c));
+      return r.ok ? 0 : 1;
     }
     if (opts.command === 'check') {
       const r = checkSkills({
@@ -415,6 +433,6 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
   sha256, lstat, isPlainBasename, readRecord, stagedNames,
-  installSkills, checkSkills, uninstallSkills, retireLegacy, retireReport,
+  installSkills, preflightSkills, checkSkills, uninstallSkills, retireLegacy, retireReport,
   LEGACY_CATALOG,
 };

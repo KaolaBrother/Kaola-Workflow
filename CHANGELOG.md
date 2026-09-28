@@ -18,9 +18,10 @@
   Droid-only dispatch prose; support scripts moved to `~/.agents/kaola-workflow/scripts`
   (manifest-named leftovers under `$DROID_HOME/kaola-workflow/scripts` are retired on install
   and uninstall). A runtime that also has its own Kaola edition installed may discover both
-  copies of a workflow skill — Kaola never touches another runtime's copies. The whole batch
-  is preflighted and a same-name entry that cannot be proven ours (foreign, owner-edited, or
-  not a plain one-file `SKILL.md` dir) refuses the install before anything is written.
+  copies of a workflow skill — Kaola never touches another runtime's copies. A `preflight`
+  scan refuses the install before anything is written — no skills, support scripts,
+  former-root sweep, or carrier — when a same-name entry cannot be proven ours (foreign,
+  owner-edited, or not a plain one-file `SKILL.md` dir).
   Ownership is proven by the new record `~/.factory/kaola-workflow/agents-skills.record`, by
   the staged render, or by a frozen catalog of every released Droid render
   (v12.1.0–v12.3.1, all three forges). Proven copies are migrated out of `~/.factory/skills`;

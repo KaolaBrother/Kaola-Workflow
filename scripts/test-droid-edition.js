@@ -479,8 +479,26 @@ const realRootsBefore = snapshotRealSkillRoots();
   }
 }
 
-// T3 — a foreign same-name entry in the shared root refuses the WHOLE batch before any
-// write: other tools' skills, KPR receipts, and the retired root are all untouched.
+// Full recursive path→digest snapshot of a fixture HOME (dirs, symlinks, files) — the
+// hard-refusal proof compares the whole tree, not a picked list of paths.
+function snapshotHome(root) {
+  const out = new Map();
+  const walk = (dir, rel) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? rel + '/' + e.name : e.name;
+      const p = path.join(dir, e.name);
+      if (e.isSymbolicLink()) out.set(r, 'symlink:' + fs.readlinkSync(p));
+      else if (e.isDirectory()) { out.set(r, 'dir'); walk(p, r); }
+      else out.set(r, 'file:' + crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'));
+    }
+    return out;
+  };
+  return walk(root, '');
+}
+
+// T3 — a foreign same-name entry in the shared root refuses the WHOLE batch before ANY
+// write: no support scripts, no skills, no former-root sweep, no carrier — the after
+// snapshot of the entire HOME is byte-identical to the before.
 {
   const fixture = freshFixture();
   try {
@@ -496,25 +514,55 @@ const realRootsBefore = snapshotRealSkillRoots();
     fs.writeFileSync(path.join(receiptsDir, 'droid-kaola-project-runner.json'), receipt);
     const legacy = path.join(fixture.home, '.factory', 'skills');
     seedSkill(legacy, 'workflow-init', stagedBytes('workflow-init'));
+    // A pre-existing support script the old layout installed must NOT be overwritten,
+    // and a legacy manifest-named script must NOT be retired — nothing may run.
+    const sentinelDir = path.join(fixture.home, '.agents', 'kaola-workflow', 'scripts');
+    fs.mkdirSync(sentinelDir, { recursive: true });
+    fs.writeFileSync(path.join(sentinelDir, 'kaola-workflow-claim.js'), 'SENTINEL-CLAIM\n');
+    const legacyScripts = path.join(fixture.home, '.factory', 'kaola-workflow', 'scripts');
+    fs.mkdirSync(legacyScripts, { recursive: true });
+    fs.writeFileSync(path.join(legacyScripts, manifest.supportScripts('github')[0]), '// old\n');
 
+    const before = snapshotHome(fixture.home);
     const r = runInstaller(env, INSTALL_ARGS);
     assert.notStrictEqual(r.status, 0, 'T3: foreign collision refuses the install');
-    assert(r.out.includes(path.join(agentsSkills, 'workflow-next')),
+    assert(r.out.includes('Refused: ' + path.join(agentsSkills, 'workflow-next')),
       'T3: the refused path is named: ' + r.out);
-    assert(fs.readFileSync(path.join(agentsSkills, 'workflow-next', 'SKILL.md')).equals(foreign),
-      'T3: foreign SKILL.md byte-identical');
-    assert(fs.readFileSync(path.join(agentsSkills, 'droid-kaola-project-runner', 'SKILL.md')).equals(kpr),
-      'T3: KPR SKILL.md byte-identical');
-    assert(fs.readFileSync(path.join(receiptsDir, 'droid-kaola-project-runner.json')).equals(receipt),
-      'T3: KPR receipt byte-identical');
-    for (const name of ['workflow-init', 'kaola-workflow-finalize']) {
-      assert(!fs.existsSync(path.join(agentsSkills, name)),
-        'T3: atomic preflight — ' + name + ' was never written');
-    }
-    assert(fs.existsSync(path.join(legacy, 'workflow-init', 'SKILL.md')),
-      'T3: former root not reached — legacy copy still present');
+    assert.deepStrictEqual(snapshotHome(fixture.home), before,
+      'T3: the whole HOME (incl. DROID_HOME) is untouched by a refused install');
   } finally {
     fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// preflight unit/CLI contract: clean dest exits 0 silently; foreign entry exits 1 with the
+// Refused line — and mutates nothing either way.
+{
+  const skills = require('./kaola-workflow-droid-skills.js');
+  const t = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-preflight-'));
+  try {
+    const dest = path.join(t, 'dest');
+    const record = path.join(t, 'record.tsv');
+    const cli = path.join(REPO, 'scripts', 'kaola-workflow-droid-skills.js');
+    // spawn-class: cli-contract
+    let r = spawnSync(process.execPath, [cli, 'preflight', '--src', STAGED_SKILLS,
+      '--dest', dest, '--record', record], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, 'preflight: clean dest exits 0: ' + r.stderr);
+    assert.strictEqual(r.stdout + r.stderr, '', 'preflight: clean exit is silent');
+    assert.deepStrictEqual(skills.preflightSkills({ src: STAGED_SKILLS, dest, record }),
+      { ok: true, conflicts: [] }, 'preflightSkills: clean dest is ok');
+    seedSkill(dest, 'workflow-next', Buffer.from('# foreign\n'));
+    r = spawnSync(process.execPath, [cli, 'preflight', '--src', STAGED_SKILLS,
+      '--dest', dest, '--record', record], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 1, 'preflight: foreign entry exits 1');
+    assert(r.stderr.includes('Refused: ' + path.join(dest, 'workflow-next')),
+      'preflight: names the conflict: ' + r.stderr);
+    const pf = skills.preflightSkills({ src: STAGED_SKILLS, dest, record });
+    assert.deepStrictEqual(pf, { ok: false, conflicts: [path.join(dest, 'workflow-next')] },
+      'preflightSkills: returns the conflicting path');
+    assert(!fs.existsSync(record), 'preflight writes no record');
+  } finally {
+    fs.rmSync(t, { recursive: true, force: true });
   }
 }
 
