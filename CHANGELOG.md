@@ -6,20 +6,31 @@
 
 - **Finalization no longer copies an unrelated untracked file from the main checkout into the run (#1110).** The residue mirror treated a file missing from the linked worktree as this run's forward residue, copied it, and then exempted that copy from attribution. An untracked path that is absent from the worktree is copied only when the run's current commit already contains that exact path. A path the main index already contains — a staged rename or a staged add — is still copied. Any other main-only untracked file stays in the main checkout, with its bytes and untracked state unchanged, and is named on `residue_unattributed`. `finalize --check` reports the same declined paths. A forward edit of a file the worktree already holds, and the `#1077` overwrite refusal, are unchanged.
 
-- **`install-droid.sh` global Skills moved to `~/.agents/skills` (#1112).** Droid reads both
-  personal roots — `~/.factory/skills` and the documented compatibility root
-  `~/.agents/skills` — and documents duplicate names within one source bucket as invalid, so the
-  old root could not simply be abandoned. Global Skills now install into `~/.agents/skills`
-  through `scripts/kaola-workflow-droid-skills.js`: the whole batch is preflighted and a
-  same-name entry that cannot be proven ours (foreign, owner-edited, or not a plain one-file
-  `SKILL.md` dir) refuses the install before anything is written. Ownership is proven by the
-  new record `~/.factory/kaola-workflow/agents-skills.record`, by the staged render, or by a
-  frozen catalog of every released Droid render (v12.1.0–v12.3.1, all three forges).
-  Proven copies are migrated out of `~/.factory/skills`; anything else there is preserved and
-  reported, and the install exits non-zero so no duplicate reaches Droid. `--check` now verifies
-  the Skills Droid actually loads — per-name in both `install-droid.sh` (which also reports
-  retired-root duplicates) and `install-all.sh` (a failing skills check fails the droid row when
-  `droid` is on PATH, and is advisory when it is not). `--uninstall` removes only
+- **`install-droid.sh` global Skills moved to `~/.agents/skills` (#1112).** Factory still
+  documents both personal roots — `~/.factory/skills` (the former Kaola-Workflow install root,
+  still a supported Droid personal root) and the documented compatibility root
+  `~/.agents/skills` — and the owner observed Droid flag same-name pairs across the two roots
+  (its docs call duplicates within one source bucket invalid), so the former root could not
+  simply be abandoned. Global Skills now install into `~/.agents/skills`
+  through `scripts/kaola-workflow-droid-skills.js`, and because other runtimes that read
+  `~/.agents/skills` (dsh documents it) discover them too, the rendered skills are
+  runtime-neutral — no `~/.factory`/`DROID_HOME` script paths, no `--runtime` flag, no
+  Droid-only dispatch prose; support scripts moved to `~/.agents/kaola-workflow/scripts`
+  (manifest-named leftovers under `$DROID_HOME/kaola-workflow/scripts` are retired on install
+  and uninstall). A runtime that also has its own Kaola edition installed may discover both
+  copies of a workflow skill — Kaola never touches another runtime's copies. The whole batch
+  is preflighted and a same-name entry that cannot be proven ours (foreign, owner-edited, or
+  not a plain one-file `SKILL.md` dir) refuses the install before anything is written.
+  Ownership is proven by the new record `~/.factory/kaola-workflow/agents-skills.record`, by
+  the staged render, or by a frozen catalog of every released Droid render
+  (v12.1.0–v12.3.1, all three forges). Proven copies are migrated out of `~/.factory/skills`;
+  anything else there is preserved and reported, the install exits non-zero so no duplicate
+  reaches Droid, and a same-name *non-Kaola* skill present in both roots is only reported as
+  an advisory `note:`, never removed. `--check` is honest per name — `missing`, `stale`
+  (drifted but provably a Kaola copy), or `conflict` (not provably ours; install will refuse),
+  plus former-root duplicates as conflicts — in both `install-droid.sh` and `install-all.sh`
+  (a failing skills check fails the droid row when `droid` is on PATH, and is printed with its
+  first problem as advisory when it is not). `--uninstall` removes only
   ownership-proven copies and the record, never the shared root. Project-scope skills still go
   to the documented primary root `<DIR>/.factory/skills`.
 

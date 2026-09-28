@@ -18,11 +18,12 @@ function skillRel(basename, forge) {
 
 const { parseFrontmatter, yamlScalar } = forgeLayout;
 
-// Droid resolves skills and the machine-global carrier from ~/.factory (DROID_HOME when set).
-// The kaola_script() resolver probes the always-loaded global support-script dir first and the
-// self-dev repo dir second, mirroring the opencode/devin resolver shape.
+// The shared ~/.agents/skills root is read by other runtimes too (#1112), so the rendered
+// skills are runtime-neutral: the kaola_script() resolver probes the runtime-agnostic global
+// support-script dir ~/.agents/kaola-workflow/scripts first and the self-dev repo dir second,
+// mirroring the opencode/devin resolver shape. No Droid-home path appears anywhere in a render.
 const DROID_KAOLA_SCRIPT =
-  'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _dh="${DROID_HOME:-$HOME/.factory}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_dh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_dh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
+  'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$HOME/.agents/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$HOME/.agents/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
 // The forge's resolver. Only the SELF-DEV probe is forge-scoped: inside this repository a
 // gitlab/gitea edition's scripts live in its plugin tree, not in ./scripts. The deployed dir
@@ -38,16 +39,18 @@ function rewriteClaudeScriptPaths(text, forge) {
 }
 
 // Droid installs no Kaola role profiles by design (#1078): a canonical dispatch card becomes a
-// native-route instruction naming only the built-in Task routes, never a Kaola role.
+// runtime-neutral native-route instruction, never a Kaola role. The shared ~/.agents/skills
+// root is read by other runtimes too, so the prose names no runtime-specific route, home, or
+// custom-agent dir — the always-loaded carrier already carries the host's adapter facts.
 function droidNativeDispatchProse(card) {
   if (card.includes('doc-updater')) {
-    return 'Use a native route or work inline for documentation work — `Task` with the built-in '
-      + '`worker` or read-only `explorer` route, or a user-defined custom droid from ~/.factory/droids/. '
-      + 'Put the changed files, checklist, working directory, and custody boundary in the brief.\n';
+    return 'Use your runtime\'s native subagent route (the always-loaded Kaola rule carries its '
+      + 'adapter facts) or work inline for documentation work. Put the changed files, checklist, '
+      + 'working directory, and custody boundary in the brief.\n';
   }
-  return 'Use a native route or work inline for this routed fix — `Task` with the built-in `worker` '
-    + 'or read-only `explorer` route, or a user-defined custom droid from ~/.factory/droids/. Put the '
-    + 'failure command, evidence path, working directory, and custody boundary in the brief.\n';
+  return 'Use your runtime\'s native subagent route (the always-loaded Kaola rule carries its '
+    + 'adapter facts) or work inline for this routed fix. Put the failure command, evidence path, '
+    + 'working directory, and custody boundary in the brief.\n';
 }
 
 function transformCommandBody(body, forge) {
@@ -56,7 +59,9 @@ function transformCommandBody(body, forge) {
   text = adapterFacts.deferRuntimeDispatchBlock(text);
   text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, droidNativeDispatchProse);
   text = rewriteClaudeScriptPaths(text, forge);
-  text = text.replace(/--runtime claude\b/g, '--runtime droid');
+  // claim.js only branches on --runtime for cursor, so the flag is optional elsewhere; the
+  // shared-root skills must stay runtime-neutral, so it is stripped rather than rewritten.
+  text = text.replace(/ --runtime claude\b/g, '');
   text = text.replace(/[ \t]+\n/g, '\n');
   return text;
 }

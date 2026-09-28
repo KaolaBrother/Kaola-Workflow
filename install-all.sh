@@ -316,8 +316,11 @@ run_one() {
         note="${note:+$note; }skills check FAILED (exit $drc)${dfirst:+: $dfirst}"
         echo "    [droid] skills check FAILED (exit $drc)${dfirst:+ — $dfirst}"
       else
-        note="${note:+$note; }skills check could not run (runtime not on PATH, advisory)"
-        echo "    [droid] skills check could not run (runtime not on PATH, advisory)"
+        # The check DID run — it just cannot reach a live Droid. Report the first problem
+        # it found and mark the verdict advisory, not "could not run".
+        dfirst="$(printf '%s\n' "$dout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        note="${note:+$note; }skills check FAILED (exit $drc)${dfirst:+: $dfirst} (advisory: droid not on PATH)"
+        echo "    [droid] skills check FAILED (exit $drc)${dfirst:+: $dfirst} (advisory: droid not on PATH)"
       fi
     fi
     if [[ "$verdict" == "FAIL" ]]; then

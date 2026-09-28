@@ -217,7 +217,7 @@ function cleanup() { for (const d of tmpRoots) { try { fs.rmSync(d, { recursive:
 // `kind` is 'bash' or 'node' (codex is invoked via `node`). `checkCode` (bash stubs
 // only) is the exit used when invoked with --check: a dry-run probe writes NO marker,
 // so a case can still prove the installer itself never ran.
-function writeStub(root, rel, kind, code, markerName, checkCode) {
+function writeStub(root, rel, kind, code, markerName, checkCode, checkOut) {
   const abs = path.join(root, rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const marker = path.join(root, markerName);
@@ -230,7 +230,9 @@ function writeStub(root, rel, kind, code, markerName, checkCode) {
     fs.writeFileSync(abs,
       `#!/usr/bin/env bash\n` +
       `echo "stub ran: ${rel} args: $*"\n` +
-      `for a in "$@"; do if [ "$a" = "--check" ]; then exit ${checkCode === undefined ? code : checkCode}; fi; done\n` +
+      `for a in "$@"; do if [ "$a" = "--check" ]; then` +
+      (checkOut === undefined ? '' : ` printf '%s\\n' ${JSON.stringify(checkOut)};`) +
+      ` exit ${checkCode === undefined ? code : checkCode}; fi; done\n` +
       `: > ${JSON.stringify(marker)}\n` +
       `exit ${code}\n`);
     fs.chmodSync(abs, 0o755);
@@ -386,7 +388,7 @@ function stubRoot(opts) {
     cursor:   writeStub(root, 'install-cursor.sh',     'bash', codes.cursor ?? 0, '.ran-cursor'),
     zcode:    writeStub(root, 'install-zcode.sh',       'bash', codes.zcode ?? 0, '.ran-zcode'),
     devin:    writeStub(root, 'install-devin.sh',       'bash', codes.devin ?? 0, '.ran-devin'),
-    droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid', (opts.checkCodes || {}).droid),
+    droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid', (opts.checkCodes || {}).droid, (opts.checkOutput || {}).droid),
     dsh:      writeStub(root, 'install-dsh.sh',         'bash', codes.dsh ?? 0, '.ran-dsh'),
   };
   // #1046: install-all now gates every runtime installer behind one read-only
@@ -635,9 +637,11 @@ function runWrapper(rootOrStub, args, extraEnv) {
 // Test E2 — --check grades the droid SKILLS, not only the carrier (#1112). The droid
 // installer's own --check runs under the wrapper's dry run; when it fails AND `droid`
 // is on PATH the row is FAIL and the wrapper exits non-zero. A stub `droid` executable
-// stands in for the runtime on PATH.
+// stands in for the runtime on PATH, and the stub installer prints a `check:` problem
+// line the row must quote verbatim.
 {
-  const stub = stubRoot({ checkCodes: { droid: 7 } });
+  const stub = stubRoot({ checkCodes: { droid: 7 },
+    checkOutput: { droid: 'check: missing skill /home/x/.agents/skills/workflow-next/SKILL.md' } });
   const binDir = path.join(stub.root, 'stub-bin');
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(path.join(binDir, 'droid'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -645,6 +649,9 @@ function runWrapper(rootOrStub, args, extraEnv) {
     { PATH: binDir + path.delimiter + process.env.PATH });
   assert(r.status === 1, 'E2: --check with a failing droid skills check exits non-zero');
   assert(/droid\s+FAIL/.test(r.out), 'E2: the droid row reads FAIL');
+  assert(r.out.includes('skills check FAILED (exit 7)')
+      && r.out.includes('check: missing skill /home/x/.agents/skills/workflow-next/SKILL.md'),
+    'E2: the row quotes the first problem line: ' + r.out);
   assert(!fs.existsSync(stub.markers.droid),
     'E2: the droid installer still never ran for real under --check');
 }
@@ -661,6 +668,25 @@ function runWrapper(rootOrStub, args, extraEnv) {
   assert(/droid\s+PLAN/.test(r.out), 'E3: the droid row stays PLAN (a dry run states)');
   assert(/skills CURRENT/.test(r.out), 'E3: the skills verdict is named on the row');
   assert(!fs.existsSync(stub.markers.droid), 'E3: no real install under --check');
+}
+
+// Test E4 — a failing droid skills check with NO `droid` on PATH is advisory, not FAIL:
+// the check DID run, so the row quotes its first problem and the wrapper still exits 0.
+// PATH is restricted to a stub bin (no droid), node, and the system dirs so the
+// `command -v droid` probe genuinely fails even where the host has droid installed.
+{
+  const stub = stubRoot({ checkCodes: { droid: 7 },
+    checkOutput: { droid: 'check: missing skill /home/x/.agents/skills/workflow-next/SKILL.md' } });
+  const binDir = path.join(stub.root, 'stub-bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const barePath = [binDir, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
+  const r = runWrapper(stub, ['--check'], { PATH: barePath });
+  assert(r.status === 0, 'E4: advisory skills failure does not fail --check: ' + r.out);
+  assert(/droid\s+PLAN/.test(r.out) && !/droid\s+FAIL/.test(r.out),
+    'E4: the droid row stays non-FAIL');
+  assert(r.out.includes('skills check FAILED (exit 7): check: missing skill /home/x/.agents/skills/workflow-next/SKILL.md (advisory: droid not on PATH)'),
+    'E4: advisory wording quotes the first problem: ' + r.out);
+  assert(!fs.existsSync(stub.markers.droid), 'E4: no real install under --check');
 }
 
 // Test F — unknown arg / --help behave as arg-contract expects.

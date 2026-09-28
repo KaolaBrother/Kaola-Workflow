@@ -10,10 +10,14 @@
 # MCP servers). The always-loaded carrier is the compact recovery path, exactly like the
 # other native_only managed_region runtimes.
 #
-# Skills moved out of ~/.factory/skills (#1112): Droid still reads that root, and a
-# same-name Skill in both user roots is a duplicate (Droid documents duplicate names within
-# one source bucket as invalid configuration), so install migrates
-# ownership-proven copies out of the old root (kaola-workflow-droid-skills.js
+# Skills moved out of ~/.factory/skills (#1112) into the shared ~/.agents/skills root, which
+# other runtimes that read ~/.agents/skills (dsh documents it) discover too — so the rendered
+# skills are runtime-neutral: no Droid-home script paths, no --runtime flag, no Droid-only
+# dispatch prose. Droid still reads ~/.factory/skills — the former Kaola-Workflow install
+# root, still a supported Droid personal root — and a same-name Skill in both user roots is a
+# duplicate (the owner observed Droid flag same-name pairs across the two roots; its docs call
+# duplicate names within one source bucket invalid configuration), so install migrates
+# ownership-proven copies out of the former root (kaola-workflow-droid-skills.js
 # retire-legacy) and REFUSES to write over a same-name entry it cannot prove is ours —
 # foreign, owner-edited, or not a plain one-file SKILL.md dir.
 #
@@ -36,16 +40,20 @@
 #   ~/.factory/AGENTS.md   (managed global contract, via kaola-workflow-global-contract.js —
 #                           per-target: --runtime droid installs/checks ONLY this runtime's own carrier,
 #                           as the LAST install step; no other runtime's home is written)
-#   ~/.factory/kaola-workflow/scripts  (support scripts)
+#   ~/.agents/kaola-workflow/scripts  (support scripts; manifest-named copies under the former
+#                                      $DROID_HOME/kaola-workflow/scripts are retired)
 #   ~/.factory/kaola-workflow/agents-skills.record  (ownership record: name\tsha256)
 #
 # Migration: ownership-proven Kaola copies under ~/.factory/skills are retired on
 # install (proven by the record, the staged render, or the frozen catalog of released
 # renders); anything else with a Kaola skill name is preserved and reported, and the
-# install exits non-zero so the duplicate cannot reach Droid.
+# install exits non-zero so the duplicate cannot reach Droid. A same-name NON-Kaola skill
+# present in both ~/.factory/skills and ~/.agents/skills is only reported as an advisory
+# note — Kaola never touches another tool's copy.
 #
-# DROID_HOME relocates this install for hermetic tests only; Droid discovers skills and
-# the personal AGENTS.md carrier from the Droid config home (~/.factory by default).
+# DROID_HOME relocates the Droid config home (carrier, ownership record, former-root sweep)
+# for hermetic tests only; Droid discovers skills and the personal AGENTS.md carrier from the
+# Droid config home (~/.factory by default). Skills and support scripts live under $HOME.
 #
 # Project layout:
 #   <DIR>/.factory/skills/<name>/SKILL.md
@@ -54,8 +62,9 @@
 # Uninstall: --uninstall removes ONLY Kaola-deployed artifacts — globally, the skills
 # whose installed bytes the ownership record (or the staged render) proves ours
 # (never a blind rm of the shared ~/.agents/skills root) plus any ownership-proven
-# copies left in the retired ~/.factory/skills root; the support scripts by manifest
-# name. A global-scope uninstall (the default) also strips this runtime's OWN managed
+# copies left in the former ~/.factory/skills root; the support scripts by manifest
+# name (and any manifest-named leftovers under the former $DROID_HOME scripts dir).
+# A global-scope uninstall (the default) also strips this runtime's OWN managed
 # region in ~/.factory/AGENTS.md through its own per-target record
 # (kaola-workflow-global-contract.js uninstall --runtime droid); an owner-edited carrier
 # is refused and left in place. A --project uninstall leaves the machine-global carrier
@@ -75,7 +84,7 @@ usage() {
   cat <<'EOF'
 Usage: ./install-droid.sh [--global] [--project[=DIR]] [--forge=github|gitlab|gitea] [--check] [--uninstall] [-y|--yes]
   --global          install global skills into ~/.agents/skills (default), migrating
-                    ownership-proven copies out of the retired ~/.factory/skills root
+                    ownership-proven copies out of the former ~/.factory/skills root
   --project[=DIR]   install project skills into DIR/.factory (default: CWD)
   --forge F         github (default), gitlab, or gitea
   --check           verify installed artifacts without mutating
@@ -85,13 +94,19 @@ Usage: ./install-droid.sh [--global] [--project[=DIR]] [--forge=github|gitlab|gi
   -h, --help        show this help
 
 Global Skills live in ~/.agents/skills/<name>/SKILL.md — Droid's documented
-personal-compatibility root, shared with other tools. A same-name entry that is not a
-proven Kaola-Workflow copy (foreign, owner-edited, or not a plain one-file SKILL.md
-dir) is refused before anything is written. Ownership is proven by
+personal-compatibility root, shared with other tools and read by other runtimes that
+discover ~/.agents/skills (dsh documents it), so the rendered skills are runtime-neutral.
+A same-name entry that is not a proven Kaola-Workflow copy (foreign, owner-edited, or not a
+plain one-file SKILL.md dir) is refused before anything is written. Ownership is proven by
 ~/.factory/kaola-workflow/agents-skills.record, by the staged render, or by the frozen
-catalog of released renders. Proven copies under the retired ~/.factory/skills root are
-removed (Droid reads both roots; a same-name pair is a duplicate); anything else is
-preserved and reported.
+catalog of released renders. Proven copies under the former ~/.factory/skills root (still a
+supported Droid personal root) are removed — the owner observed Droid flag same-name pairs
+across the two roots; anything else is preserved and reported, and a non-Kaola name present
+in both roots is only an advisory note, never removed. Support scripts live in
+~/.agents/kaola-workflow/scripts; manifest-named leftovers under the former
+$DROID_HOME/kaola-workflow/scripts are retired on install and uninstall. --check reports
+each deployed skill as missing, stale (drifted but provably a Kaola copy), or conflict
+(not provably ours — install will refuse it).
 
 Uninstall removes ONLY Kaola-deployed artifacts from the resolved scope: the deployed
 skills (ownership-proven — never a blind rm of a dir), and the support
@@ -141,16 +156,21 @@ if ! FORGE_SCRIPTS_DIR="$(node "$FORGE_HELPER" --forge="$FORGE" --scripts-dir)";
 fi
 
 SOURCE_TREE="$STAGE/.factory$FORGE_SUFFIX"
-SUPPORT_DEST="$HOME_ROOT/kaola-workflow/scripts"
+# Support scripts moved to the runtime-neutral shared root (#1112): the rendered skills are
+# discovered by every runtime that reads ~/.agents/skills, and their resolver resolves
+# $HOME/.agents/kaola-workflow/scripts — a Droid-home path would break for them.
+SUPPORT_DEST="${HOME:?}/.agents/kaola-workflow/scripts"
+LEGACY_SUPPORT_DIR="$HOME_ROOT/kaola-workflow/scripts"
 DROID_SKILLS_JS="$SCRIPT_DIR/scripts/kaola-workflow-droid-skills.js"
 SUPPORT_MANIFEST=()
 while IFS= read -r line; do [[ -n "$line" ]] && SUPPORT_MANIFEST+=("$line"); done \
   < <(node "$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js" --forge="$FORGE" --scripts)
 
 # Global Skills live in the documented personal-compatibility root ~/.agents/skills
-# (#1112), shared with other tools; the retired personal root ~/.factory/skills is
-# swept of ownership-proven copies so Droid never sees same-name duplicates. The
-# ownership record and support scripts stay under the Droid home (HOME_ROOT).
+# (#1112), shared with other tools and other runtimes; the former personal root
+# ~/.factory/skills (still a supported Droid personal root) is swept of ownership-proven
+# copies so Droid never sees same-name duplicates. The ownership record stays under the
+# Droid home (HOME_ROOT); the support scripts live under the shared ~/.agents root.
 LEGACY_SKILLS_DIR="$HOME_ROOT/skills"
 SKILLS_RECORD="$HOME_ROOT/kaola-workflow/agents-skills.record"
 if [[ "$GLOBAL" == 1 ]]; then
@@ -188,7 +208,7 @@ NODE
 install_global_carrier() { global_contract install; }
 check_global_carrier() { global_contract check; }
 
-# Install the forge-selected support scripts into the Droid-native helper root.
+# Install the forge-selected support scripts into the shared runtime-neutral helper root.
 install_support_scripts() {
   mkdir -p "$SUPPORT_DEST"
   local src name
@@ -197,6 +217,23 @@ install_support_scripts() {
     [[ -f "$src" ]] || { echo "Install error: support script missing: $src" >&2; exit 1; }
     cp "$src" "$SUPPORT_DEST/$name"
   done
+}
+
+# Global scope only: remove manifest-named leftovers from the former support-script dir
+# ($DROID_HOME/kaola-workflow/scripts), exactly the manifest names — never a blind rm — then
+# drop the dir when it is empty.
+retire_legacy_support_scripts() {
+  [[ "$GLOBAL" == 1 ]] || return 0
+  [[ -d "$LEGACY_SUPPORT_DIR" ]] || return 0
+  local name
+  for name in "${SUPPORT_MANIFEST[@]}"; do
+    if [[ -f "$LEGACY_SUPPORT_DIR/$name" ]]; then
+      rm -f "$LEGACY_SUPPORT_DIR/$name"
+      echo "Removed former support script: $LEGACY_SUPPORT_DIR/$name"
+    fi
+  done
+  rmdir "$LEGACY_SUPPORT_DIR" 2>/dev/null || true
+  rmdir "$HOME_ROOT/kaola-workflow" 2>/dev/null || true
 }
 
 # Verify installed support scripts match the canonical source.
@@ -219,15 +256,18 @@ check_support_scripts() {
 # Verify each staged skill against its destination by name — never a whole-dir diff:
 # the global root ~/.agents/skills is shared with other tools' skills.
 check_artifacts() {
-  node "$DROID_SKILLS_JS" check --src "$SOURCE_TREE/skills" --dest "$SKILLS_DEST"
+  local record_args=()
+  if [[ "$GLOBAL" == 1 ]]; then record_args=(--record "$SKILLS_RECORD"); fi
+  node "$DROID_SKILLS_JS" check --src "$SOURCE_TREE/skills" --dest "$SKILLS_DEST" "${record_args[@]}"
 }
 
-# Report (never mutate) ownership-proven duplicate copies still in the retired
-# ~/.factory/skills root. Global scope only; a project install has no legacy root.
+# Report (never mutate) ownership-proven duplicate copies still in the former
+# ~/.factory/skills root, plus advisory notes for same-name non-Kaola pairs across the two
+# roots. Global scope only; a project install has no legacy root.
 check_legacy_skills() {
   [[ "$GLOBAL" == 1 ]] || return 0
   node "$DROID_SKILLS_JS" retire-legacy --dir "$LEGACY_SKILLS_DIR" \
-    --src "$SOURCE_TREE/skills" --check
+    --src "$SOURCE_TREE/skills" --shared "$SKILLS_DEST" --check
 }
 
 # #1087 (#1086 F3): a global-scope uninstall strips this runtime's OWN global-contract carrier
@@ -267,14 +307,15 @@ uninstall_edition() {
   local bad=0 name
   if [[ "$GLOBAL" == 1 ]]; then
     # Ownership-proven removal from the shared ~/.agents/skills root (the record or the
-    # staged render must prove each copy ours), then the retired ~/.factory/skills root.
+    # staged render must prove each copy ours), then the former ~/.factory/skills root.
     # A preserved entry never aborts the rest of the uninstall — it is reported.
     node "$DROID_SKILLS_JS" uninstall --src "$SOURCE_TREE/skills" \
       --dest "$SKILLS_DEST" --record "$SKILLS_RECORD" || bad=1
     if ! node "$DROID_SKILLS_JS" retire-legacy --dir "$LEGACY_SKILLS_DIR" \
-        --src "$SOURCE_TREE/skills"; then
+        --src "$SOURCE_TREE/skills" --shared "$SKILLS_DEST"; then
       echo "warning: entries preserved under $LEGACY_SKILLS_DIR (see above)" >&2
     fi
+    retire_legacy_support_scripts
   elif [[ -d "$SKILLS_DEST" ]]; then
     # Remove rendered skill dirs by source-tree directory name — never a blind rm of a dir.
     for name in $(cd "$SOURCE_TREE/skills" 2>/dev/null && printf '%s\n' */ 2>/dev/null | sed 's#/##' || true); do
@@ -294,10 +335,8 @@ uninstall_edition() {
         echo "Removed support script: $SUPPORT_DEST/$name"
       fi
     done
-    rmdir "$SUPPORT_DEST/scripts" 2>/dev/null || true
-    rmdir "$SUPPORT_DEST/kaola-workflow" 2>/dev/null || true
     rmdir "$SUPPORT_DEST" 2>/dev/null || true
-    # Zero-residue: drop the emptied kaola-workflow parent dir too.
+    # Zero-residue: drop the emptied kaola-workflow parent dir too — never ~/.agents itself.
     rmdir "$(dirname "$SUPPORT_DEST")" 2>/dev/null || true
   fi
   uninstall_global_carrier
@@ -308,7 +347,7 @@ uninstall_edition() {
 
 if [[ "$CHECK" == 1 ]]; then
   # Report EVERY failure, not just the first: carrier, support scripts, the skills in
-  # the live root, and any ownership-proven duplicates still in the retired root.
+  # the live root, and any ownership-proven duplicates still in the former root.
   check_bad=0
   check_global_carrier || check_bad=1
   check_support_scripts || check_bad=1
@@ -330,14 +369,17 @@ retire_rc=0
 if [[ "$GLOBAL" == 1 ]]; then
   # Preflighted install into the shared ~/.agents/skills root: a foreign or owner-edited
   # same-name entry refuses the whole batch BEFORE anything is written — and before the
-  # retired root is touched.
+  # former root is touched.
   node "$DROID_SKILLS_JS" install --src "$SOURCE_TREE/skills" \
     --dest "$SKILLS_DEST" --record "$SKILLS_RECORD"
-  # Migrate ownership-proven copies out of the retired ~/.factory/skills root (Droid
+  # Migrate ownership-proven copies out of the former ~/.factory/skills root (Droid
   # reads both user roots; a same-name pair is a duplicate). A preserved
   # entry is remembered and fails the install AFTER the carrier step below.
   node "$DROID_SKILLS_JS" retire-legacy --dir "$LEGACY_SKILLS_DIR" \
-    --src "$SOURCE_TREE/skills" || retire_rc=$?
+    --src "$SOURCE_TREE/skills" --shared "$SKILLS_DEST" || retire_rc=$?
+  # Only once no former-root Kaola copy (which still resolves the former script dir)
+  # is left behind are the former support scripts retired.
+  [[ "$retire_rc" -ne 0 ]] || retire_legacy_support_scripts
 else
   mkdir -p "$SKILLS_DEST"
   if [[ -d "$SOURCE_TREE/skills" ]]; then
@@ -354,7 +396,7 @@ fi
 install_global_carrier
 
 if [[ "$retire_rc" -ne 0 ]]; then
-  echo "Installed Droid edition ($FORGE), but entries under $LEGACY_SKILLS_DIR were preserved — Droid reads both ~/.factory/skills and ~/.agents/skills, so a same-name pair is a duplicate Skill; move them aside and rerun." >&2
+  echo "Installed Droid edition ($FORGE), but entries under $LEGACY_SKILLS_DIR were preserved — Droid reads both ~/.factory/skills and ~/.agents/skills and flags a same-name pair across them; move them aside and rerun." >&2
   exit 1
 fi
 

@@ -132,11 +132,19 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
     }
     assert(skill.includes('triggers:\n  - user\n  - model'),
       forge + '/' + name + ' skill triggers are user+model');
-    // The resolver probes the machine-global Droid home (~/.factory) before the self-dev repo
-    // dir; only the script-invoking skills (next/finalize) carry a kaola_script resolver at all.
+    // #1112: the shared ~/.agents/skills root is read by other runtimes, so every rendered
+    // global skill is runtime-neutral — no Droid-home path, no --runtime flag, no
+    // Droid-only dispatch routes or dirs.
+    for (const forbidden of ['.factory', 'DROID_HOME', '--runtime droid', 'droids/',
+        '`Task`', '`worker`', '`explorer`']) {
+      assert(!skill.includes(forbidden),
+        forge + '/' + name + ' skill is runtime-neutral — no ' + JSON.stringify(forbidden));
+    }
+    // The resolver probes the runtime-neutral global support dir before the self-dev repo
+    // dir; only the script-invoking skills (next/finalize) carry a kaola_script resolver.
     if (name !== 'workflow-init') {
-      assert(/\$\{DROID_HOME|\.factory\b/.test(skill),
-        forge + '/' + name + ' skill resolver probes the Droid home');
+      assert(skill.includes('$HOME/.agents/kaola-workflow/scripts'),
+        forge + '/' + name + ' skill resolver probes $HOME/.agents/kaola-workflow/scripts');
     }
     const baseDescription = fs.readFileSync(source, 'utf8').match(/^description:\s*(.+)$/m)[1]
       .replace(/^"|"$/g, '').replace(/\.$/, '');
@@ -144,8 +152,8 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
     assert(rendered.startsWith(baseDescription + '. Invoke when the user asks for /' + name),
       forge + '/' + name + ' skill description keeps the command sentence verbatim, then says when to invoke: ' + rendered);
     if (name === 'workflow-next') {
-      assert(skill.includes('node "$CLAIM_JS" startup --runtime droid --target-issues'),
-        forge + '/workflow-next emits startup --runtime droid');
+      assert(skill.includes('node "$CLAIM_JS" startup --target-issues'),
+        forge + '/workflow-next emits startup with no --runtime flag');
     }
     if (name === 'kaola-workflow-finalize') {
       assert(skill.includes('node "$CLAIM_JS" finalize --project {project}'),
@@ -180,6 +188,30 @@ const stagedRoot = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-stage-'));
 }
 const STAGED_SKILLS = path.join(stagedRoot, '.factory', 'skills');
 const stagedBytes = name => fs.readFileSync(path.join(STAGED_SKILLS, name, 'SKILL.md'));
+
+// Functional resolver: from a NON-repo cwd the rendered kaola_script resolves the
+// runtime-neutral $HOME/.agents/kaola-workflow/scripts dir.
+{
+  const resolverHome = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-resolver-'));
+  const cwd = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-cwd-'));
+  try {
+    const stubDir = path.join(resolverHome, '.agents', 'kaola-workflow', 'scripts');
+    fs.mkdirSync(stubDir, { recursive: true });
+    fs.writeFileSync(path.join(stubDir, 'probe.js'), '// stub\n');
+    const line = stagedBytes('workflow-next').toString('utf8').split('\n')
+      .find(l => l.startsWith('kaola_script(){'));
+    assert(line, 'staged workflow-next carries a kaola_script resolver line');
+    // spawn-class: environment
+    const r = spawnSync('bash', ['-c', line + '\nkaola_script probe.js'],
+      { cwd, env: { ...process.env, HOME: resolverHome }, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, 'resolver exits 0: ' + r.stderr);
+    assert.strictEqual(r.stdout.trim(), path.join(stubDir, 'probe.js'),
+      'resolver prints the $HOME/.agents/kaola-workflow/scripts path');
+  } finally {
+    fs.rmSync(resolverHome, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
 
 function freshFixture() {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-test-home-'));
@@ -273,7 +305,7 @@ const realRootsBefore = snapshotRealSkillRoots();
         'global install writes no harness surface ' + forbidden + ' in ~/.factory');
     }
     // #1112: global Skills live in ~/.agents/skills, byte-equal to the staged render,
-    // and the retired ~/.factory/skills root is never created.
+    // and the former ~/.factory/skills root is never created.
     for (const name of commandNames) {
       const installed = path.join(agentsSkills, name, 'SKILL.md');
       assert(fs.existsSync(installed), 'global skill installed: ' + name);
@@ -281,17 +313,20 @@ const realRootsBefore = snapshotRealSkillRoots();
         'global skill ' + name + ' is byte-equal to the staged render');
     }
     assert(!fs.existsSync(path.join(homeRoot, 'skills')),
-      'global install never creates the retired ~/.factory/skills root');
+      'global install never creates the former ~/.factory/skills root');
     const record = path.join(homeRoot, 'kaola-workflow', 'agents-skills.record');
     const rows = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean);
     assert.deepStrictEqual(rows.map(l => l.split('\t')[0]).sort(), [...commandNames].sort(),
       'ownership record carries one row per installed skill');
     assert(rows.every(l => /^[^\t]+\t[0-9a-f]{64}$/.test(l)),
       'every record row is name<tab>sha256');
+    // #1112: support scripts moved to the runtime-neutral shared root.
     for (const script of manifest.supportScripts('github')) {
-      assert(fs.existsSync(path.join(homeRoot, 'kaola-workflow', 'scripts', script)),
+      assert(fs.existsSync(path.join(fixture.home, '.agents', 'kaola-workflow', 'scripts', script)),
         'support script installed: ' + script);
     }
+    assert(!fs.existsSync(path.join(homeRoot, 'kaola-workflow', 'scripts')),
+      'install creates no legacy $DROID_HOME/kaola-workflow/scripts dir');
 
     const checkResult = runInstaller(env, CHECK_ARGS);
     assert.strictEqual(checkResult.status, 0, checkResult.stderr || checkResult.stdout);
@@ -300,7 +335,40 @@ const realRootsBefore = snapshotRealSkillRoots();
   }
 }
 
-// T2a — migration: ownership-proven copies leave the retired ~/.factory/skills root,
+// T1b — install MOVES support scripts: manifest-named files under the former
+// $DROID_HOME/kaola-workflow/scripts are retired, a non-manifest file there is preserved,
+// and the new ~/.agents location is populated.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const legacyDir = path.join(fixture.home, '.factory', 'kaola-workflow', 'scripts');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const legacyName = manifest.supportScripts('github')[0];
+    fs.writeFileSync(path.join(legacyDir, legacyName), '// old copy\n');
+    const nonManifest = Buffer.from('# keep me\n');
+    fs.writeFileSync(path.join(legacyDir, 'not-ours.txt'), nonManifest);
+
+    const r = runInstaller(env, INSTALL_ARGS);
+    assert.strictEqual(r.status, 0, 'T1b install: ' + r.out);
+    assert(!fs.existsSync(path.join(legacyDir, legacyName)),
+      'T1b: manifest-named legacy support script retired');
+    assert(fs.readFileSync(path.join(legacyDir, 'not-ours.txt')).equals(nonManifest),
+      'T1b: non-manifest file preserved');
+    assert(fs.lstatSync(legacyDir).isDirectory(),
+      'T1b: non-empty legacy scripts dir left standing');
+    for (const script of manifest.supportScripts('github')) {
+      assert(fs.existsSync(path.join(fixture.home, '.agents', 'kaola-workflow', 'scripts', script)),
+        'T1b: support script at new location: ' + script);
+    }
+    const c = runInstaller(env, CHECK_ARGS);
+    assert.strictEqual(c.status, 0, 'T1b --check: ' + c.out);
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T2a — migration: ownership-proven copies leave the former ~/.factory/skills root,
 // a personal Skill is untouched, and the non-empty root itself is left standing.
 {
   const fixture = freshFixture();
@@ -311,6 +379,18 @@ const realRootsBefore = snapshotRealSkillRoots();
     for (const name of commandNames) seedSkill(legacy, name, stagedBytes(name));
     const personal = Buffer.from('# my own skill\n');
     seedSkill(legacy, 'my-skill', personal);
+
+    // Before any install, --check flags each proven former-root copy as a conflict
+    // naming the shared root it duplicates.
+    const pre = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(pre.status, 0, 'T2a: --check fails while proven duplicates remain');
+    for (const name of commandNames) {
+      const re = new RegExp('check: conflict ' + path.join(legacy, name).replace(/[/.]/g, '\\$&')
+        + ' duplicates ' + path.join(fixture.home, '.agents', 'skills').replace(/[/.]/g, '\\$&')
+        + '/' + name);
+      assert(re.test(pre.out),
+        'T2a: --check names ' + name + ' as a former-root conflict: ' + pre.out);
+    }
 
     const r = runInstaller(env, INSTALL_ARGS);
     assert.strictEqual(r.status, 0, 'T2a install: ' + r.out);
@@ -359,9 +439,10 @@ const realRootsBefore = snapshotRealSkillRoots();
       'T2b: symlinked legacy dir still a symlink to its untouched target');
     const c = runInstaller(env, CHECK_ARGS);
     assert.notStrictEqual(c.status, 0, 'T2b: --check exits non-zero');
-    assert(/retired-root duplicate|Preserved/.test(c.out)
-        && c.out.includes(path.join(legacy, 'workflow-init')),
-      'T2b: --check names the duplicate: ' + c.out);
+    assert(/check: conflict/.test(c.out)
+        && c.out.includes(path.join(legacy, 'workflow-init'))
+        && c.out.includes('not proven a Kaola-Workflow copy'),
+      'T2b: --check names the preserved entries as conflicts: ' + c.out);
   } finally {
     fs.rmSync(fixture.home, { recursive: true, force: true });
   }
@@ -385,7 +466,7 @@ const realRootsBefore = snapshotRealSkillRoots();
     seedSkill(legacy, 'workflow-init', bytes);
     fs.writeFileSync(path.join(legacy, 'workflow-init', 'extra.txt'), 'x');
     const r = skills.retireLegacy({ dir: legacy, src, catalog, check: false });
-    assert.deepStrictEqual(r.removed, [path.join(legacy, 'workflow-next')],
+    assert.deepStrictEqual(r.removed.map(d => d.file), [path.join(legacy, 'workflow-next')],
       'T2c: catalog-proven copy removed');
     assert.deepStrictEqual(r.preserved.map(p => p.file), [path.join(legacy, 'workflow-init')],
       'T2c: a two-file dir is preserved');
@@ -431,7 +512,7 @@ const realRootsBefore = snapshotRealSkillRoots();
         'T3: atomic preflight — ' + name + ' was never written');
     }
     assert(fs.existsSync(path.join(legacy, 'workflow-init', 'SKILL.md')),
-      'T3: retired root not reached — legacy copy still present');
+      'T3: former root not reached — legacy copy still present');
   } finally {
     fs.rmSync(fixture.home, { recursive: true, force: true });
   }
@@ -476,23 +557,41 @@ const realRootsBefore = snapshotRealSkillRoots();
   }
 }
 
-// T5 — --check is honest about the shared root: a missing skill and a stale skill each
-// fail the check with the reason named.
+// T5 — --check is honest about the shared root: missing, stale (drifted but provably a
+// Kaola copy), and conflict (not provably ours) are reported distinctly and all exit 1.
 {
   const fixture = freshFixture();
   try {
     const env = envFor(fixture);
     const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    const record = path.join(fixture.home, '.factory', 'kaola-workflow', 'agents-skills.record');
     assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T5 clean install');
     fs.rmSync(path.join(agentsSkills, 'workflow-init'), { recursive: true });
     const c1 = runInstaller(env, CHECK_ARGS);
     assert.notStrictEqual(c1.status, 0, 'T5: removed skill fails --check');
-    assert(/missing/.test(c1.out), 'T5: removed skill reads missing: ' + c1.out);
+    assert(/check: missing skill .*workflow-init/.test(c1.out),
+      'T5: removed skill reads missing: ' + c1.out);
     assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T5 restore install');
-    fs.appendFileSync(path.join(agentsSkills, 'workflow-next', 'SKILL.md'), '\ndrift\n');
+
+    // stale: bytes drifted, but the ownership record still proves the copy ours.
+    const drifted = Buffer.concat([stagedBytes('workflow-next'), Buffer.from('\ndrift\n')]);
+    fs.writeFileSync(path.join(agentsSkills, 'workflow-next', 'SKILL.md'), drifted);
+    const d = crypto.createHash('sha256').update(drifted).digest('hex');
+    const rows = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean)
+      .map(l => l.startsWith('workflow-next\t') ? 'workflow-next\t' + d : l);
+    fs.writeFileSync(record, rows.join('\n') + '\n');
     const c2 = runInstaller(env, CHECK_ARGS);
-    assert.notStrictEqual(c2.status, 0, 'T5: drifted skill fails --check');
-    assert(/stale/.test(c2.out), 'T5: drifted skill reads stale: ' + c2.out);
+    assert.notStrictEqual(c2.status, 0, 'T5: proven-drifted skill fails --check');
+    assert(/check: stale skill .*workflow-next/.test(c2.out),
+      'T5: proven drift reads stale: ' + c2.out);
+
+    // conflict: foreign bytes nothing proves — install would refuse this entry.
+    const foreign = Buffer.from('# not ours\n');
+    fs.writeFileSync(path.join(agentsSkills, 'kaola-workflow-finalize', 'SKILL.md'), foreign);
+    const c3 = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(c3.status, 0, 'T5: foreign skill fails --check');
+    assert(/check: conflict .*kaola-workflow-finalize.*not a Kaola-Workflow copy/.test(c3.out),
+      'T5: foreign entry reads conflict: ' + c3.out);
   } finally {
     fs.rmSync(fixture.home, { recursive: true, force: true });
   }
@@ -519,6 +618,34 @@ const realRootsBefore = snapshotRealSkillRoots();
     assert(fs.readFileSync(path.join(agentsSkills, 'other', 'SKILL.md')).equals(personal),
       'T6: personal Skill byte-identical');
     assert(fs.lstatSync(agentsSkills).isDirectory(), 'T6: shared root kept');
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T8 — a same-name NON-Kaola skill present in both roots is an advisory note only:
+// install succeeds, both copies are byte-identical afterwards, and --check prints the
+// note while still passing when everything else is current.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const legacy = path.join(fixture.home, '.factory', 'skills');
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    const mine = Buffer.from('# my own paired skill\n');
+    seedSkill(legacy, 'my-skill', mine);
+    seedSkill(agentsSkills, 'my-skill', mine);
+
+    const r = runInstaller(env, INSTALL_ARGS);
+    assert.strictEqual(r.status, 0, 'T8: non-Kaola same-name pair does not fail install: ' + r.out);
+    assert(/note: same-name skill my-skill in both .* and .* — not a Kaola-Workflow skill, left untouched/.test(r.out),
+      'T8: advisory note printed: ' + r.out);
+    assert(fs.readFileSync(path.join(legacy, 'my-skill', 'SKILL.md')).equals(mine)
+        && fs.readFileSync(path.join(agentsSkills, 'my-skill', 'SKILL.md')).equals(mine),
+      'T8: both copies untouched');
+    const c = runInstaller(env, CHECK_ARGS);
+    assert.strictEqual(c.status, 0, 'T8: --check passes with the note advisory: ' + c.out);
+    assert(/note: same-name skill my-skill/.test(c.out), 'T8: --check prints the note: ' + c.out);
   } finally {
     fs.rmSync(fixture.home, { recursive: true, force: true });
   }

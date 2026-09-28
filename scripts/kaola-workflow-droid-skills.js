@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-// Ownership-proven install, check, uninstall, and legacy-root retirement for the Droid
+// Ownership-proven install, check, uninstall, and former-root retirement for the Droid
 // edition's Skills (#1112). Global Skills moved from ~/.factory/skills to the shared
 // personal-compatibility root ~/.agents/skills, which Droid still reads alongside
-// ~/.factory/skills. Its docs call duplicate names within one source bucket invalid; whether
-// the two user roots share a bucket is not verified, so a same-name pair is never left behind:
-// the retired root is swept, never just abandoned.
+// ~/.factory/skills (the former Kaola-Workflow install root, still a supported Droid personal
+// root). Its docs call duplicate names within one source bucket invalid and the owner observed
+// Droid flag same-name pairs across the two roots, so a same-name pair is never left behind:
+// the former root is swept, never just abandoned.
 //
 // Proof, per <dest>/<name>/SKILL.md (never a path built from a record row):
 //   record    the dir's ownership record lists the skill name with the sha256 the file
@@ -124,23 +125,35 @@ function installSkills({ src, dest, record, catalog = LEGACY_CATALOG }) {
   return { ok: true, conflicts: [], installed };
 }
 
-// check: per-name only — the shared dest root legitimately holds other tools' skills.
-function checkSkills({ src, dest }) {
+// check: per-name only — the shared dest root legitimately holds other tools' skills. An
+// honest verdict distinguishes three states: the skill is absent (missing); its bytes differ
+// from the render but are provably a Kaola copy — the record or the released-render catalog
+// owns the digest — so a rerun restores it (stale); or the entry cannot be proven ours at all
+// (conflict), which install would refuse rather than overwrite.
+function checkSkills({ src, dest, record, catalog = LEGACY_CATALOG }) {
+  const rows = readRecord(record);
   const problems = [];
   for (const name of stagedNames(src)) {
     const dir = path.join(dest, name);
     const skill = path.join(dir, 'SKILL.md');
     const dirSt = lstat(dir);
     if (!dirSt) { problems.push(`check: missing skill ${skill}`); continue; }
-    if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) {
-      problems.push(`check: stale skill ${skill}`); continue;
+    const srcDigest = srcSha(src, name);
+    if (!dirSt.isSymbolicLink() && dirSt.isDirectory()) {
+      const entries = fs.readdirSync(dir);
+      const st = entries.length === 1 && entries[0] === 'SKILL.md' ? lstat(skill) : null;
+      if (st && st.isFile()) {
+        const digest = sha256(fs.readFileSync(skill));
+        if (srcDigest && digest === srcDigest) continue;
+        if (rows.get(name) === digest || (catalog[name] || []).includes(digest)) {
+          problems.push(`check: stale skill ${skill}`);
+        } else {
+          problems.push(`check: conflict ${dir} is not a Kaola-Workflow copy (install will refuse; move it aside)`);
+        }
+        continue;
+      }
     }
-    const st = lstat(skill);
-    if (!st) { problems.push(`check: missing skill ${skill}`); continue; }
-    if (!st.isFile()) { problems.push(`check: stale skill ${skill}`); continue; }
-    if (!fs.readFileSync(skill).equals(fs.readFileSync(path.join(src, name, 'SKILL.md')))) {
-      problems.push(`check: stale skill ${skill}`);
-    }
+    problems.push(`check: conflict ${dir} is not a Kaola-Workflow copy (install will refuse; move it aside)`);
   }
   return { ok: problems.length === 0, problems };
 }
@@ -200,28 +213,40 @@ function classifyLegacy(dir, name, catalog, staged) {
   return 'preserve:foreign_or_owner_edited';
 }
 
-const DUP_MESSAGE =
-  'Droid reads both ~/.factory/skills and ~/.agents/skills, so a same-name copy in both is a duplicate Skill; move it aside';
+// Droid reads both ~/.factory/skills and ~/.agents/skills, and the owner observed Droid flag
+// same-name pairs across the two roots (its docs call duplicate names within one source
+// bucket invalid) — so no same-name pair is ever left behind or hidden.
 
-// retire-legacy: sweep the retired ~/.factory/skills root of ownership-proven copies.
-// check=true mutates nothing and reports what a rerun would remove or preserve.
-function retireLegacy({ dir, src, catalog = LEGACY_CATALOG, check = false }) {
+// retire-legacy: sweep the former ~/.factory/skills root of ownership-proven copies.
+// check=true mutates nothing and reports what a rerun would remove or preserve. When --shared
+// names the live shared root, an entry name present in BOTH roots that is NOT a Kaola name
+// (catalog ∪ staged) is a same-name pair Droid will flag — reported as an advisory `note:`,
+// never removed, never counted against the exit code.
+function retireLegacy({ dir, src, shared, catalog = LEGACY_CATALOG, check = false }) {
   const dirSt = lstat(dir);
-  const result = { removed: [], preserved: [], duplicates: [], dirEmptied: false };
+  const result = { removed: [], preserved: [], duplicates: [], notes: [], dirEmptied: false };
   if (!dirSt) return result;
   if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) {
     result.preserved.push({ file: dir, reason: 'non_regular' });
     return result;
   }
-  const names = new Set([...Object.keys(catalog), ...stagedNames(src)]);
-  for (const name of [...names].sort()) {
-    if (!isPlainBasename(name)) continue;
+  const kaolaNames = new Set([...Object.keys(catalog), ...stagedNames(src)]);
+  if (shared) {
+    for (const name of fs.readdirSync(dir).filter(isPlainBasename).sort()) {
+      if (kaolaNames.has(name)) continue;
+      if (lstat(path.join(shared, name))) {
+        result.notes.push(
+          `note: same-name skill ${name} in both ${dir} and ${shared} — not a Kaola-Workflow skill, left untouched`);
+      }
+    }
+  }
+  for (const name of [...kaolaNames].sort()) {
     const skillDir = path.join(dir, name);
     const verdict = classifyLegacy(dir, name, catalog, srcSha(src, name));
     if (verdict === 'absent') continue;
     if (verdict === 'removable') {
       if (!check) fs.rmSync(skillDir, { recursive: true });
-      (check ? result.duplicates : result.removed).push(skillDir);
+      (check ? result.duplicates : result.removed).push({ file: skillDir, name });
     } else {
       result.preserved.push({ file: skillDir, reason: verdict.slice('preserve:'.length) });
     }
@@ -232,20 +257,28 @@ function retireLegacy({ dir, src, catalog = LEGACY_CATALOG, check = false }) {
   return result;
 }
 
-function retireReport(result, check) {
+function retireReport(result, check, shared) {
   const lines = [];
   if (check) {
-    for (const file of result.duplicates) {
-      lines.push(`check: retired-root duplicate ${file} (rerun ./install-droid.sh)`);
+    for (const d of result.duplicates) {
+      lines.push(`check: conflict ${d.file} duplicates ${shared || '~/.agents/skills'}/${d.name}`
+        + ' (ownership-proven Kaola copy; rerun ./install-droid.sh to retire it)');
     }
   } else {
-    for (const file of result.removed) {
-      lines.push(`Removed retired Droid Skill copy: ${file}`);
+    for (const d of result.removed) {
+      lines.push(`Removed former-root Droid Skill copy: ${d.file}`);
     }
   }
   for (const p of result.preserved) {
-    lines.push(`Preserved ${p.file} (${p.reason}): ${DUP_MESSAGE}`);
+    if (check) {
+      lines.push(`check: conflict ${p.file} (${p.reason}) — not proven a Kaola-Workflow copy;`
+        + ` Kaola never removes it, move it aside`);
+    } else {
+      lines.push(`Preserved ${p.file} (${p.reason}) — not proven a Kaola-Workflow copy;`
+        + ` Kaola never removes it, move it aside`);
+    }
   }
+  for (const note of result.notes || []) lines.push(note);
   return lines;
 }
 
@@ -311,7 +344,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--dest=')) opts.dest = a.slice(7);
     else if (a.startsWith('--record=')) opts.record = a.slice(9);
     else if (a.startsWith('--dir=')) opts.dir = a.slice(6);
-    else if (['--src', '--dest', '--record', '--dir'].includes(a)) {
+    else if (a.startsWith('--shared=')) opts.shared = a.slice(9);
+    else if (['--src', '--dest', '--record', '--dir', '--shared'].includes(a)) {
       if (!args.length) throw new Error(`${a} needs a value`);
       opts[a.slice(2)] = args.shift();
     } else throw new Error(`unknown argument: ${a}`);
@@ -323,7 +357,7 @@ function parseArgs(argv) {
     'retire-legacy': ['dir', 'src'],
   }[opts.command];
   if (!need || need.some(k => !opts[k])) {
-    throw new Error('usage: kaola-workflow-droid-skills.js install --src <dir> --dest <dir> --record <file> | check --src <dir> --dest <dir> | uninstall --src <dir> --dest <dir> --record <file> | retire-legacy --dir <dir> --src <dir> [--check]');
+    throw new Error('usage: kaola-workflow-droid-skills.js install --src <dir> --dest <dir> --record <file> | check --src <dir> --dest <dir> [--record <file>] | uninstall --src <dir> --dest <dir> --record <file> | retire-legacy --dir <dir> --src <dir> [--shared <dir>] [--check]');
   }
   return opts;
 }
@@ -345,7 +379,10 @@ function main(argv) {
       return 0;
     }
     if (opts.command === 'check') {
-      const r = checkSkills({ src: path.resolve(opts.src), dest: path.resolve(opts.dest) });
+      const r = checkSkills({
+        src: path.resolve(opts.src), dest: path.resolve(opts.dest),
+        record: opts.record ? path.resolve(opts.record) : undefined,
+      });
       for (const p of r.problems) console.error(p);
       return r.ok ? 0 : 1;
     }
@@ -361,9 +398,11 @@ function main(argv) {
       return 0;
     }
     const r = retireLegacy({
-      dir: path.resolve(opts.dir), src: path.resolve(opts.src), check: opts.check,
+      dir: path.resolve(opts.dir), src: path.resolve(opts.src),
+      shared: opts.shared ? path.resolve(opts.shared) : undefined,
+      check: opts.check,
     });
-    for (const line of retireReport(r, opts.check)) console.log(line);
+    for (const line of retireReport(r, opts.check, opts.shared && path.resolve(opts.shared))) console.log(line);
     if (opts.check) return (r.duplicates.length || r.preserved.length) ? 1 : 0;
     return r.preserved.length ? 1 : 0;
   } catch (err) {
