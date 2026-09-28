@@ -22,6 +22,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema');
 
 function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
@@ -52,11 +53,8 @@ function readRecord(file) {
 }
 
 function writeRecord(file, rows) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const body = [...rows.entries()].sort().map(([n, d]) => `${n}\t${d}`).join('\n') + '\n';
-  const tmp = file + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, body);
-  fs.renameSync(tmp, file);
+  writeFileAtomicReplace(file, body);
 }
 
 // The staged skill names: plain-basename directories of --src holding a SKILL.md.
@@ -126,7 +124,7 @@ function installSkills({ src, dest, record, catalog = LEGACY_CATALOG }) {
     fs.mkdirSync(dir, { recursive: true });
     const bytes = fs.readFileSync(path.join(src, name, 'SKILL.md'));
     const file = path.join(dir, 'SKILL.md');
-    fs.writeFileSync(file, bytes);
+    writeFileAtomicReplace(file, bytes);
     newRows.set(name, sha256(bytes));
     installed.push(file);
   }
