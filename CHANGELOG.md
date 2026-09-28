@@ -6,6 +6,23 @@
 
 - **Finalization no longer copies an unrelated untracked file from the main checkout into the run (#1110).** The residue mirror treated a file missing from the linked worktree as this run's forward residue, copied it, and then exempted that copy from attribution. An untracked path that is absent from the worktree is copied only when the run's current commit already contains that exact path. A path the main index already contains — a staged rename or a staged add — is still copied. Any other main-only untracked file stays in the main checkout, with its bytes and untracked state unchanged, and is named on `residue_unattributed`. `finalize --check` reports the same declined paths. A forward edit of a file the worktree already holds, and the `#1077` overwrite refusal, are unchanged.
 
+- **`install-droid.sh` global Skills moved to `~/.agents/skills` (#1112).** Droid reads both
+  personal roots — `~/.factory/skills` and the documented compatibility root
+  `~/.agents/skills` — and documents duplicate names within one source bucket as invalid, so the
+  old root could not simply be abandoned. Global Skills now install into `~/.agents/skills`
+  through `scripts/kaola-workflow-droid-skills.js`: the whole batch is preflighted and a
+  same-name entry that cannot be proven ours (foreign, owner-edited, or not a plain one-file
+  `SKILL.md` dir) refuses the install before anything is written. Ownership is proven by the
+  new record `~/.factory/kaola-workflow/agents-skills.record`, by the staged render, or by a
+  frozen catalog of every released Droid render (v12.1.0–v12.3.1, all three forges).
+  Proven copies are migrated out of `~/.factory/skills`; anything else there is preserved and
+  reported, and the install exits non-zero so no duplicate reaches Droid. `--check` now verifies
+  the Skills Droid actually loads — per-name in both `install-droid.sh` (which also reports
+  retired-root duplicates) and `install-all.sh` (a failing skills check fails the droid row when
+  `droid` is on PATH, and is advisory when it is not). `--uninstall` removes only
+  ownership-proven copies and the record, never the shared root. Project-scope skills still go
+  to the documented primary root `<DIR>/.factory/skills`.
+
 ### Changed
 
 - **Kaola-Workflow no longer adds a runtime dispatch or scheduling policy (#1111).** Active prompts

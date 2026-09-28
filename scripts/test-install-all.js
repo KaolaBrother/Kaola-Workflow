@@ -214,8 +214,10 @@ function freshRoot() {
 function cleanup() { for (const d of tmpRoots) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } }
 
 // Write a stub installer that records a marker when run and exits `code`.
-// `kind` is 'bash' or 'node' (codex is invoked via `node`).
-function writeStub(root, rel, kind, code, markerName) {
+// `kind` is 'bash' or 'node' (codex is invoked via `node`). `checkCode` (bash stubs
+// only) is the exit used when invoked with --check: a dry-run probe writes NO marker,
+// so a case can still prove the installer itself never ran.
+function writeStub(root, rel, kind, code, markerName, checkCode) {
   const abs = path.join(root, rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const marker = path.join(root, markerName);
@@ -228,6 +230,7 @@ function writeStub(root, rel, kind, code, markerName) {
     fs.writeFileSync(abs,
       `#!/usr/bin/env bash\n` +
       `echo "stub ran: ${rel} args: $*"\n` +
+      `for a in "$@"; do if [ "$a" = "--check" ]; then exit ${checkCode === undefined ? code : checkCode}; fi; done\n` +
       `: > ${JSON.stringify(marker)}\n` +
       `exit ${code}\n`);
     fs.chmodSync(abs, 0o755);
@@ -383,7 +386,7 @@ function stubRoot(opts) {
     cursor:   writeStub(root, 'install-cursor.sh',     'bash', codes.cursor ?? 0, '.ran-cursor'),
     zcode:    writeStub(root, 'install-zcode.sh',       'bash', codes.zcode ?? 0, '.ran-zcode'),
     devin:    writeStub(root, 'install-devin.sh',       'bash', codes.devin ?? 0, '.ran-devin'),
-    droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid'),
+    droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid', (opts.checkCodes || {}).droid),
     dsh:      writeStub(root, 'install-dsh.sh',         'bash', codes.dsh ?? 0, '.ran-dsh'),
   };
   // #1046: install-all now gates every runtime installer behind one read-only
@@ -627,6 +630,37 @@ function runWrapper(rootOrStub, args, extraEnv) {
   assert(['claude', 'opencode', 'codex', 'kimi'].every(n => !fs.existsSync(markers[n])),
     'E: --check made no changes (no installer ran)');
   assert(r.out.includes('dry-run complete'), 'E: dry-run sentinel printed');
+}
+
+// Test E2 — --check grades the droid SKILLS, not only the carrier (#1112). The droid
+// installer's own --check runs under the wrapper's dry run; when it fails AND `droid`
+// is on PATH the row is FAIL and the wrapper exits non-zero. A stub `droid` executable
+// stands in for the runtime on PATH.
+{
+  const stub = stubRoot({ checkCodes: { droid: 7 } });
+  const binDir = path.join(stub.root, 'stub-bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, 'droid'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const r = runWrapper(stub, ['--check'],
+    { PATH: binDir + path.delimiter + process.env.PATH });
+  assert(r.status === 1, 'E2: --check with a failing droid skills check exits non-zero');
+  assert(/droid\s+FAIL/.test(r.out), 'E2: the droid row reads FAIL');
+  assert(!fs.existsSync(stub.markers.droid),
+    'E2: the droid installer still never ran for real under --check');
+}
+
+// Test E3 — same shape, healthy check: the droid row stays PLAN and the wrapper exits 0.
+{
+  const stub = stubRoot({ checkCodes: { droid: 0 } });
+  const binDir = path.join(stub.root, 'stub-bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, 'droid'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const r = runWrapper(stub, ['--check'],
+    { PATH: binDir + path.delimiter + process.env.PATH });
+  assert(r.status === 0, 'E3: --check with a passing droid skills check exits 0');
+  assert(/droid\s+PLAN/.test(r.out), 'E3: the droid row stays PLAN (a dry run states)');
+  assert(/skills CURRENT/.test(r.out), 'E3: the skills verdict is named on the row');
+  assert(!fs.existsSync(stub.markers.droid), 'E3: no real install under --check');
 }
 
 // Test F — unknown arg / --help behave as arg-contract expects.

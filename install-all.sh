@@ -299,6 +299,27 @@ run_one() {
     local verdict note
     IFS=$'\t' read -r verdict note < <(carrier_state "$name")
     echo "    [global-contract] $name: $note"
+    # #1112: the droid carrier check alone cannot see the Skills — they moved to the
+    # shared ~/.agents/skills root with an ownership record and a retired-root sweep.
+    # Run the droid installer's own --check so the row grades the Skills Droid loads.
+    # A failing check fails the row only when `droid` is on PATH; absent tooling is
+    # advisory, never another runtime's detected mismatch.
+    if [[ "$name" == "droid" ]]; then
+      local dout drc=0 dfirst
+      dout="$("$@" --check 2>&1)" || drc=$?
+      if [[ "$drc" -eq 0 ]]; then
+        note="${note:+$note; }skills CURRENT"
+        echo "    [droid] skills CURRENT"
+      elif command -v droid >/dev/null 2>&1; then
+        dfirst="$(printf '%s\n' "$dout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        verdict="FAIL"
+        note="${note:+$note; }skills check FAILED (exit $drc)${dfirst:+: $dfirst}"
+        echo "    [droid] skills check FAILED (exit $drc)${dfirst:+ — $dfirst}"
+      else
+        note="${note:+$note; }skills check could not run (runtime not on PATH, advisory)"
+        echo "    [droid] skills check could not run (runtime not on PATH, advisory)"
+      fi
+    fi
     if [[ "$verdict" == "FAIL" ]]; then
       R_STATUS+=("FAIL"); R_CODE+=("-"); R_NOTE+=("$note")
     else

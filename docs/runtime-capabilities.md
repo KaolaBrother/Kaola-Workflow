@@ -303,7 +303,10 @@ boundaries they measured, not as a Kaola catalog contract.
 - [AGENTS.md discovery](https://docs.factory.ai/harness/agents-md) documents repository
   `AGENTS.md` loading plus personal carriers under `~/.factory/`, `~/.agents/`, and `~/.agent/`.
 - [Skills](https://docs.factory.ai/harness/skills) documents `.factory/skills/<name>/SKILL.md`,
-  user/model invocation, and the personal `~/.factory/skills/` scope.
+  user/model invocation, the personal `~/.factory/skills/` scope plus the
+  `~/.agents/skills/` and `~/.agent/skills/` compatibility roots (this edition installs
+  globally into `~/.agents/skills/`), and the `.agents`/`.agent` project compatibility
+  roots. Duplicate skill names within one source bucket are invalid configuration.
 - [Subagents](https://docs.factory.ai/harness/subagents) documents native `Task` dispatch,
   built-in `worker` / `explorer` routes, and custom droids under `.factory/droids/` or
   `~/.factory/droids/`.

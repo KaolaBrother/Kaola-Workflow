@@ -180,8 +180,8 @@
     "droid_skills": {
       "kind": "official_docs",
       "locator": "https://docs.factory.ai/harness/skills",
-      "observed_at": "2026-09-16T00:00:00Z",
-      "claim": "A skill is a directory whose SKILL.md entry point carries a name and description in its frontmatter; skills are discovered from project .factory/skills/ and personal ~/.factory/skills/, are user-invocable (/name) and model-invocable by default, and the invoked skill's SKILL.md body is injected into context."
+      "observed_at": "2026-09-28T00:00:00Z",
+      "claim": "A skill is a directory whose SKILL.md entry point carries a name and description in its frontmatter; skills are discovered from project .factory/skills/ (primary) plus the .agents/skills and .agent/skills compatibility roots, and personally from ~/.factory/skills/ plus the ~/.agents/skills/ and ~/.agent/skills/ compatibility roots; duplicate names within one source bucket are invalid configuration. Skills are user-invocable (/name) and model-invocable by default, and the invoked skill's SKILL.md body is injected into context."
     },
     "droid_commands": {
       "kind": "official_docs",

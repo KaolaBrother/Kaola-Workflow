@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -168,6 +169,18 @@ function tmpBase() {
   return path.isAbsolute(dir) ? dir : '/tmp';
 }
 
+// The render an install stages: the same tree sync-droid-edition.js --write emits.
+const stagedRoot = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-stage-'));
+{
+  // spawn-class: environment
+  const r = spawnSync(process.execPath,
+    [path.join(REPO, 'scripts/sync-droid-edition.js'), '--forge=github', '--tree-root=' + stagedRoot, '--write'],
+    { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, 'staged render: ' + r.stderr);
+}
+const STAGED_SKILLS = path.join(stagedRoot, '.factory', 'skills');
+const stagedBytes = name => fs.readFileSync(path.join(STAGED_SKILLS, name, 'SKILL.md'));
+
 function freshFixture() {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-test-home-'));
   const bin = path.join(home, 'bin');
@@ -184,63 +197,331 @@ function freshFixture() {
   return { home, bin };
 }
 
-const fixture = freshFixture();
-try {
-  const env = {
+function envFor(fixture) {
+  return {
     ...process.env,
     HOME: fixture.home,
     DROID_HOME: path.join(fixture.home, '.factory'),
     PATH: fixture.bin + path.delimiter + process.env.PATH,
   };
-  // A check against a home with nothing installed must name the missing Droid carrier instead of
-  // aborting silently on the global-contract exit code.
-  // spawn-class: cli-contract
-  const preCheck = spawnSync(
-    'bash',
-    [path.join(REPO, 'install-droid.sh'), '--global', '--forge=github', '--check'],
-    { cwd: REPO, env, encoding: 'utf8', timeout: 60000 }
-  );
-  assert.notStrictEqual(preCheck.status, 0, 'pre-install --check fails');
-  assert(/global contract/.test(preCheck.stderr) && /droid-local/.test(preCheck.stderr)
-    && /\.factory\/AGENTS\.md/.test(preCheck.stderr),
-    'pre-install --check names the global contract, the droid-local target, and its carrier path: ' + preCheck.stderr);
+}
 
+// The installer is a shell script; hosting it in-process would test the suite's own
+// HOME instead of the fixture's.
+function runInstaller(env, args) {
   // spawn-class: environment
-  const installResult = spawnSync(
-    'bash',
-    [path.join(REPO, 'install-droid.sh'), '--global', '--forge=github'],
-    { cwd: REPO, env, encoding: 'utf8', timeout: 60000 }
-  );
-  assert.strictEqual(installResult.status, 0, installResult.stderr || installResult.stdout);
+  const r = spawnSync('bash', [path.join(REPO, 'install-droid.sh')].concat(args),
+    { cwd: REPO, env, encoding: 'utf8', timeout: 60000 });
+  r.out = (r.stdout || '') + (r.stderr || '');
+  return r;
+}
+const INSTALL_ARGS = ['--global', '--forge=github'];
+const CHECK_ARGS = ['--global', '--forge=github', '--check'];
 
-  const homeRoot = path.join(fixture.home, '.factory');
-  assert(fs.existsSync(path.join(homeRoot, 'AGENTS.md')), 'global AGENTS.md carrier installed');
-  assert(!fs.existsSync(path.join(homeRoot, 'agents')),
-    'global install deploys NO agents dir — Droid is native_only');
-  // No-hook protocol: the Droid home carries NO config.json, NO hooks.json, NO droids dir,
-  // NO commands dir, NO settings.json after a global install.
-  for (const forbidden of ['config.json', 'hooks.json', 'settings.json', 'droids', 'commands', 'mcp']) {
-    assert(!fs.existsSync(path.join(homeRoot, forbidden)),
-      'global install writes no harness surface ' + forbidden + ' in ~/.factory');
-  }
-  for (const name of commandNames) {
-    assert(fs.existsSync(path.join(homeRoot, 'skills', name, 'SKILL.md')),
-      'global skill installed: ' + name);
-  }
-  for (const script of manifest.supportScripts('github')) {
-    assert(fs.existsSync(path.join(homeRoot, 'kaola-workflow', 'scripts', script)),
-      'support script installed: ' + script);
-  }
+function seedSkill(root, name, bytes) {
+  const dir = path.join(root, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), bytes);
+}
 
-  // spawn-class: cli-contract
-  const checkResult = spawnSync(
-    'bash',
-    [path.join(REPO, 'install-droid.sh'), '--global', '--forge=github', '--check'],
-    { cwd: REPO, env, encoding: 'utf8', timeout: 60000 }
-  );
-  assert.strictEqual(checkResult.status, 0, checkResult.stderr || checkResult.stdout);
-} finally {
-  fs.rmSync(fixture.home, { recursive: true, force: true });
+// T7 baseline: lstat the REAL home's skill roots (read-only) before any fixture runs so
+// the suite can prove no invocation escaped its synthetic HOME/DROID_HOME.
+function snapshotRealSkillRoots() {
+  const realHome = os.userInfo().homedir;
+  const snap = new Map();
+  for (const rel of ['.agents/skills', '.factory/skills']) {
+    const dir = path.join(realHome, rel);
+    let st;
+    try { st = fs.lstatSync(dir); } catch (_) { snap.set(rel, 'absent'); continue; }
+    snap.set(rel, (st.isSymbolicLink() ? 'symlink:' + fs.readlinkSync(dir) : 'dir:' + st.mtimeMs));
+    for (const child of fs.readdirSync(dir)) {
+      const c = path.join(dir, child);
+      const cs = fs.lstatSync(c);
+      snap.set(rel + '/' + child,
+        (cs.isSymbolicLink() ? 'symlink:' + fs.readlinkSync(c) : (cs.isDirectory() ? 'dir' : 'file') + ':' + cs.mtimeMs));
+    }
+  }
+  return snap;
+}
+const realRootsBefore = snapshotRealSkillRoots();
+
+// T1 — fresh global install into the shared ~/.agents/skills root.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    // A check against a home with nothing installed must name the missing Droid carrier instead of
+    // aborting silently on the global-contract exit code.
+    const preCheck = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(preCheck.status, 0, 'pre-install --check fails');
+    assert(/global contract/.test(preCheck.stderr) && /droid-local/.test(preCheck.stderr)
+      && /\.factory\/AGENTS\.md/.test(preCheck.stderr),
+      'pre-install --check names the global contract, the droid-local target, and its carrier path: ' + preCheck.stderr);
+
+    const installResult = runInstaller(env, INSTALL_ARGS);
+    assert.strictEqual(installResult.status, 0, installResult.stderr || installResult.stdout);
+
+    const homeRoot = path.join(fixture.home, '.factory');
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    assert(fs.existsSync(path.join(homeRoot, 'AGENTS.md')), 'global AGENTS.md carrier installed');
+    assert(!fs.existsSync(path.join(homeRoot, 'agents')),
+      'global install deploys NO agents dir — Droid is native_only');
+    // No-hook protocol: the Droid home carries NO config.json, NO hooks.json, NO droids dir,
+    // NO commands dir, NO settings.json after a global install.
+    for (const forbidden of ['config.json', 'hooks.json', 'settings.json', 'droids', 'commands', 'mcp']) {
+      assert(!fs.existsSync(path.join(homeRoot, forbidden)),
+        'global install writes no harness surface ' + forbidden + ' in ~/.factory');
+    }
+    // #1112: global Skills live in ~/.agents/skills, byte-equal to the staged render,
+    // and the retired ~/.factory/skills root is never created.
+    for (const name of commandNames) {
+      const installed = path.join(agentsSkills, name, 'SKILL.md');
+      assert(fs.existsSync(installed), 'global skill installed: ' + name);
+      assert(fs.readFileSync(installed).equals(stagedBytes(name)),
+        'global skill ' + name + ' is byte-equal to the staged render');
+    }
+    assert(!fs.existsSync(path.join(homeRoot, 'skills')),
+      'global install never creates the retired ~/.factory/skills root');
+    const record = path.join(homeRoot, 'kaola-workflow', 'agents-skills.record');
+    const rows = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean);
+    assert.deepStrictEqual(rows.map(l => l.split('\t')[0]).sort(), [...commandNames].sort(),
+      'ownership record carries one row per installed skill');
+    assert(rows.every(l => /^[^\t]+\t[0-9a-f]{64}$/.test(l)),
+      'every record row is name<tab>sha256');
+    for (const script of manifest.supportScripts('github')) {
+      assert(fs.existsSync(path.join(homeRoot, 'kaola-workflow', 'scripts', script)),
+        'support script installed: ' + script);
+    }
+
+    const checkResult = runInstaller(env, CHECK_ARGS);
+    assert.strictEqual(checkResult.status, 0, checkResult.stderr || checkResult.stdout);
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T2a — migration: ownership-proven copies leave the retired ~/.factory/skills root,
+// a personal Skill is untouched, and the non-empty root itself is left standing.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const homeRoot = path.join(fixture.home, '.factory');
+    const legacy = path.join(homeRoot, 'skills');
+    for (const name of commandNames) seedSkill(legacy, name, stagedBytes(name));
+    const personal = Buffer.from('# my own skill\n');
+    seedSkill(legacy, 'my-skill', personal);
+
+    const r = runInstaller(env, INSTALL_ARGS);
+    assert.strictEqual(r.status, 0, 'T2a install: ' + r.out);
+    for (const name of commandNames) {
+      assert(!fs.existsSync(path.join(legacy, name)),
+        'T2a: proven legacy copy removed: ' + name);
+    }
+    assert(fs.readFileSync(path.join(legacy, 'my-skill', 'SKILL.md')).equals(personal),
+      'T2a: personal Skill byte-identical');
+    assert(fs.lstatSync(legacy).isDirectory(),
+      'T2a: the non-empty legacy root is left standing');
+    for (const name of commandNames) {
+      assert(fs.existsSync(path.join(fixture.home, '.agents', 'skills', name, 'SKILL.md')),
+        'T2a: migrated skill live in ~/.agents/skills: ' + name);
+    }
+    const c = runInstaller(env, CHECK_ARGS);
+    assert.strictEqual(c.status, 0, 'T2a --check: ' + c.out);
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T2b — an owner-edited legacy copy and a symlinked legacy dir are PRESERVED and reported:
+// the install still lands the new root but exits non-zero so the duplicate is never silent.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const homeRoot = path.join(fixture.home, '.factory');
+    const legacy = path.join(homeRoot, 'skills');
+    const edited = Buffer.concat([stagedBytes('workflow-init'), Buffer.from('\n# my edit\n')]);
+    seedSkill(legacy, 'workflow-init', edited);
+    const outside = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-outside-'));
+    fs.mkdirSync(path.join(legacy), { recursive: true });
+    fs.symlinkSync(outside, path.join(legacy, 'kaola-workflow-finalize'));
+
+    const r = runInstaller(env, INSTALL_ARGS);
+    assert.notStrictEqual(r.status, 0, 'T2b: install exits non-zero while duplicates are preserved');
+    assert(r.out.includes(path.join(legacy, 'workflow-init'))
+        && r.out.includes(path.join(legacy, 'kaola-workflow-finalize')),
+      'T2b: the report names both preserved paths: ' + r.out);
+    assert(fs.readFileSync(path.join(legacy, 'workflow-init', 'SKILL.md')).equals(edited),
+      'T2b: owner-edited legacy copy byte-identical');
+    const lst = fs.lstatSync(path.join(legacy, 'kaola-workflow-finalize'));
+    assert(lst.isSymbolicLink() && fs.readlinkSync(path.join(legacy, 'kaola-workflow-finalize')) === outside,
+      'T2b: symlinked legacy dir still a symlink to its untouched target');
+    const c = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(c.status, 0, 'T2b: --check exits non-zero');
+    assert(/retired-root duplicate|Preserved/.test(c.out)
+        && c.out.includes(path.join(legacy, 'workflow-init')),
+      'T2b: --check names the duplicate: ' + c.out);
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T2c — module level: retireLegacy honors an injected catalog and never removes a dir
+// holding anything beyond the one proven SKILL.md.
+{
+  const skills = require('./kaola-workflow-droid-skills.js');
+  const tmp = fs.mkdtempSync(path.join(tmpBase(), 'kw-droid-retire-'));
+  try {
+    const legacy = path.join(tmp, 'legacy');
+    const src = path.join(tmp, 'src');
+    fs.mkdirSync(src, { recursive: true });
+    const bytes = Buffer.from('synthetic released bytes\n');
+    const catalog = {
+      'workflow-next': [skills.sha256(bytes)],
+      'workflow-init': [skills.sha256(bytes)],
+    };
+    seedSkill(legacy, 'workflow-next', bytes);
+    seedSkill(legacy, 'workflow-init', bytes);
+    fs.writeFileSync(path.join(legacy, 'workflow-init', 'extra.txt'), 'x');
+    const r = skills.retireLegacy({ dir: legacy, src, catalog, check: false });
+    assert.deepStrictEqual(r.removed, [path.join(legacy, 'workflow-next')],
+      'T2c: catalog-proven copy removed');
+    assert.deepStrictEqual(r.preserved.map(p => p.file), [path.join(legacy, 'workflow-init')],
+      'T2c: a two-file dir is preserved');
+    assert(!fs.existsSync(path.join(legacy, 'workflow-next')),
+      'T2c: removed dir gone');
+    assert(fs.existsSync(path.join(legacy, 'workflow-init', 'extra.txt')),
+      'T2c: preserved dir untouched');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// T3 — a foreign same-name entry in the shared root refuses the WHOLE batch before any
+// write: other tools' skills, KPR receipts, and the retired root are all untouched.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    const foreign = Buffer.from('# not ours\n');
+    seedSkill(agentsSkills, 'workflow-next', foreign);
+    const kpr = Buffer.from('# droid runner\n');
+    seedSkill(agentsSkills, 'droid-kaola-project-runner', kpr);
+    const receiptsDir = path.join(agentsSkills, '.kaola-install-receipts');
+    fs.mkdirSync(receiptsDir, { recursive: true });
+    const receipt = Buffer.from('{"skill":"droid-kaola-project-runner"}\n');
+    fs.writeFileSync(path.join(receiptsDir, 'droid-kaola-project-runner.json'), receipt);
+    const legacy = path.join(fixture.home, '.factory', 'skills');
+    seedSkill(legacy, 'workflow-init', stagedBytes('workflow-init'));
+
+    const r = runInstaller(env, INSTALL_ARGS);
+    assert.notStrictEqual(r.status, 0, 'T3: foreign collision refuses the install');
+    assert(r.out.includes(path.join(agentsSkills, 'workflow-next')),
+      'T3: the refused path is named: ' + r.out);
+    assert(fs.readFileSync(path.join(agentsSkills, 'workflow-next', 'SKILL.md')).equals(foreign),
+      'T3: foreign SKILL.md byte-identical');
+    assert(fs.readFileSync(path.join(agentsSkills, 'droid-kaola-project-runner', 'SKILL.md')).equals(kpr),
+      'T3: KPR SKILL.md byte-identical');
+    assert(fs.readFileSync(path.join(receiptsDir, 'droid-kaola-project-runner.json')).equals(receipt),
+      'T3: KPR receipt byte-identical');
+    for (const name of ['workflow-init', 'kaola-workflow-finalize']) {
+      assert(!fs.existsSync(path.join(agentsSkills, name)),
+        'T3: atomic preflight — ' + name + ' was never written');
+    }
+    assert(fs.existsSync(path.join(legacy, 'workflow-init', 'SKILL.md')),
+      'T3: retired root not reached — legacy copy still present');
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T4 — upgrade vs owner edit on the LIVE root: a recorded copy is refreshed, an
+// unrecorded edit refuses and is preserved.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const homeRoot = path.join(fixture.home, '.factory');
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    const record = path.join(homeRoot, 'kaola-workflow', 'agents-skills.record');
+    assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T4 clean install');
+
+    // (a) recorded older release bytes: the record proves ownership, so a reinstall
+    //     restores the current render.
+    const older = Buffer.from('older release bytes\n');
+    const file = path.join(agentsSkills, 'workflow-init', 'SKILL.md');
+    fs.writeFileSync(file, older);
+    const digest = crypto.createHash('sha256').update(older).digest('hex');
+    const rows = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean)
+      .map(l => l.startsWith('workflow-init\t') ? 'workflow-init\t' + digest : l);
+    fs.writeFileSync(record, rows.join('\n') + '\n');
+    const ra = runInstaller(env, INSTALL_ARGS);
+    assert.strictEqual(ra.status, 0, 'T4a reinstall: ' + ra.out);
+    assert(fs.readFileSync(file).equals(stagedBytes('workflow-init')),
+      'T4a: recorded copy restored to the render');
+
+    // (b) unrecorded owner edit: refused, preserved.
+    const editedFile = path.join(agentsSkills, 'workflow-next', 'SKILL.md');
+    const edited = Buffer.concat([stagedBytes('workflow-next'), Buffer.from('\n# my edit\n')]);
+    fs.writeFileSync(editedFile, edited);
+    const rb = runInstaller(env, INSTALL_ARGS);
+    assert.notStrictEqual(rb.status, 0, 'T4b: owner-edited install refuses');
+    assert(rb.out.includes(path.join(agentsSkills, 'workflow-next')),
+      'T4b: refused path named: ' + rb.out);
+    assert(fs.readFileSync(editedFile).equals(edited), 'T4b: owner-edited bytes preserved');
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T5 — --check is honest about the shared root: a missing skill and a stale skill each
+// fail the check with the reason named.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T5 clean install');
+    fs.rmSync(path.join(agentsSkills, 'workflow-init'), { recursive: true });
+    const c1 = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(c1.status, 0, 'T5: removed skill fails --check');
+    assert(/missing/.test(c1.out), 'T5: removed skill reads missing: ' + c1.out);
+    assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T5 restore install');
+    fs.appendFileSync(path.join(agentsSkills, 'workflow-next', 'SKILL.md'), '\ndrift\n');
+    const c2 = runInstaller(env, CHECK_ARGS);
+    assert.notStrictEqual(c2.status, 0, 'T5: drifted skill fails --check');
+    assert(/stale/.test(c2.out), 'T5: drifted skill reads stale: ' + c2.out);
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
+}
+
+// T6 — uninstall removes only the proven Kaola skills and the record; a personal Skill
+// and the shared root itself stay.
+{
+  const fixture = freshFixture();
+  try {
+    const env = envFor(fixture);
+    const homeRoot = path.join(fixture.home, '.factory');
+    const agentsSkills = path.join(fixture.home, '.agents', 'skills');
+    assert.strictEqual(runInstaller(env, INSTALL_ARGS).status, 0, 'T6 clean install');
+    const personal = Buffer.from('# mine\n');
+    seedSkill(agentsSkills, 'other', personal);
+    const u = runInstaller(env, ['--global', '--forge=github', '--uninstall']);
+    assert.strictEqual(u.status, 0, 'T6 uninstall: ' + u.out);
+    for (const name of commandNames) {
+      assert(!fs.existsSync(path.join(agentsSkills, name)), 'T6: skill removed: ' + name);
+    }
+    assert(!fs.existsSync(path.join(homeRoot, 'kaola-workflow', 'agents-skills.record')),
+      'T6: ownership record removed');
+    assert(fs.readFileSync(path.join(agentsSkills, 'other', 'SKILL.md')).equals(personal),
+      'T6: personal Skill byte-identical');
+    assert(fs.lstatSync(agentsSkills).isDirectory(), 'T6: shared root kept');
+  } finally {
+    fs.rmSync(fixture.home, { recursive: true, force: true });
+  }
 }
 
 // sync --write/--check roundtrip against a blank staging root.
@@ -277,5 +558,15 @@ assert(installAll.includes('install-droid.sh') && /RUNTIMES=\([^)]*droid/.test(i
 const claimSrc = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-claim.js'), 'utf8');
 assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid|dsh'),
   'claim.js USAGE includes droid and dsh runtimes');
+
+// T7 — isolation: nothing this suite ran escaped its synthetic HOME/DROID_HOME. The real
+// skill roots are compared by name and mtime against the baseline taken up front.
+{
+  const after = snapshotRealSkillRoots();
+  assert.deepStrictEqual(after, realRootsBefore,
+    'real ~/.agents/skills and ~/.factory/skills untouched by the suite: ' +
+    JSON.stringify([...after.entries()].filter(([k, v]) => realRootsBefore.get(k) !== v)));
+}
+fs.rmSync(stagedRoot, { recursive: true, force: true });
 
 console.log('droid-edition test passed');

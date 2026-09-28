@@ -20,11 +20,18 @@ for project-local skills under `<repo>/.factory/skills/`. A fresh Droid session 
 carriers automatically, because Droid discovers skills and the personal AGENTS.md on session start.
 
 The installer writes under the Droid config home `~/.factory` (`DROID_HOME` overrides it for a
-hermetic install):
+hermetic install) and, since #1112, into the shared personal-compatibility skills root
+`~/.agents/skills`:
 
-- inline skills to `skills/<name>/SKILL.md` with `triggers: [user, model]` and no model or
-  subagent override;
-- forge-selected support scripts to `kaola-workflow/scripts`;
+- inline skills to `~/.agents/skills/<name>/SKILL.md` with `triggers: [user, model]` and no model or
+  subagent override — Droid's documented personal-compatibility root, shared with other
+  tools. A same-name entry that is not a proven Kaola-Workflow copy (foreign, owner-edited,
+  or not a plain one-file `SKILL.md` dir) is refused before anything is written; ownership is
+  proven by `~/.factory/kaola-workflow/agents-skills.record`, by the staged render, or by the
+  frozen catalog of released renders. Ownership-proven copies under the retired
+  `~/.factory/skills` root are removed (Droid reads both roots; a same-name pair is a
+  duplicate); anything else there is preserved and reported, and the install exits non-zero.
+- forge-selected support scripts to `kaola-workflow/scripts` under the Droid config home;
 - the managed global contract to `AGENTS.md`.
 
 It installs **nothing else**. This edition deliberately installs no Droid hook
@@ -34,13 +41,15 @@ It installs **nothing else**. This edition deliberately installs no Droid hook
 touch, matching the "additive, no harness additions" posture of the Devin edition. It also never
 writes under `agents/` or `.factory/agents/`.
 
-`--uninstall` removes only the Kaola-deployed skills and support scripts (by their rendered and
-manifest names — never a blind deletion). A global-scope uninstall (the default) also strips this
-runtime's own managed region in `~/.factory/AGENTS.md` through its own per-target record
-(`kaola-workflow-global-contract.js uninstall --runtime droid`). The record is deleted and the runtime's
-shared config reference is released. An owner-edited carrier is refused and left in place, and a
-`--project` uninstall leaves the carrier alone. `--check` compares
-installed bytes with generated sources.
+`--uninstall` removes only the Kaola-deployed skills (ownership-proven — never a blind deletion
+of the shared `~/.agents/skills` root) and support scripts (by their manifest names), and sweeps
+proven copies out of the retired `~/.factory/skills` root. A global-scope uninstall (the default)
+also strips this runtime's own managed region in `~/.factory/AGENTS.md` through its own per-target
+record (`kaola-workflow-global-contract.js uninstall --runtime droid`). The record is deleted and
+the runtime's shared config reference is released. An owner-edited carrier is refused and left in
+place, and a `--project` uninstall leaves the carrier alone. `--check` compares installed bytes
+with generated sources per skill name and reports any ownership-proven duplicate still in the
+retired root.
 
 The global-contract step is the installer's last step and runs in per-target mode
 (`--runtime droid`). It installs and checks only the `droid-local` carrier, never writes another

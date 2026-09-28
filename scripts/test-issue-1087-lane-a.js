@@ -325,7 +325,10 @@ try {
     { id: 'cursor', script: 'install-cursor.sh', own: ['.cursor'], targets: ['cursor-cli-local', 'cursor-app-local'],
       carrier: path.join('.cursor', 'rules', 'kaola-workflow-global.mdc') },
     { id: 'zcode', script: 'install-zcode.sh', own: ['.zcode'], targets: ['zcode-local'], carrier: path.join('.zcode', 'AGENTS.md') },
-    { id: 'droid', script: 'install-droid.sh', own: ['.factory'], targets: ['droid-local'], carrier: path.join('.factory', 'AGENTS.md') },
+    // #1112: droid's own global surface includes the shared ~/.agents/skills root —
+    // proven Kaola skills land and are removed there; the foreign-change check below
+    // still bounds it to that one directory (a sibling tool's skill would trip it).
+    { id: 'droid', script: 'install-droid.sh', own: ['.factory', path.join('.agents', 'skills')], targets: ['droid-local'], carrier: path.join('.factory', 'AGENTS.md') },
     { id: 'dsh', script: 'install-dsh.sh', own: ['.dsh'], targets: ['dsh-local'], carrier: path.join('.dsh', 'AGENTS.md') },
   ];
   for (const rt of ADDITIVE) {
