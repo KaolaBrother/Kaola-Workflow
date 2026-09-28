@@ -467,11 +467,15 @@ overwrite every main-dirty path unconditionally; on 2026-09-14 it copied an unco
 over a file the run's own PR had changed, committed it, and only then read the receipt as stale. The
 path was the run's own — the commit's directory attribution admitted it correctly — and main's
 *edit* was the foreign thing, which no path-ownership test can see. `residueMirrorPlan` now
-classifies each main-dirty file by content: absent from the worktree or byte-identical → copied
-(and listed in `mirrored_paths`); identical to the merge-base → the run never touched it, so main's
-edit is legitimate forward residue and is copied; differing from both main's copy and the base,
-created by the run, not a regular file in the worktree, or of an ownership git cannot establish → a
-conflict. Any conflict refuses `mirror_sync_failed` before anything is written — before the
+classifies each main-dirty file by content: byte-identical → copied (and listed in `mirrored_paths`);
+identical to the merge-base → the run never touched it, so main's edit is legitimate forward residue
+and is copied; absent from the worktree → copied only when this run's HEAD already contains that
+exact path (`#1110`). Presence in main, an untracked status, or a neighboring file this run committed
+does not admit it. A declined path is not copied, staged, committed, deleted, reverted or relocated;
+it stays in the main checkout and is named on `residue_unattributed` (and on
+`checks.residue_unattributed` from `finalize --check`, the same list the transaction reports for
+those paths). Differing from both main's copy and the base, created by the run, not a regular file
+in the worktree, or of an ownership git cannot establish → a conflict. Any conflict refuses `mirror_sync_failed` before anything is written — before the
 post-archive residue copy and before the project-folder copy — and the refusal envelope carries
 `residue_conflicts` (`path`, `reason` ∈ `worktree_authored` | `worktree_created` |
 `worktree_not_file` | `base_unavailable`, `main_copy`, `worktree_copy`) beside a `detail` naming
@@ -494,8 +498,10 @@ preconditions come back from one invocation instead of one per re-run. Zero side
 
 `checks` carries `mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`,
 `changed_paths`, `dirty_paths`, — only when the residue mirror would refuse (`#1077`) —
-`residue_conflicts`, and — only when a `chains_stale` finding named them — `stale_paths`,
-`stale_kind` and `stale_paths_truncated`. `validation` is the bare classification token; the three
+`residue_conflicts`, — only when the mirror declines a main path whose exact name is not in this
+run's HEAD (`#1110`) — `residue_unattributed`, and — only when a `chains_stale` finding named them — `stale_paths`,
+`stale_kind` and `stale_paths_truncated`. `checks.residue_unattributed` is a report, not an unmet
+precondition: it does not enter `reasons` and does not make `ok` false. `validation` is the bare classification token; the three
 stale fields sit beside it rather than inside it, so a reader can tell a prose edit from a code
 change without re-deriving the hashes. They are the finding's own values, verbatim, and absent when
 it declined to diagnose — an empty list would read as "measured, nothing changed". **`stale_paths` is
@@ -643,7 +649,7 @@ not support it.
 | `residue_stage_detail` | git's own message on `failed`. Also re-emitted on stderr with a `WARNING` prefix, so a terminal reader loses nothing the previously-inherited stderr showed |
 | `residue_probe_detail` | git's own message on `unprobeable` |
 | `residue_unstaged` | the paths that did not reach the index, capped at 50 — present on **all four editions**. Read back from the index on the same basis as `archive_unstaged`, and absent when that read failed |
-| `residue_unattributed` | the worktree paths the transaction could not attribute to this run, capped at 50 — present on **all four editions**, absent when there are none. They are **not** in the `chore: finalize` commit and they are **still on disk**: nothing is committed, reverted or deleted. Attribution is by directory, from the branch's own commits (`<base>..HEAD`) — a path whose directory holds no file this branch committed is not this run's work as far as the transaction can tell. The run's own untracked work beside a committed sibling is therefore still staged, as before |
+| `residue_unattributed` | paths the transaction could not attribute to this run, capped at 50 — present on **all four editions**, absent when there are none. They are **not** in the `chore: finalize` commit: nothing is committed, reverted or deleted. Worktree paths are attributed by directory, from the branch's own commits (`<base>..HEAD`) — a path whose directory holds no file this branch committed is not this run's work as far as the transaction can tell, and the run's own untracked work beside a committed sibling is therefore still staged. `#1110` adds main-checkout paths the residue mirror declined to copy because this run's HEAD does not contain that exact path; those stay untracked in the main checkout, and a neighboring file is not evidence. `finalize --check` names that declined set on `checks.residue_unattributed` |
 | `residue_attribution` | `unattributable_unknown`, present only when the attribution above could not be made at all — git could not be asked, or the branch carries no commits of its own. The residue is staged exactly as it was before this classification existed, and this field is why: with no evidence of what the run authored, "all of it is foreign" would be an ordinary run left unfinished rather than a finding |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |

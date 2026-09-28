@@ -1520,7 +1520,14 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   {
     const fx = mk816('issue-816c');
     try {
-      // Finalization docs authored in MAIN (the orchestrator's cwd) — the residue Step 8 commits.
+      // Finalization docs authored in MAIN. #1110: the mirror carries an absent path only when
+      // this run's HEAD already contains it, so the fixture commits the path and then removes the
+      // worktree copy. Absence itself is not ownership.
+      fs.writeFileSync(path.join(fx.wtRoot, 'CHANGELOG.md'), 'seed\n');
+      assert(g816(fx.wtRoot, ['add', '--', 'CHANGELOG.md'])
+        && g816(fx.wtRoot, ['commit', '-m', 'chore: own changelog path']),
+        '#816(T3) precondition: CHANGELOG.md must be in this run\'s HEAD');
+      fs.unlinkSync(path.join(fx.wtRoot, 'CHANGELOG.md'));
       fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
       fs.mkdirSync(path.join(fx.mainRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
       fs.writeFileSync(path.join(fx.mainRoot, 'kaola-workflow', '.roadmap', 'issue-816.md'), '# 816\n');
@@ -1562,14 +1569,15 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
   // --- T4b: a branch whose implementation was committed and then REVERTED is NOT "missing" ------
   // Two independent false-refusal sources meet on this shape, and BOTH must be closed:
-  //   (1) the Step 8a mirror copies main's dirty CHANGELOG.md into the worktree, and the probe then
-  //       read that machinery-authored dirt back as uncommitted implementation — the transaction
-  //       manufacturing the very evidence it refuses on;
+  //   (1) the Step 8a mirror copies main's forward edit of package.json into the worktree, and the
+  //       probe then read that machinery-authored dirt back as uncommitted implementation — the
+  //       transaction manufacturing the very evidence it refuses on;
   //   (2) `git diff base...HEAD` is a NET diff, so `feat: impl` + `revert: drop impl` nets to an
   //       empty non-`kaola-workflow/` diff even though the branch plainly carries implementation
   //       commits.
   // Together they told the operator "Author the implementation commit yourself" when there was
-  // nothing to author — and CHANGELOG.md is exactly what the commit gate exists to commit.
+  // nothing to author. The mirrored file is a base file the run never touched (#1077(d)): a brand-new
+  // untracked main file is not this run's residue (#1110) and would not exercise the subtraction.
   {
     const fx = mk816('issue-816p');
     try {
@@ -1592,8 +1600,11 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         .split('\n').map(s => s.trim()).filter(Boolean);
       assert(netDiff.length > 0 && netDiff.every(p => p.startsWith('kaola-workflow/')),
         '#816(T4b) precondition: the reverted branch must have a net-empty NON-kaola diff, got ' + JSON.stringify(netDiff));
-      // Finalization residue authored in MAIN — the mirror pulls it into the worktree.
-      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      // Forward edit of a base file the run never touched. The worktree copy equals the merge-base,
+      // so the mirror still carries it (#1077(d)); a new untracked file would not (#1110).
+      const mainPkg = path.join(fx.mainRoot, 'package.json');
+      const editedPkg = fs.readFileSync(mainPkg, 'utf8').replace('"scripts"', '"description":"orchestrator residue","scripts"');
+      fs.writeFileSync(mainPkg, editedPkg);
       // ...and the worktree itself carries NO implementation-shaped dirt beforehand.
       const preDirty = gOut816(fx.wtRoot, ['status', '--porcelain'])
         .split('\n').map(s => s.trim()).filter(Boolean)
@@ -1614,9 +1625,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       assert(tx && tx.finalize_commit === 'committed',
         '#816(T4b): the residue the probe mistook for a missing implementation must land in `chore: finalize`, got '
         + JSON.stringify(tx));
-      const changelogCommit = gOut816(fx.wtRoot, ['log', '--format=%s', '-1', '--', 'CHANGELOG.md']);
-      assert(changelogCommit === 'chore: finalize ' + fx.project,
-        '#816(T4b): CHANGELOG.md must be carried by the finalize commit, got ' + JSON.stringify(changelogCommit));
+      const pkgCommit = gOut816(fx.wtRoot, ['log', '--format=%s', '-1', '--', 'package.json']);
+      assert(pkgCommit === 'chore: finalize ' + fx.project,
+        '#816(T4b): package.json must be carried by the finalize commit, got ' + JSON.stringify(pkgCommit));
     } finally { cleanup816(fx); }
   }
 
@@ -1730,6 +1741,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     //      must skip only the archived PROJECT folder, never the residue the commit gate owes the sink.
     const fxd = mk816('issue-816q');
     try {
+      // #1110: the post-archive residue copy still runs, but an absent path is eligible only when
+      // HEAD contains it. Commit the path, keep that blob through the archive commit, then remove
+      // the worktree file so the destination the mirror sees is absent.
+      fs.writeFileSync(path.join(fxd.wtRoot, 'CHANGELOG.md'), 'seed\n');
+      assert(g816(fxd.wtRoot, ['add', '--', 'CHANGELOG.md'])
+        && g816(fxd.wtRoot, ['commit', '-m', 'chore: own changelog path']),
+        '#816(T6d) precondition: CHANGELOG.md must be in this run\'s HEAD');
       fs.writeFileSync(path.join(fxd.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
       // Simulate the crash: archive the folder terminal-stamped, and COMMIT it exactly as the
       // transaction's archive step does — then stop, as a crash would.
@@ -1743,6 +1761,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       const headAfterArchive = gOut816(fxd.wtRoot, ['rev-parse', 'HEAD']);
       assert(headAfterArchive !== fxd.headSha,
         '#816(T6d) precondition: the archive commit must advance HEAD past the receipt');
+      fs.unlinkSync(path.join(fxd.wtRoot, 'CHANGELOG.md'));
 
       const r = runFinalize816(fxd);
       assert(r.status === 0,
@@ -1882,10 +1901,17 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '#1077(b): no commit was made');
     } finally { cleanup816(fxb); }
 
-    // (c) CONTROL: a byte-identical dirty main copy is a no-op, and a file absent from the worktree
-    // is the #816 forward residue — both still mirror, and `--check` still answers ready.
+    // (c) CONTROL: a byte-identical dirty main copy is a no-op. A file absent from the worktree is
+    // forward residue only when this run's HEAD already contains that exact path (#1110); absence
+    // itself is not ownership. Both still mirror, and `--check` still answers ready.
     const fxc2 = mk816('issue-1077c');
     try {
+      fs.writeFileSync(path.join(fxc2.wtRoot, 'CHANGELOG.md'), 'seed\n');
+      assert(g816(fxc2.wtRoot, ['add', '--', 'CHANGELOG.md'])
+        && g816(fxc2.wtRoot, ['commit', '-m', 'chore: own changelog path']),
+        '#1077(c) precondition: CHANGELOG.md must be in this run\'s HEAD');
+      rebind816(fxc2, gOut816(fxc2.wtRoot, ['rev-parse', 'HEAD']));
+      fs.unlinkSync(path.join(fxc2.wtRoot, 'CHANGELOG.md'));
       fs.writeFileSync(path.join(fxc2.mainRoot, 'impl.txt'), 'implementation\n');
       fs.writeFileSync(path.join(fxc2.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
       const chk = runFinalize816(fxc2, ['--check', '--json']);
@@ -1923,6 +1949,93 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       assert(fs.readFileSync(path.join(fxd2.wtRoot, 'package.json'), 'utf8') === edited,
         '#1077(d): the worktree now carries main\'s edit');
     } finally { cleanup816(fxd2); }
+
+    // #1110: an absent worktree destination is not ownership. A foreign untracked file in a
+    // directory this run never committed, and a foreign filename beside files this run did
+    // commit, must not be copied, staged or committed. Main keeps the bytes and the untracked
+    // state. `--check` and the transaction name the same declined paths and neither treats a
+    // copied foreign path as machinery-authored. A path this run's HEAD already contains stays
+    // eligible when the worktree copy is absent.
+    const fx1110 = mk816('issue-1110');
+    try {
+      const foreignDir = 'side-dir/foreign.txt';
+      const foreignBeside = 'foreign-beside.txt';
+      const owned = 'CHANGELOG.md';
+      const foreignDirBytes = Buffer.from('foreign directory\n');
+      const foreignBesideBytes = Buffer.from('foreign beside\n');
+      const ownedBytes = '# Changelog\n\n- finalize residue\n';
+      fs.mkdirSync(path.join(fx1110.mainRoot, 'side-dir'), { recursive: true });
+      fs.writeFileSync(path.join(fx1110.mainRoot, 'side-dir', 'keep.txt'), 'tracked so porcelain lists the sibling\n');
+      assert(g816(fx1110.mainRoot, ['add', '--', 'side-dir/keep.txt'])
+        && g816(fx1110.mainRoot, ['commit', '-m', 'chore: track side-dir']),
+        '#1110 precondition: side-dir must be tracked in main so the foreign file is a porcelain file, not a collapsed directory');
+      fs.writeFileSync(path.join(fx1110.mainRoot, foreignDir), foreignDirBytes);
+      fs.writeFileSync(path.join(fx1110.mainRoot, foreignBeside), foreignBesideBytes);
+      const mainStatus = gOut816(fx1110.mainRoot, ['status', '--porcelain']);
+      assert(mainStatus.indexOf(foreignDir) >= 0 && mainStatus.indexOf(foreignBeside) >= 0,
+        '#1110 precondition: both foreign files are porcelain paths in main, got ' + JSON.stringify(mainStatus));
+      fs.writeFileSync(path.join(fx1110.wtRoot, owned), 'seed\n');
+      assert(g816(fx1110.wtRoot, ['add', '--', owned])
+        && g816(fx1110.wtRoot, ['commit', '-m', 'chore: own changelog path']),
+        '#1110 precondition: the owned residue path must be committed on the run branch');
+      rebind816(fx1110, gOut816(fx1110.wtRoot, ['rev-parse', 'HEAD']));
+      fs.unlinkSync(path.join(fx1110.wtRoot, owned));
+      fs.writeFileSync(path.join(fx1110.mainRoot, owned), ownedBytes);
+      const branchTouched = gOut816(fx1110.wtRoot, ['log', '--name-only', '--pretty=format:', 'main..HEAD'])
+        .split('\n').map(s => s.trim()).filter(Boolean);
+      assert(branchTouched.indexOf('impl.txt') >= 0 && branchTouched.indexOf(owned) >= 0,
+        '#1110 precondition: the run committed impl.txt and ' + owned + ', got ' + JSON.stringify(branchTouched));
+      assert(branchTouched.indexOf(foreignBeside) < 0 && branchTouched.indexOf(foreignDir) < 0
+        && !branchTouched.some(p => p.startsWith('side-dir/')),
+        '#1110 precondition: the foreign paths are not this run\'s commits (a root sibling of impl.txt '
+          + 'must not inherit that directory), got ' + JSON.stringify(branchTouched));
+
+      const chk = runFinalize816(fx1110, ['--check', '--json']);
+      const cc = checkOf(chk);
+      const checkNamed = (Array.isArray(cc.residue_unattributed) ? cc.residue_unattributed : []).slice().sort();
+      assert(chk.json && chk.json.ok === true && cc.mirror !== 'sync_failed' && !('residue_conflicts' in cc),
+        '#1110: --check stays finalize-ready; declining a foreign file is a report, not a mirror refusal, got '
+          + JSON.stringify(chk.json));
+      assert(checkNamed.indexOf(foreignDir) >= 0 && checkNamed.indexOf(foreignBeside) >= 0
+        && checkNamed.indexOf(owned) < 0,
+        '#1110: --check names both foreign paths and not the owned one, got ' + JSON.stringify(checkNamed));
+      assert(!fs.existsSync(path.join(fx1110.wtRoot, foreignDir))
+        && !fs.existsSync(path.join(fx1110.wtRoot, foreignBeside))
+        && !fs.existsSync(path.join(fx1110.wtRoot, owned))
+        && fs.readFileSync(path.join(fx1110.mainRoot, foreignDir)).equals(foreignDirBytes)
+        && fs.readFileSync(path.join(fx1110.mainRoot, foreignBeside)).equals(foreignBesideBytes),
+        '#1110: --check wrote nothing; main foreign bytes are unchanged');
+
+      const r = runFinalize816(fx1110);
+      const tx = r.json && r.json.finalize_transaction;
+      const txNamed = (tx && Array.isArray(tx.residue_unattributed) ? tx.residue_unattributed : []).slice().sort();
+      assert(r.status === 0 && tx && tx.finalize_commit === 'committed' && tx.residue_mirrored === 1,
+        '#1110: finalize commits the owned residue and no foreign file, got status=' + r.status
+          + ' tx=' + JSON.stringify(tx) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+      assert(JSON.stringify(txNamed) === JSON.stringify(checkNamed),
+        '#1110: --check and the transaction agree on the declined paths, check='
+          + JSON.stringify(checkNamed) + ' tx=' + JSON.stringify(txNamed));
+      assert(tx && Array.isArray(tx.findings) && tx.findings.indexOf('residue_unattributed') >= 0,
+        '#1110: the declined paths are the existing residue_unattributed finding, got ' + JSON.stringify(tx && tx.findings));
+      assert(!fs.existsSync(path.join(fx1110.wtRoot, foreignDir))
+        && !fs.existsSync(path.join(fx1110.wtRoot, foreignBeside)),
+        '#1110: the foreign files were not copied into the worktree');
+      assert(gOut816(fx1110.wtRoot, ['ls-tree', '-r', '--name-only', 'HEAD', '--', foreignDir, foreignBeside]) === '',
+        '#1110: the foreign files are not in the finalize commit');
+      assert(fs.readFileSync(path.join(fx1110.wtRoot, owned), 'utf8') === ownedBytes
+        && gOut816(fx1110.wtRoot, ['log', '--format=%s', '-1', '--', owned]) === 'chore: finalize ' + fx1110.project,
+        '#1110: the HEAD-owned absent path still mirrors into chore: finalize');
+      const mainAfter = gOut816(fx1110.mainRoot, ['status', '--porcelain']);
+      assert(mainAfter.indexOf(foreignDir) >= 0 && mainAfter.indexOf(foreignBeside) >= 0
+        && fs.readFileSync(path.join(fx1110.mainRoot, foreignDir)).equals(foreignDirBytes)
+        && fs.readFileSync(path.join(fx1110.mainRoot, foreignBeside)).equals(foreignBesideBytes),
+        '#1110: main keeps the foreign bytes and their untracked state, got ' + JSON.stringify(mainAfter));
+      const summaryPath = path.join(fx1110.mainRoot, 'kaola-workflow', 'archive', fx1110.project, 'finalization-summary.md');
+      const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : '';
+      assert(summary.indexOf('residue_unattributed') >= 0
+        && summary.indexOf(foreignDir) >= 0 && summary.indexOf(foreignBeside) >= 0,
+        '#1110: the archived findings name both foreign paths, got ' + summary.slice(0, 800));
+    } finally { cleanup816(fx1110); }
   }
 
   // DELETED: #816 T6e — "a receipt left behind by a REAL code commit must still refuse

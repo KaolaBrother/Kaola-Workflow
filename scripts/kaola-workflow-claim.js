@@ -3566,8 +3566,11 @@ function listResidueOutsideProject(mainRoot) {
 // CHANGELOG case) and copies as before; a byte-identical copy is a no-op and is listed as authored.
 // An ownership the probe cannot establish (no merge-base, unreadable base blob) fails CLOSED for a
 // differing copy: the refusal is zero-write and recoverable, the overwrite is neither.
-//   { copy: [<rel>…], conflicts: [{ path, reason, main_copy, worktree_copy }…] }
+//   { copy: [<rel>…], conflicts: [{ path, reason, main_copy, worktree_copy }…],
+//     declined: [<rel>…] }
 //   reason ∈ 'worktree_authored' | 'worktree_created' | 'base_unavailable' | 'worktree_not_file'
+// #1110: `declined` is the absent-destination paths HEAD does not contain. They are not copied.
+// Absence, an untracked status, and a neighboring run-owned file are not ownership.
 // null = absent, undefined = present but not a regular file (a copy over it is never a plain
 // overwrite, so it is a conflict too).
 function readRegularFileOrNull(p) {
@@ -3576,8 +3579,17 @@ function readRegularFileOrNull(p) {
   if (!st.isFile()) return undefined;
   try { return fs.readFileSync(p); } catch (_) { return undefined; }
 }
+// #1110: paths in the run's current commit. An absent worktree file is eligible to mirror only
+// when HEAD already contains that exact path. null means the probe failed — fail closed, do not copy.
+function headTreePaths(root) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-tree', '-r', '--name-only', '-z', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    return new Set(splitNulPaths(out));
+  } catch (_) { return null; }
+}
 function residueMirrorPlan(mainRoot, root) {
-  const plan = { copy: [], conflicts: [] };
+  const plan = { copy: [], conflicts: [], declined: [] };
   const rels = listResidueOutsideProject(mainRoot);
   if (!rels.length) return plan;
   const gitOut = (cwd, args, encoding) => execFileSync('git', ['-C', cwd].concat(args),
@@ -3587,11 +3599,22 @@ function residueMirrorPlan(mainRoot, root) {
     const mainHead = String(gitOut(mainRoot, ['rev-parse', '--verify', 'HEAD'], 'utf8')).trim();
     baseSha = String(gitOut(root, ['merge-base', 'HEAD', mainHead], 'utf8')).trim() || null;
   } catch (_) { baseSha = null; }
+  let headPaths = null;
+  let headProbed = false;
   for (const rel of rels) {
     const src = readRegularFileOrNull(path.join(mainRoot, rel));
     if (!src) continue;
     const dest = readRegularFileOrNull(path.join(root, rel));
-    if (dest === null || (dest && dest.equals(src))) { plan.copy.push(rel); continue; }
+    // #1110: absence is not ownership. Copy an absent file only when this run's HEAD names that
+    // exact path. A neighboring path, an untracked status, or mere presence in main does not.
+    // Declined paths are not copied; the caller reports them and leaves the main bytes alone.
+    if (dest === null) {
+      if (!headProbed) { headPaths = headTreePaths(root); headProbed = true; }
+      if (headPaths && headPaths.has(rel)) plan.copy.push(rel);
+      else plan.declined.push(rel);
+      continue;
+    }
+    if (dest && dest.equals(src)) { plan.copy.push(rel); continue; }
     const conflict = { path: rel, reason: null, main_copy: path.join(mainRoot, rel), worktree_copy: path.join(root, rel) };
     if (dest === undefined) conflict.reason = 'worktree_not_file';
     else if (!baseSha) conflict.reason = 'base_unavailable';
@@ -3658,8 +3681,8 @@ function mirrorFinalizationArtifacts(root, project) {
   let mainRoot = null;
   try {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', mirrored_paths: [] };
-  } catch (_) { return { mirror: 'not_needed', mirrored_paths: [] }; }
+    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', mirrored_paths: [], residue_declined: [] };
+  } catch (_) { return { mirror: 'not_needed', mirrored_paths: [], residue_declined: [] }; }
   // #1077: the residue plan is taken FIRST, so the refusal precedes every write below — the
   // post-archive resume mirrors residue too, and the project-folder copy must not land beside a
   // refusal either. Zero-write on both sides.
@@ -3684,10 +3707,11 @@ function mirrorFinalizationArtifacts(root, project) {
       && !mainClaimNeedsMirror(srcDir, root, project)) {
     return {
       mirror: 'skipped_post_archive',
-      mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
+      mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan),
+      residue_declined: residuePlan.declined
     };
   }
-  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', mirrored_paths: [] };
+  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', mirrored_paths: [], residue_declined: residuePlan.declined };
   // The main→worktree copy is a WRITE, and it was the one write in this function with no failure
   // path: an unwritable destination (`kaola-workflow/` read-only in the worktree) made mergeCopyDir
   // throw its raw `EACCES … mkdir` straight out of the transaction, so the operator got a node stack
@@ -3707,7 +3731,8 @@ function mirrorFinalizationArtifacts(root, project) {
   }
   return {
     mirror: 'mirrored',
-    mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
+    mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan),
+    residue_declined: residuePlan.declined
   };
 }
 
@@ -4262,6 +4287,9 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
 //   checks.residue_conflicts     — #1077: the main-dirty files the residue mirror REFUSES to copy
 //                                  because the worktree's copy is this run's own work; absent when
 //                                  there are none (then `checks.mirror` is also `sync_failed`)
+//   checks.residue_unattributed  — #1110: main paths the mirror will not copy because this run's
+//                                  HEAD does not contain them; absent when there are none. A report,
+//                                  not a reason — `ok` stays true. The transaction names the same paths.
 //   checks.stale_paths,          — the culprits a `chains_stale` finding named, verbatim; all three
 //     .stale_kind,                 absent unless the finding carried them
 //     .stale_paths_truncated
@@ -4303,6 +4331,11 @@ function evaluateFinalizePreconditions(root, project, opts) {
   // by nothing, so it stays visible as whatever it is — and the conflict is reported by name.
   const wouldMirror = mirror.residue_plan ? mirror.residue_plan.copy : [];
   if (mirror.residue_conflicts && mirror.residue_conflicts.length) checks.residue_conflicts = mirror.residue_conflicts;
+  // #1110: declined paths are not manufactured dirt and are not subtracted. --check and the
+  // transaction read the same plan, so both name these paths and neither copies them.
+  const mirrorDeclined = (mirror.residue_plan && Array.isArray(mirror.residue_plan.declined))
+    ? mirror.residue_plan.declined : [];
+  if (mirrorDeclined.length) checks.residue_unattributed = mirrorDeclined.slice(0, 50);
   const authored = new Set(wouldMirror);
   try {
     const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
@@ -4499,6 +4532,9 @@ function cmdFinalize() {
   // Worktree dirt this transaction manufactured (Step 8a residue mirror) — subtracted from the
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
+  // #1110: main paths the mirror declined. They are not machinery-authored — nothing was copied —
+  // and the attribution report below names them. Presence in this list is not an exemption.
+  let mirrorDeclinedPaths = [];
   // Step 8a — artifact mirror, BEFORE any gate reads the authority and before any side effect.
   // #1054: the mirror is ONE direction only, main checkout -> linked worktree. A content-diverged
   // (or diff-unavailable) run record is a MACHINE stop, not a machine-repairable state: the
@@ -4537,6 +4573,7 @@ function cmdFinalize() {
     }
     finalizeTx.mirror = mirror.mirror;
     mirroredResiduePaths = Array.isArray(mirror.mirrored_paths) ? mirror.mirrored_paths : [];
+    mirrorDeclinedPaths = Array.isArray(mirror.residue_declined) ? mirror.residue_declined : [];
     finalizeTx.residue_mirrored = mirroredResiduePaths.length;
   }
   const folder = activeByProject(root, args.project);
@@ -5348,20 +5385,53 @@ function cmdFinalize() {
       // deciding what an unexplained artifact means is a value call that belongs to a human.
       const attribution = unattributableResidue(root, field(finalizeAuthorityState, 'base_branch'),
         residue, mirroredResiduePaths);
-      const unattributed = new Set(attribution.paths);
+      const worktreeUnattributed = attribution.state === 'ok' ? attribution.paths : [];
+      const unattributed = new Set(worktreeUnattributed);
       if (attribution.state !== 'ok') finalizeTx.residue_attribution = attribution.state;
       const stageable = unattributed.size === 0 ? residue : residue.filter(rel => !unattributed.has(rel));
-      if (unattributed.size > 0) {
-        finalizeTx.residue_unattributed = attribution.paths.slice(0, 50);
-        process.stderr.write('kaola-workflow-claim finalize: WARNING: ' + attribution.paths.length
-          + ' path(s) in the worktree could not be attributed to ' + args.project + ' — they are NOT in '
-          + 'the `chore: finalize` commit and they are still on disk: ' + attribution.paths.join(', ') + '\n');
-        recordFinalizeFinding('residue_unattributed',
-          'The `chore: finalize` commit did NOT carry the paths below: this branch\'s own commits touch '
+      // #1110: mirror declines are main-checkout paths that were not copied, so they are not in
+      // `residue` and must not be laundered by the machinery-authored exemption. Report them through
+      // the same finding. Worktree directory attribution is unchanged.
+      const mirrorDeclined = mirrorDeclinedPaths.filter(p => !unattributed.has(p));
+      const reported = worktreeUnattributed.concat(mirrorDeclined);
+      if (reported.length > 0) {
+        finalizeTx.residue_unattributed = reported.slice(0, 50);
+        let summary;
+        let lines;
+        if (mirrorDeclined.length === 0) {
+          summary = 'The `chore: finalize` commit did NOT carry the paths below: this branch\'s own commits touch '
             + 'no file in their directories, so the transaction has no evidence they are this run\'s '
             + 'work. Nothing was committed, reverted or deleted — they are exactly where they were. '
-            + 'Read them before the sink runs: commit what belongs to the run, remove what does not.',
-          ['Paths not attributed to this run:', ''].concat(attribution.paths.slice(0, 50).map(p => '- ' + p)));
+            + 'Read them before the sink runs: commit what belongs to the run, remove what does not.';
+          lines = ['Paths not attributed to this run:', ''].concat(worktreeUnattributed.slice(0, 50).map(p => '- ' + p));
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: ' + reported.length
+            + ' path(s) in the worktree could not be attributed to ' + args.project + ' — they are NOT in '
+            + 'the `chore: finalize` commit and they are still on disk: ' + reported.join(', ') + '\n');
+        } else if (worktreeUnattributed.length === 0) {
+          summary = 'The residue mirror did not copy the paths below out of the main checkout: this run\'s HEAD does not '
+            + 'contain them. Presence in main, an untracked status, or a neighboring file this run committed is '
+            + 'not evidence they belong to this run. Nothing was copied, staged, committed, deleted, reverted or '
+            + 'relocated — they remain in the main checkout. Read them before the sink runs: commit what belongs '
+            + 'to the run, leave what does not.';
+          lines = ['Paths left in the main checkout:', ''].concat(mirrorDeclined.slice(0, 50).map(p => '- ' + p));
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: ' + reported.length
+            + ' path(s) in the main checkout could not be attributed to ' + args.project + ' — they are NOT in '
+            + 'the `chore: finalize` commit and they were not copied, deleted, reverted or relocated: '
+            + reported.join(', ') + '\n');
+        } else {
+          summary = 'The `chore: finalize` commit did NOT carry the paths below. Worktree paths whose directories '
+            + 'this run never committed are left in the worktree. Main-checkout paths this run\'s HEAD does not '
+            + 'contain were not copied. Nothing was committed, deleted, reverted or relocated. Read them before '
+            + 'the sink runs: commit what belongs to the run, leave what does not.';
+          lines = ['Paths not attributed to this run:', ''].concat(worktreeUnattributed.slice(0, 50).map(p => '- ' + p));
+          lines.push('', 'Paths left in the main checkout:', '');
+          for (const p of mirrorDeclined.slice(0, 50)) lines.push('- ' + p);
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: ' + reported.length
+            + ' path(s) in the worktree and main checkout could not be attributed to ' + args.project
+            + ' — they are NOT in the `chore: finalize` commit and they were not copied, deleted, reverted or relocated: '
+            + reported.join(', ') + '\n');
+        }
+        recordFinalizeFinding('residue_unattributed', summary, lines);
       }
       // #907: the staging failure is REPORTED, not swallowed and not refused. One UNMATCHED pathspec
       // exits 128 and stages NOTHING, not even the healthy files beside it. #920: that is this one
