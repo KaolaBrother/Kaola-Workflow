@@ -15,9 +15,8 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
   authority graph and native-only subagent boundary.
 - [Installation](installation.md) — shortest correct all-runtime setup, per-runtime scopes, Cursor
   Cloud lifecycle, update, verification, and uninstall.
-- [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
-  loading or Claude's thin bridge, plus native subagent routes, runtime limits, hooks, paths,
-  precedence, and known unknowns for all ten runtime families.
+- [Runtime Capabilities](runtime-capabilities.md) — instruction loading, compact recovery, install
+  scope, and dated route measurements. Active prompts follow the live host schema.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
   issue so the Next route can proceed without a fixed requirement template.
@@ -50,6 +49,9 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 
 ## Decisions
 
+- **[0030 — Forge and engineering lifecycle, no runtime bias](decisions/0030-forge-and-engineering-lifecycle.md)**
+  — #1111. Supersedes ADR 0029's retained dispatch-or-inline judgment. Active prompts follow the
+  host. Per-issue QA and documentation docking are not a second ceremony.
 - **[0029 — Native subagents only: Kaola-Workflow defines no roles](decisions/0029-native-subagents-only.md)**
   (#1101) — every runtime dispatches through the harness's own subagent tool, schema, and catalog;
   Kaola ships no role authority, role profile, profile generator or manifest, role→model map, or

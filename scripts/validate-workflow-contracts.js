@@ -271,10 +271,9 @@ for (const file of nextSurfaces) {
   // .cache/implementation-validators.md.
   assertBefore(file, 'Write the mission ledger', 'Run it');
 
-  // CONCURRENCY CARRIES NO MACHINERY. This is a subtraction made durable: without the sentence,
-  // nothing stops a proof obligation from being reintroduced as "just a small check".
-  assertIncludes(file, 'No dispatch count, cap, disjointness proof');
-  assertIncludes(file, 'justification, approval, or fallback stigma');
+  // #1111: the dispatch-count / fallback-stigma policy is retired. The surface must not carry it.
+  assertNotIncludes(file, 'No dispatch count, cap, disjointness proof');
+  assertNotIncludes(file, 'Choose dispatch or inline per item');
 
   // RESUME. The property the whole design was sized to, and the rule that makes it work.
   assertIncludes(file, 'Look for the work, not for the worker');

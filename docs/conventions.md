@@ -784,44 +784,18 @@ worktree, and active folder ONLY after its own merge lands; it does not clean ot
 
 See `docs/decisions/D-579-01.md` for the full decision record.
 
-## First Principles axiom layer (#645)
+## First Principles
 
-`templates/axioms.md` is the single canonical source for the workflow’s five tie-breaking axioms
-(correct first; then save human time; then spend as little as possible; machines decide facts,
-humans decide values; own your own verdicts) **and for the standing-default paragraphs beneath them**
-— the file’s own intro distinguishes the two, because a standing default read as a tie-breaker
-applies only when nothing else settles the case, which inverts it. It reaches consumers by EMBEDDING
-byte-identically into the surfaces that `testAxiomBlockByteIdentity` prints — never per-edition copies, since `templates/` has no runtime
-`require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built for that case, not this one.
-Read the count off `node scripts/simulate-workflow-walkthrough.js --only
-testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. The drift guard is that
-scenario, comparing the canonical file’s content against every surface it constructed — the six tracked
-workflow-init command/skill files read from disk, the additive-runtime init surfaces rendered in memory
-via the same sync scripts that generate them (one `sync-*-edition.js` per runtime, currently
-opencode, kimi, grok, cursor, and zcode), and root `README.md`. That last one
-is **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch it,
-so an axiom edit must update it by hand or the guard reds the printed set. Each surface is
-mutation-proven to fail on its own. The `next` routing surfaces carry a short reference
-pointer to the block rather than the block itself. That pointer **is** a `required-blocks.js` entry
-(`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was
-declared with the axiom layer, deleted in an unrelated extraction, and restored once a mutation
-showed the pointer could be stripped from every obligated next surface with every chain still green. Its
-obligated width is the literal `NEXT_SURFACES` in that file (currently 21 — three forges × claude,
-codex, opencode, kimi, grok, cursor, zcode), for the reason the row on partially-anchored universes gives —
-delete a forge and a derived comparison shrinks and passes over unchecked surfaces,
-while the literal reds.
+The active universal principles are the two in
+`templates/global/kaola-workflow-global.md`: machines decide facts, humans decide values; and own
+your own verdicts. `templates/axioms.md` is not an active source. Its older five-principle list,
+cost leanings, and dispatch policy are historical (#645, later narrowed by #1071 and #1111).
+`testAxiomBlockByteIdentity` checks that project and init surfaces do not carry that retired block.
+Next points at the loaded machine-global contract (`nx-first-principles` in
+`templates/routing/required-blocks.js`).
 
-**Tie-breaker protocol.** Axioms apply only when no shipped rule already resolves a situation — walk
-them in priority order. Recording a one-line derivation alongside the work is useful and never
-required; nothing checks for it.
-
-**Tighten-only boundary.** An axiom may only make an agent stricter, never looser — never cite an
-axiom to justify skipping a check that ships. The mirror rule matters just as much and is easier to
-forget: an axiom argument that a mechanism should not exist is exactly as admissible as one arguing
-for more care. A rule that can only ratchet tighter is how a corpus grows while its owners believe
-they are shrinking it.
-
-See `docs/decisions/D-645-01.md`.
+See `docs/decisions/D-645-01.md` for the original layer and
+`docs/decisions/0030-forge-and-engineering-lifecycle.md` for the current boundary.
 
 ## Specify the result; the method is the agent's (#900–#903)
 

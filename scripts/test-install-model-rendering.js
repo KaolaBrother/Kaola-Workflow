@@ -1291,23 +1291,27 @@ try {
       // dispatch_mode above — posture reflects whether the runtime will REFUSE a spawn, not
       // just whether the tools are exposed). A non-proactive posture is a reported fact, never a
       // preflight failure.
-      function assertDispatchPostureForConfig(body, expectedPosture, label) {
+      function assertDispatchPostureForConfig(body, label) {
         const result = runPreflightForConfig(body);
-        assert.strictEqual(result.status, 0, label + ': dispatch-posture WARN must never fail preflight once v2 is enabled: ' + result.stderr + result.stdout);
+        assert.strictEqual(result.status, 0, label + ': config-fact report must never fail preflight: ' + result.stderr + result.stdout);
         const json = JSON.parse(result.stdout);
-        assert.strictEqual(json.dispatch_posture, expectedPosture,
-          label + ': expected dispatch_posture ' + expectedPosture + ', got ' + JSON.stringify(json.dispatch_posture));
-        assert.strictEqual(json.dispatch_posture_warning === null, expectedPosture === 'proactive',
-          label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
+        assert.strictEqual(json.dispatch_posture, null,
+          label + ': dispatch_posture stays unknown, got ' + JSON.stringify(json.dispatch_posture));
+        assert.ok(json.dispatch_posture_warning && !/does not expose|explicitRequestOnly|proactive delegation/.test(json.dispatch_posture_warning),
+          label + ': warning reports the config fact without a capability verdict: ' + json.dispatch_posture_warning);
+        if (body.includes('model_reasoning_effort = "ultra"') && body.indexOf('model_reasoning_effort') < body.indexOf('[')) {
+          assert.ok(/model_reasoning_effort is "ultra"/.test(json.dispatch_posture_warning),
+            label + ': a root effort value is reported as read: ' + json.dispatch_posture_warning);
+        }
       }
-      assertDispatchPostureForConfig(configWithAgentsEnabled(), 'explicitRequestOnly',
-        '#775 [agents] enabled=true, no effort -> explicitRequestOnly');
-      assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + configWithAgentsEnabled(), 'proactive',
-        '#775 effort=ultra with [agents] enabled=true -> proactive');
-      assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + configWithAgentsEnabled(), 'explicitRequestOnly',
-        '#775 effort=xhigh (below ultra) stays explicitRequestOnly');
-      assertDispatchPostureForConfig(configWithAgentsEnabled() + '\nmodel_reasoning_effort = "ultra"\n', 'explicitRequestOnly',
-        '#775 effort AFTER the first [table] is not a valid TOML root key -> ignored');
+      assertDispatchPostureForConfig(configWithAgentsEnabled(),
+        '#1111 enabled flag, no effort, is not a posture');
+      assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + configWithAgentsEnabled(),
+        '#1111 effort=ultra is not a dispatch authorization');
+      assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + configWithAgentsEnabled(),
+        '#1111 effort=xhigh is not a posture');
+      assertDispatchPostureForConfig(configWithAgentsEnabled() + '\nmodel_reasoning_effort = "ultra"\n',
+        '#1111 effort after the first table is not reported as a root key');
 
       // --- #775: MultiAgentV2 concurrency + wait-timeout bounds — the arithmetic itself is
       // UNCHANGED (cap is INCLUSIVE of the root session; width = cap-1; default 4 -> width 3);
@@ -1323,17 +1327,17 @@ try {
         }
       }
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled(), {
-        max_concurrent_threads_per_session: 4,
-        max_concurrent_threads_per_session_source: 'observed_default',
-        effective_subagent_width: 3,
+        max_concurrent_threads_per_session: null,
+        max_concurrent_threads_per_session_source: 'absent',
+        effective_subagent_width: null,
         min_wait_timeout_ms: null,
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
-      }, '#775 v2 enabled, no bounds configured -> observed default 4 / width 3 (cap inclusive of root)');
+      }, '#1111 v2 enabled, no bounds configured -> absent, not a default width');
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_concurrent_threads_per_session = 6'), {
         max_concurrent_threads_per_session: 6,
         max_concurrent_threads_per_session_source: 'config',
-        effective_subagent_width: 5,
+        effective_subagent_width: null,
         min_wait_timeout_ms: null,
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
@@ -1347,28 +1351,28 @@ try {
       // true either way. Note the fixture puts max_threads inside [features.multi_agent_v2], not
       // under [agents] at all: this pins THIS parser, never any Codex behaviour.
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_threads = 6'), {
-        max_concurrent_threads_per_session: 4,
-        max_concurrent_threads_per_session_source: 'observed_default',
-        effective_subagent_width: 3,
+        max_concurrent_threads_per_session: null,
+        max_concurrent_threads_per_session_source: 'absent',
+        effective_subagent_width: null,
         min_wait_timeout_ms: null,
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
-      }, '#775 max_threads is NOT an alias — a stray one leaves the cap at the observed default');
+      }, '#1111 max_threads is NOT an alias and does not invent a default cap');
       assertMultiAgentV2BoundsForConfig(
         configWithAgentsEnabled('max_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000'),
         {
           max_concurrent_threads_per_session: 2,
           max_concurrent_threads_per_session_source: 'config',
-          effective_subagent_width: 1,
+          effective_subagent_width: null,
           min_wait_timeout_ms: 1000,
           max_wait_timeout_ms: 1800000,
           default_wait_timeout_ms: 60000,
         }, '#775 all four numeric fields configured under [features.multi_agent_v2]');
       assertMultiAgentV2BoundsForConfig(configWithAgentsEnabled('max_concurrent_threads_per_session = 0'), {
-        max_concurrent_threads_per_session: 4,
-        max_concurrent_threads_per_session_source: 'observed_default',
-        effective_subagent_width: 3,
-      }, '#775 non-positive configured threads value falls back to the observed default (Codex itself rejects < 1)');
+        max_concurrent_threads_per_session: null,
+        max_concurrent_threads_per_session_source: 'absent',
+        effective_subagent_width: null,
+      }, '#1111 a non-positive threads value is not a config fact and is not replaced with a default');
 
       // AC1 (#775): installer REPORT step — a fresh install must print the effective dispatch
       // posture it reads, and this must NEVER change the installer's own exit code (#1101: Kaola
@@ -1387,10 +1391,11 @@ try {
         assert(/status: ok/.test(freshInstall.stdout), '#775 AC1: existing "status: ok" output must be unchanged (install always succeeds)');
         assert(/Kaola-Workflow Codex multi_agent_v2: not enabled$/m.test(freshInstall.stdout),
           '#775 AC1: a fresh install (no [agents] enabled=true; Kaola never writes it per D2) must report multi_agent_v2 not enabled: ' + freshInstall.stdout);
-        assert(/Kaola-Workflow Codex dispatch posture: none/.test(freshInstall.stdout),
-          '#775 AC1: a fresh install with no [agents] enabled=true must report posture none: ' + freshInstall.stdout);
+        assert(/Kaola-Workflow Codex config: Config fact:/.test(freshInstall.stdout)
+          && !/does not expose/.test(freshInstall.stdout),
+          '#1111 AC1: a fresh install reports the config fact and does not claim missing tools: ' + freshInstall.stdout);
         assert(/0\.145\.0/.test(freshInstall.stdout), '#775 AC1: report must carry the version-guard note (0.145.0): ' + freshInstall.stdout);
-        assert(/How Codex bounds \[features\.multi_agent_v2\] when the user enables it/.test(freshInstall.stdout)
+        assert(/does not infer an effective subagent width/.test(freshInstall.stdout)
           && /neither requires nor writes/.test(freshInstall.stdout),
           '#1101: a fresh install documents how Codex bounds [features.multi_agent_v2] as a host fact, recommending nothing: ' + freshInstall.stdout);
         assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /wait_timeout_ms/.test(freshInstall.stdout),
@@ -1434,8 +1439,9 @@ try {
           encoding: 'utf8'
         });
         assert.strictEqual(reinstall.status, 0, '#775 AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstall.stderr);
-        assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstall.stdout),
-          '#775 AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstall.stdout);
+        assert(/model_reasoning_effort is "ultra"/.test(reinstall.stdout)
+          && !/dispatch posture: proactive/.test(reinstall.stdout),
+          '#1111 AC1: effort=ultra is reported as a config fact, not a posture: ' + reinstall.stdout);
         // #842: the label reports STATE and must not credit the RETIRED key for it. The detector
         // reads features.multi_agent_v2 — three shapes plus dotted-root equivalents — and this
         // fixture turns V2 on through [features.multi_agent_v2]; `[agents] enabled = true` is not
@@ -1451,8 +1457,8 @@ try {
           + 'does not enable it anywhere: ' + reinstall.stdout);
         assert(!/refuse sub-agent spawns/.test(reinstall.stdout),
           '#775 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstall.stdout);
-        assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(reinstall.stdout),
-          '#775 AC1: [agents] enabled with no configured threads must report the observed-default width: ' + reinstall.stdout);
+        assert(!/effective subagent width \d/.test(reinstall.stdout),
+          '#1111 AC1: enabled with no configured threads must not invent a width: ' + reinstall.stdout);
 
         // Configure explicit bounds under the SAME [features.multi_agent_v2] table, re-install (idempotent
         // update) — the report must now print the concrete width + every configured bound.
@@ -1467,8 +1473,9 @@ try {
           encoding: 'utf8'
         });
         assert.strictEqual(v2Install.status, 0, '#775 AC1: re-install with bounds configured must still exit 0: ' + v2Install.stderr);
-        assert(/effective subagent width 2 \(max_concurrent_threads_per_session=3 \[config\]\)/.test(v2Install.stdout),
-          '#775 AC1: configured threads=3 must report width=2 (threads-1) and source=config: ' + v2Install.stdout);
+        assert(/config max_concurrent_threads_per_session=3 \[config\]/.test(v2Install.stdout)
+          && !/effective subagent width \d/.test(v2Install.stdout),
+          '#1111 AC1: configured threads=3 are reported without an inferred width: ' + v2Install.stdout);
         assert(/min_wait_timeout_ms=1000/.test(v2Install.stdout), '#775 AC1: must report configured min_wait_timeout_ms: ' + v2Install.stdout);
         assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#775 AC1: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
         assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#775 AC1: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
@@ -1515,23 +1522,24 @@ try {
     // (#1101: the legacy-pin / malformed-profile inspectScope case retired with the profiles.)
 
     const postureFixtures = [
-      { label: 'no agents table at all', cfg: '', expected: 'none' },
-      { label: '[agents] enabled=true, no effort', cfg: '[features.multi_agent_v2]\nenabled = true\n', expected: 'explicitRequestOnly' },
-      { label: '[agents] enabled=false, no effort', cfg: '[features.multi_agent_v2]\nenabled = false\n', expected: 'none' },
-      { label: '[agents] enabled=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n', expected: 'proactive' },
-      { label: '[agents] enabled=true, effort=xhigh (below ultra)', cfg: 'model_reasoning_effort = "xhigh"\n\n[features.multi_agent_v2]\nenabled = true\n', expected: 'explicitRequestOnly' },
-      { label: '[agents] enabled=false + effort=ultra (enabled gate wins)', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = false\n', expected: 'none' },
-      // TOML root-key rule: model_reasoning_effort placed AFTER the first [table] header is NOT
-      // a root key (it would belong to that table), so it must not gate the posture.
-      { label: 'effort after first table is not a root key (ignored)', cfg: '[features.multi_agent_v2]\nenabled = true\nmodel_reasoning_effort = "ultra"\n', expected: 'explicitRequestOnly' },
+      { label: 'no agents table at all', cfg: '', effort: 'absent', flag: 'not true' },
+      { label: 'v2 enabled, no effort', cfg: '[features.multi_agent_v2]\nenabled = true\n', effort: 'absent', flag: 'true' },
+      { label: 'v2 enabled=false, no effort', cfg: '[features.multi_agent_v2]\nenabled = false\n', effort: 'absent', flag: 'not true' },
+      { label: 'v2 enabled, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n', effort: '"ultra"', flag: 'true' },
+      { label: 'v2 enabled, effort=xhigh', cfg: 'model_reasoning_effort = "xhigh"\n\n[features.multi_agent_v2]\nenabled = true\n', effort: '"xhigh"', flag: 'true' },
+      { label: 'v2 disabled + effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = false\n', effort: '"ultra"', flag: 'not true' },
+      { label: 'effort after first table is not a root key', cfg: '[features.multi_agent_v2]\nenabled = true\nmodel_reasoning_effort = "ultra"\n', effort: 'absent', flag: 'true' },
     ];
     for (const mod of [preflightMod, installerMod]) {
       for (const f of postureFixtures) {
         const result = mod.deriveDispatchPosture(f.cfg);
-        assert.strictEqual(result.dispatch_posture, f.expected,
-          '#775 ' + f.label + ': expected dispatch_posture ' + f.expected + ', got ' + JSON.stringify(result));
-        assert.strictEqual(result.dispatch_posture_warning === null, f.expected === 'proactive',
-          '#775 ' + f.label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(result));
+        assert.strictEqual(result.dispatch_posture, null,
+          '#1111 ' + f.label + ': posture stays unknown, got ' + JSON.stringify(result));
+        assert.ok(result.dispatch_posture_warning
+          && result.dispatch_posture_warning.includes('features.multi_agent_v2.enabled is ' + f.flag)
+          && result.dispatch_posture_warning.includes('model_reasoning_effort is ' + f.effort)
+          && !/does not expose/.test(result.dispatch_posture_warning),
+          '#1111 ' + f.label + ': warning is the config fact, got ' + JSON.stringify(result.dispatch_posture_warning));
       }
     }
 
@@ -1557,19 +1565,19 @@ try {
       { label: 'no agents table at all', cfg: '', v2Enabled: false,
         expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'not_applicable', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, no bounds configured', cfg: '[features.multi_agent_v2]\nenabled = true\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'absent', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, threads configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 6\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+        expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, stray max_threads is NOT an alias for max_concurrent_threads_per_session', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'absent', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled, all four numeric fields configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 1, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
+        expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: null, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
       { label: 'unrelated table after [agents] does not over-collect bounds', cfg: '[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'non-integer configured threads value falls back to observed default', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = "six"\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
-      { label: 'zero configured threads value falls back to observed default (Codex itself rejects < 1)', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 0\n', v2Enabled: true,
-        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'absent', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'non-integer configured threads value is not a config fact', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = "six"\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'absent', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'zero configured threads value is not a config fact', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 0\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'absent', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
     ];
     for (const mod of [preflightMod, installerMod]) {
       for (const f of boundsFixtures) {
@@ -1581,8 +1589,8 @@ try {
       }
     }
 
-    assert.strictEqual(installerMod.OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION, 4,
-      '#611: the observed default concurrency budget must be 4 (width 3)');
+    assert.strictEqual(installerMod.OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION, undefined,
+      '#1111: the report no longer exports a default concurrency budget');
     assert.strictEqual(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE, preflightMod.MULTI_AGENT_V2_BOUNDS_NOTE,
       '#611: installer and preflight multi_agent_v2 bounds notes must match verbatim');
     assert(/0\.145\.0/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
@@ -2009,8 +2017,10 @@ try {
       const normalJson = JSON.parse(normal.stdout);
       assert.strictEqual(normalJson.max_wait_timeout_ms, 1800000,
         'c2: the trusted marker-root layer enters the effective runtime');
-      assert.strictEqual(normalJson.max_concurrent_threads_per_session, 4,
+      assert.strictEqual(normalJson.max_concurrent_threads_per_session, null,
         'c2: the exact untrusted nested layer stays out of the effective runtime');
+      assert.notStrictEqual(normalJson.max_concurrent_threads_per_session, 2,
+        'c2: the untrusted nested thread count is not adopted');
       assert.deepStrictEqual(normalJson.effective_config_paths,
         [path.join(homeRoot, '.codex', 'config.toml'), rootConfig],
         'c2: only the global and trusted root layers are loaded');
@@ -2073,7 +2083,7 @@ try {
       const json = JSON.parse(run.stdout);
       assert.strictEqual(json.max_concurrent_threads_per_session, 6, 'c6: the global thread cap survives');
       assert.strictEqual(json.max_concurrent_threads_per_session_source, 'config', 'c6: the cap comes from config');
-      assert.strictEqual(json.effective_subagent_width, 5, 'c6: width follows the global cap');
+      assert.strictEqual(json.effective_subagent_width, null, 'c6: a configured thread count is not an inferred width');
       assert.strictEqual(json.max_wait_timeout_ms, 1800000, 'c6: the project wait bound is added');
     } finally {
       fs.rmSync(homeRoot, { recursive: true, force: true });

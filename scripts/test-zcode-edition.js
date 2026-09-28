@@ -198,7 +198,7 @@ const skillNamesFor = forge => syncMod.skillSources(forge).map(s => s.skillName)
 // ---------------------------------------------------------------------------
 const ZCODE_RUNTIME_NATIVE = Object.freeze({
   native_only_design:
-    'ZCode is native-only (#1062, #1101): Kaola-Workflow installs no role profiles on it, renders no .zcode/agents/ tree, and its skill surfaces carry the deferred dispatch pointer while the always-loaded global carrier renders the native-only dispatch contract and the ZCode adapter facts (native `general-purpose` / read-only `Explore` routes) instead of a `**Roles:**` roster or `**Subagent default:**` binding.',
+    'ZCode is native-only (#1062, #1101, #1111): Kaola-Workflow installs no role profiles on it, renders no .zcode/agents/ tree, and its skill surfaces carry the deferred dispatch pointer while the always-loaded global carrier renders the native-only dispatch contract and ZCode compact-recovery facts instead of a `**Roles:**` roster, a `**Subagent default:**` binding, or a type catalog.',
 });
 const ZCODE_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-zcode-edition.js'), 'utf8');
 const ZCODE_ADAPTER = facts.loadRuntimeAdapters(REPO).runtimes.zcode;
@@ -591,10 +591,10 @@ function skillRel(name, forge) {
       assertReal(pattern.test(zcodeRecovery),
         'G2-carrier: the always-loaded carrier preserves the ' + boundary + ' brief boundary');
     }
-    assertReal(/automatic selection/i.test(zcodeRecovery) && /@/.test(zcodeRecovery)
-      && /general-purpose/.test(zcodeRecovery) && /Explore/.test(zcodeRecovery),
-      'G2-carrier: the carrier keeps the real ZCode routes '
-      + '(automatic selection / @, general-purpose, read-only Explore)');
+    assertReal(/native Skill invocation/i.test(zcodeRecovery)
+      && /\/kaola-workflow-next/.test(zcodeRecovery)
+      && !/read-only `Explore`/.test(zcodeRecovery),
+      'G2-carrier: the carrier keeps ZCode compact recovery and does not teach an Explore type catalog');
     assertReal(/live schema wins|live schema/i.test(zcodeRecovery),
       'G2-carrier: the carrier defers optional fields to the live schema');
     assertReal(/\/kaola-workflow-next`? or `?\/kaola-workflow-finalize/.test(zcodeRecovery)

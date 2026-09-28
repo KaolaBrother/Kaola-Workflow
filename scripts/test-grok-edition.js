@@ -288,8 +288,8 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
     assert(!Object.prototype.hasOwnProperty.call(caps, retired),
       'G0-binding: the Grok adapter records no ' + retired + ' role or model-binding capability');
   }
-  assert(/spawn_subagent/.test(String((caps.delegation_guidance || {}).native_routes || '')),
-    'G0-adapter: the Grok adapter records the native spawn_subagent route as a host fact');
+  assert(!/spawn_subagent|subagent_type/.test(String((caps.delegation_guidance || {}).native_routes || '')),
+    'G0-adapter: the Grok adapter does not teach a spawn_subagent type catalog');
   assert(!/const\s+GROK_MODEL_EFFORTS\b|function\s+effortForModelToken\b/.test(GROK_SYNC_SRC),
     'G0-adapter: sync-grok-edition carries no executable hardcoded effort table; '
     + 'runtime-capabilities.json is the sole runtime identifier authority');

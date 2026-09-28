@@ -296,8 +296,8 @@ function cursorCliSharedHostNegatives(block, errors) {
   if (!/Cursor App[\s\S]{0,180}App-started Cloud[\s\S]{0,220}(?:do not|never) apply or infer[^.]*CLI materialization rule[^.]*App host/i.test(block)) {
     errors.push('App local and App-started Cloud do not retain a shared negative CLI-rule boundary');
   }
-  if (!/Cursor App[\s\S]{0,180}App-started Cloud[^.]*separate hosts[^.]*inspect their live Task catalog/i.test(block)) {
-    errors.push('App local and App-started Cloud are not separate live-catalog decisions');
+  if (!/Cursor App[\s\S]{0,180}App-started Cloud[^.]*separate hosts/i.test(block)) {
+    errors.push('App local and App-started Cloud are not kept as separate hosts');
   }
   if (!/never substitute an ambient cwd copier or a sessionStart materializer/i.test(block)) {
     errors.push('ambient and sessionStart materialization are not explicitly excluded');
@@ -800,8 +800,9 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
     assert(!Object.prototype.hasOwnProperty.call(CURSOR_ADAPTER_CAPS, retired),
       'G0-binding: the Cursor adapter records no ' + retired + ' role or model-binding capability');
   }
-  assert(/`Task`/.test(String((CURSOR_ADAPTER_CAPS.delegation_guidance || {}).native_routes || '')),
-    'G0-adapter: the Cursor adapter records the native Task route as a host fact');
+  assert(/separate hosts/.test(String((CURSOR_ADAPTER_CAPS.delegation_guidance || {}).availability || ''))
+    && !/`Task`/.test(String((CURSOR_ADAPTER_CAPS.delegation_guidance || {}).native_routes || '')),
+    'G0-adapter: Cursor guidance keeps the host split and does not teach a Task type catalog');
   // The retired agent renderer and catalog copier are gone from the generator's surface; nothing
   // can render or copy a role profile (the old fail-closed renderAgent probes have no subject).
   for (const retired of ['renderAgent', 'agentRel', 'listCanonAgents', 'copyListCanonAgents',
@@ -900,8 +901,9 @@ function commandRel(name, forge) {
       'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
     assert(/CLI, App local, and App Cloud are separate hosts/i.test(cursorRule),
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts (in the always-loaded Rule)');
-    assert(/The live Task catalog is authoritative/i.test(cursorRule),
-      'G2[' + name + ']: the always-loaded Rule makes the live Task catalog, not on-disk bytes, authoritative');
+    assert(!/The live Task catalog is authoritative/i.test(cursorRule)
+      && !/Dispatch with `Task`/.test(cursorRule),
+      'G2[' + name + ']: the always-loaded Rule does not teach a Task type catalog');
     const nativeVerdict = nativeDispatchRuleVerdict(cursorRule);
     assert(nativeVerdict.ok,
       'G2[' + name + ']: the always-loaded Rule states the native-only rule and pins no model (host '

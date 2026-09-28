@@ -63,8 +63,10 @@ function main() {
     ]) {
       assert.ok(rule.includes(statement), 'always-loaded Rule states the native-only rule: ' + statement);
     }
-    assert.match(rule, /Dispatch with `Task`; its `subagent_type` names a type from the live catalog/,
-      'always-loaded Rule: dispatch uses the native Task route and its live catalog');
+    assert.match(rule, /CLI, App local, and App Cloud are separate hosts/,
+      'always-loaded Rule: Cursor hosts stay separate');
+    assert.doesNotMatch(rule, /Dispatch with `Task`/,
+      'always-loaded Rule: does not teach a Task type catalog');
     assert.doesNotMatch(rule, /exact-binding|MUST omit[^.]*per-call `model`|\bgrok-4\.\d\b|profile pin/i,
       'always-loaded Rule: no retired named-profile model binding remains');
     assert.doesNotMatch(rule,

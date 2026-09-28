@@ -26,8 +26,8 @@ flowchart LR
 ```
 
 The forge holds the backlog; Git holds the changes; local run files preserve progress and evidence.
-Finalization reconciles documentation and issue closure, then records the archive and delivery
-outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
+Finalization records the acceptance evidence already produced, issue closure, the archive, and the
+delivery outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
 claimed issue once the change merges: the merge sink closes the set itself, and a PR/MR carries one
 `Closes #n` line per claimed issue. The PR/MR route is a request sink, not a merge: it publishes the
 request (reusing an open one on the same head and base rather than opening a second) and carries the
@@ -49,7 +49,7 @@ branch copy.
 |---|---|
 | Claims and worktrees | Single-issue or multi-issue runs, collision-safe claims, optional isolated worktrees |
 | Recoverable execution | One mission ledger records outcomes, in-flight work, and where evidence should land |
-| Native agent collaboration | Dispatch through each runtime's own subagent tool and catalog; Kaola defines no roles |
+| Native agent collaboration | The host's own subagent tool, schema, and permissions; Kaola defines no roles or dispatch policy |
 | Verifiable delivery | Candidate-bound validation receipts, closure records, archive, and merge/sync or PR/MR delivery |
 | Consistent instructions | A shared global contract, project-specific instructions, and runtime-specific recovery carriers |
 
@@ -117,7 +117,7 @@ Open your project in the installed runtime, then use its native command or Skill
 |---|---|---|
 | `workflow-init` | First setup, or when project facts change | Repository instructions based on verified local facts; existing owner-authored rules require authorization to rewrite |
 | `workflow-next` | Start or resume an issue or issue bundle | Claim, mission ledger, execution, and evidence |
-| `kaola-workflow-finalize` | All missions are complete | Final validation, documentation, closure, archive, and delivery |
+| `kaola-workflow-finalize` | All missions are complete | Recorded acceptance evidence, closure, archive, and delivery |
 
 ```text
 Use Workflow Next to finish issue #42, then finalize it.
@@ -129,27 +129,29 @@ A research or design request does not authorize implementation. See [Task Qualit
 
 ## Runtime and forge support
 
-| Runtime | Native workflow carrier | Native subagent route | Install entry |
+| Runtime | Native workflow carrier | Subagent use | Install entry |
 |---|---|---|---|
-| Claude Code | Commands and root `AGENTS.md` (direct from v2.1.277) | `Agent` tool | `./install.sh` |
-| Codex | Skills and `AGENTS.md` | `spawn_agent` | Matching plugin + `install-codex-agent-profiles.js` |
-| Cursor CLI/App/Cloud | Commands and persistent recovery Rule | `Task` | `./install-cursor.sh` |
-| Grok CLI | Commands and persistent recovery Rule | `spawn_subagent` | `./install-grok.sh` |
-| OpenCode | Commands | Task types `general` / `explore` / `scout` | `./install-opencode.sh` |
-| Kimi Code | Skills | `Agent` / `AgentSwarm` | `./install-kimi.sh` |
-| ZCode | Skills | `general-purpose` / `Explore` | `./install-zcode.sh` |
-| Devin CLI | Inline skills | `run_subagent` or `sidekick` (live schema) | `./install-devin.sh` |
-| Droid CLI | Inline skills | Task `worker` / `explorer` | `./install-droid.sh` |
-| DSH (DeepSeek Harness) | Inline skills | `subagent` / `subagent_fork` | `./install-dsh.sh` |
+| Claude Code | Commands and root `AGENTS.md` (direct from v2.1.277) | Live host schema | `./install.sh` |
+| Codex | Skills and `AGENTS.md` | Live host schema | Matching plugin + `install-codex-agent-profiles.js` |
+| Cursor CLI/App/Cloud | Commands and persistent recovery Rule | Live host schema | `./install-cursor.sh` |
+| Grok CLI | Commands and persistent recovery Rule | Live host schema | `./install-grok.sh` |
+| OpenCode | Commands | Live host schema | `./install-opencode.sh` |
+| Kimi Code | Skills | Live host schema | `./install-kimi.sh` |
+| ZCode | Skills | Live host schema | `./install-zcode.sh` |
+| Devin CLI | Inline skills | Live host schema | `./install-devin.sh` |
+| Droid CLI | Inline skills | Live host schema | `./install-droid.sh` |
+| DSH (DeepSeek Harness) | Inline skills | Live host schema | `./install-dsh.sh` |
 
-Kaola-Workflow defines no subagent roles, role profiles, or subagent model or effort bindings on any
-runtime: the host's own catalog, defaults, and limits, plus your explicit instructions, decide the
-child. Installing no Kaola profile never means the host lacks subagent capability.
+Kaola-Workflow defines no subagent roles, role profiles, model or effort bindings, or dispatch
+policy. The current host schema, its defaults and permissions, and your instructions decide
+subagent use. Installing no Kaola profile never means the host lacks that capability. Dated route
+measurements are in [Runtime Capabilities](docs/runtime-capabilities.md); they are not prompt
+instructions.
 
 All forge-aware installers accept `--forge=github|gitlab|gitea`; Codex selects its forge through the
-installed plugin. Models, dispatch, hooks, and recovery retain each runtime's measured capabilities.
+installed plugin. Instruction loading, compact recovery, and install scope stay per runtime.
 See [Runtime Capabilities](docs/runtime-capabilities.md) and the
-[edition guides](docs/README.md#runtime-editions) for defaults, setup, and evidence limits.
+[edition guides](docs/README.md#runtime-editions) for setup and dated evidence.
 
 <details>
 <summary>Cursor CLI startup and resume</summary>

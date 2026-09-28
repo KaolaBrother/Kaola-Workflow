@@ -255,8 +255,8 @@
         "instruction_loading": "bridge",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
-          "native_routes": "Dispatch with the native `Agent` tool; `subagent_type` names a type from the current catalog — built-in `general-purpose`, read-only `Explore` and `Plan`, catch-all `claude`, and any agent the user, project, or another plugin defines. Background or isolated children and optional agent teams remain Claude-owned options.",
-          "availability": "Inspect the current Agent type catalog and its effective precedence; Claude Code owns child model and effort defaults and permits recursive subagents to its native depth limit, which the host can configure."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -285,8 +285,8 @@
         "instruction_loading": "direct",
         "hook_scope": "plugin_runtime",
         "delegation_guidance": {
-          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -315,8 +315,8 @@
         "instruction_loading": "direct",
         "hook_scope": "plugin_runtime",
         "delegation_guidance": {
-          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -345,8 +345,8 @@
         "instruction_loading": "direct",
         "hook_scope": "plugin_runtime",
         "delegation_guidance": {
-          "native_routes": "Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.",
-          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -375,8 +375,8 @@
         "instruction_loading": "direct",
         "hook_scope": "plugin_runtime",
         "delegation_guidance": {
-          "native_routes": "Native routes are broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
-          "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; children inherit the session model and variant."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -404,8 +404,8 @@
         "instruction_loading": "direct",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
-          "native_routes": "Native routes are full writable `coder`, read-only `explore`, and non-shell `plan`, dispatched with `Agent` (resume/background) or `AgentSwarm` (up to 128 parallel items); use each under its actual boundary.",
-          "availability": "Honor the current Agent catalog. Children inherit the session model and effort; the optional user-owned `[secondary_model]` section (GA, no experimental gate) stays opt-in. Built-ins are leaves."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -432,8 +432,8 @@
         "instruction_loading": "direct",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
-          "native_routes": "Dispatch with `spawn_subagent`; `subagent_type` names a type from the live catalog, such as full `general-purpose`, read/shell `explore`, or read/shell `plan`, with native background, isolation, resume, and cwd options.",
-          "availability": "Respect the current `spawn_subagent` catalog and its native options; child model and effort follow Grok's own defaults. Grok children cannot spawn descendants."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -466,8 +466,8 @@
         "instruction_loading": "direct_nested",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
-          "native_routes": "Dispatch with `Task`; its `subagent_type` names a type from the live catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
-          "availability": "The live Task catalog is authoritative; CLI, App local, and App Cloud are separate hosts, and a CLI catalog reload requires a new process."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool. CLI, App local, and App Cloud are separate hosts."
         }
       },
       "surfaces": {
@@ -551,8 +551,8 @@
         "instruction_loading": "direct_workspace_root",
         "hook_scope": "user_only",
         "delegation_guidance": {
-          "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned, and optional call fields follow the live Agent schema — the live schema wins.",
-          "availability": "Children follow the main Agent's model. Subagents cannot spawn children, but the root runtime's other native routes remain available. Compact recovery reloads the operation prompt through ZCode's native Skill invocation — `/kaola-workflow-next` or `/kaola-workflow-finalize` emits a fresh Skill tool call after compact and loads the full body — never a manual `read` of the skill file."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Compact recovery reloads the operation prompt through ZCode's native Skill invocation — `/kaola-workflow-next` or `/kaola-workflow-finalize` emits a fresh Skill tool call after compact and loads the full body — never a manual `read` of the skill file. Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -598,8 +598,8 @@
         "hot_reload": false,
         "rules_survive_compaction": false,
         "delegation_guidance": {
-          "native_routes": "Native routes follow the live schema: measured sessions expose `run_subagent` / `read_subagent` with session-start profiles, or the Fusion `sidekick` route. Use the route actually exposed; do not invent profile or model arguments for a different session mode.",
-          "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues. Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -634,8 +634,8 @@
         "instruction_loading": "direct",
         "hook_scope": "user_and_project",
         "delegation_guidance": {
-          "native_routes": "Native routes follow the live Task schema: the built-in `worker` (general-purpose, all tools) and read-only `explorer` routes run in their own context window, plus any user-defined custom droids from ~/.factory/droids/; background execution and resume remain runtime-owned options — the live schema wins.",
-          "availability": "Sibling Task calls run in parallel with their own context windows; a spawned route resolves its model from the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and it cannot spawn further descendants."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {
@@ -667,8 +667,8 @@
         "instruction_loading": "direct",
         "hook_scope": "none",
         "delegation_guidance": {
-          "native_routes": "Native routes follow the live schema: shipped profiles expose `subagent` and `subagent_fork`; background execution, depth, and child model fields remain runtime-owned options — the live schema wins.",
-          "availability": "A child does not see the parent conversation unless the fork provider is used."
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
         }
       },
       "compact_protocol": {

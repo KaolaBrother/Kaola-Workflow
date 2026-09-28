@@ -35,8 +35,8 @@ forge-reorganization action and why; wait. Everything checkable remains yours to
 - If neither is named, start from `list-open` (below: at most 100 open issues, sorted by priority
   tier, then number; an empty list means unmeasured, not an empty backlog), then apply
   `kaola-workflow/.roadmap/_rules.md`, active folders, and archived summaries, and break ties by
-  scope. A shared contract/schema runs alone; otherwise prefer a closeable three-to-five issue set
-  when the frontier offers it.
+  scope. Respect the user's priority, the forge backlog, real dependencies, which workspace owns
+  the write, and whether the result can merge safely.
 
 State the selection aloud before you claim it, including any skipped frontier item. **Everything
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely

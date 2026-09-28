@@ -226,7 +226,7 @@ for (const row of [...routing.GENERATED_SURFACES, ...routing.RUNTIME_RECOVERY_SU
 for (const f of fs.readdirSync(path.join(ROOT, 'templates', 'routing')).filter(f => f.endsWith('.md'))) {
   surfaces.set('templates/routing/' + f, fs.readFileSync(path.join(ROOT, 'templates', 'routing', f), 'utf8'));
 }
-for (const rel of ['templates/global/kaola-workflow-global.md', 'templates/axioms.md']) {
+for (const rel of ['templates/global/kaola-workflow-global.md']) {
   surfaces.set(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'));
 }
 const RECOVERY_RUNTIMES = ['claude', 'codex', 'grok', 'cursor', 'devin', 'droid', 'dsh', 'zcode'];

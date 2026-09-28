@@ -253,9 +253,8 @@ function dispatchContractGaps(text) {
   const block = fullBlock.split(/<!--\s*KW-RUNTIME-DELEGATION-START\s*-->/)[0];
   if (!block) return gaps.concat(['dispatch-contract-missing']);
 
-  const decision = choiceContract(block);
-  for (const gap of commonDelegationGaps(decision)) gaps.push(gap);
   const prose = normalizedProse(block).toLowerCase();
+  if (/choose dispatch or inline per item/.test(prose)) gaps.push('retired-dispatch-policy');
   for (const statement of NATIVE_ONLY_STATEMENTS) {
     if (!prose.includes(normalizedProse(statement).toLowerCase())) gaps.push('native-only-statement');
   }
@@ -318,30 +317,11 @@ function runtimeDelegationGaps(runtime, text) {
   const host = runtime === 'dsh' ? 'dsh' : runtime;
   needs('host-boundary', [new RegExp(`if the running host is not ${host}, ignore this adapter section`)]);
   const runtimeNeeds = {
-    claude: [
-      ['carrier', [/native `agent` tool.*`subagent_type`/]],
-      ['host-owned-model', [/claude code owns child model and effort defaults/]],
-    ],
-    codex: [
-      ['carrier', [/spawn_agent.*agent_type/]],
-      ['host-owned-model', [/child model and reasoning effort follow codex's own defaults/]],
-    ],
-    opencode: [['native-routes', [/native routes/]]],
-    kimi: [['native-routes', [/native routes/]]],
-    grok: [
-      ['carrier', [/spawn_subagent.*subagent_type/]],
-      ['host-owned-model', [/child model and effort follow grok's own defaults/]],
-    ],
     cursor: [
-      ['carrier', [/\btask\b.*subagent_type/]],
-      ['current-task-catalog', [/live task (?:catalog|enum)/, /live catalog/]],
       ['host-catalog-variation', [/cli, app local, and app cloud are separate hosts/]],
-      ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
     ],
-    zcode: [['native-routes', [/native routes/]]],
-    devin: [['native-routes', [/native routes/]]],
-    droid: [['native-routes', [/native routes/]]],
-    dsh: [['native-routes', [/native routes/]]],
+    zcode: [['compact-recovery', [/native skill invocation/]]],
+    devin: [['compact-recovery', [/userpromptsubmit/]]],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
   for (const hit of retiredBindingHits(text)) gaps.push('retired:' + hit);
@@ -1078,27 +1058,12 @@ if (adapters && typeof adapterFacts.validateRuntimeAdapters === 'function') {
 // The adapter field layout is also not an oracle: the production API receives an adapter object,
 // and the mutation below proves some adapter-owned scalar reaches the rendered guidance.
 {
-  const axioms = read('templates/axioms.md') || '';
-  const common = choiceContract(axioms);
-  const commonGaps = commonDelegationGaps(common);
-  assert(common.length > 0,
-    'A10-delegation/common: templates/axioms.md owns the dispatch-vs-inline decision contract');
-  assert(!commonGaps.includes('per-item-reset'),
-    'A10-delegation/common: dispatch-vs-inline is re-evaluated for every mission item and one item establishes no run-wide default');
-  assert(!commonGaps.includes('retired-named-role-premise'),
-    'A10-delegation/common: the decision contract reasons from no named role (Kaola defines none)');
-  assert(!commonGaps.includes('production-owner-scope'),
-    'A10-delegation/common: a cohesive production owner is scoped to that production surface and does not absorb research/test/docs/review items');
-  assert(codexV2FieldHits(axioms).length === 0,
-    'A10-delegation/common: universal axioms carry no Codex V2 task_name/agent_type/message/reasoning_effort/fork_turns call fields');
+  assert(!fs.existsSync(path.join(ROOT, 'templates/axioms.md')),
+    'A10-delegation/common: templates/axioms.md is not an active policy source');
 
   const dispatchSource = read('templates/routing/dispatch-contract.md') || '';
-  const dispatchCommon = choiceContract(dispatchSource);
-  assert(dispatchCommon.length > 0 && commonDelegationGaps(dispatchCommon).length === 0,
-    'A10-delegation/common-source: dispatch-contract.md carries a complete native-only decision contract — gaps '
-    + JSON.stringify(commonDelegationGaps(dispatchCommon)));
-  assert(dispatchCommon === common,
-    'A10-delegation/common-source: dispatch-contract.md carries the one AGENTS decision wording exactly');
+  assert(!/Choose dispatch or inline per item/.test(dispatchSource),
+    'A10-delegation/common-source: dispatch-contract.md does not carry a KW dispatch-or-inline policy');
   for (const statement of NATIVE_ONLY_STATEMENTS) {
     assert(dispatchSource.includes(statement),
       `A10-delegation/common-source: dispatch-contract.md states ${JSON.stringify(statement)}`);
@@ -1231,8 +1196,8 @@ if (adapters && typeof adapterFacts.validateRuntimeAdapters === 'function') {
         `A10-delegation/pointer-mutation RED[${where}]: deleting the pointer fails the pointer assertion`);
     }
     const gaps = runtimeDelegationGaps(carrier.runtime, subject);
-    assert(choiceContract(subject) === dispatchCommon,
-      `A10-delegation/carrier[${where}]: fresh render carries the one common item-local decision contract`);
+    assert(!/Choose dispatch or inline per item/.test(subject),
+      `A10-delegation/carrier[${where}]: fresh render carries no KW dispatch-or-inline policy`);
     const contractGaps = dispatchContractGaps(subject);
     assert(contractGaps.length === 0,
       `A10-delegation/contract[${where}]: fresh render carries one complete native-only dispatch contract — gaps ${JSON.stringify(contractGaps)}`);
@@ -1294,6 +1259,11 @@ if (adapters && typeof adapterFacts.validateRuntimeAdapters === 'function') {
     assert(withCapabilityGap !== content && capabilityGapGaps.includes('retired-capability-gap')
         && capabilityGapGaps.includes('retired-role-layer'),
     'A10-delegation/capability-gap-mutation RED: reintroducing the named-role capability_gap fallback is detected');
+
+    const withPolicy = content.replace('<!-- KW-RUNTIME-DELEGATION-START -->',
+      'Choose dispatch or inline per item: re-evaluate every mission item.\n<!-- KW-RUNTIME-DELEGATION-START -->');
+    assert(withPolicy !== content && dispatchContractGaps(withPolicy).includes('retired-dispatch-policy'),
+      'A10-delegation/policy-mutation RED: reintroducing the KW dispatch-or-inline policy is detected');
   }
 
   // Concrete-call bites: the retired finalize role call card, and a per-call model/effort pin on an
@@ -1320,27 +1290,14 @@ if (adapters && typeof adapterFacts.validateRuntimeAdapters === 'function') {
     `A10-delegation/per-call-pin-mutation RED[${runtime}]: injecting a per-call ${runtime === 'claude' ? 'model' : 'effort'} into a native call is detected`);
   }
 
-  // Subject-byte mutations: remove the per-item reset from the shipped decision contract, or
-  // reintroduce the retired named-role premise, and prove the classifier notices each independently.
-  if (commonDelegationGaps(dispatchCommon).length === 0) {
-    const noPerItemReset = dispatchCommon.replace(/[^.]*re-evaluat[^.]*\./i, '');
-    assert(commonDelegationGaps(noPerItemReset).includes('per-item-reset'),
-      'A10-delegation/mutation: removing the per-item reset makes the common contract fail');
-    const namedRolePremise = dispatchCommon.replace('choice never establishes a run-wide default.',
-      'choice never establishes a run-wide default. The absence of an exact named role is not proof '
-      + 'that all native subagent dispatch is unavailable.');
-    assert(namedRolePremise !== dispatchCommon
-      && commonDelegationGaps(namedRolePremise).includes('retired-named-role-premise'),
-    'A10-delegation/mutation: reintroducing the retired named-role premise makes the common contract fail');
-  }
   const cleanItemLocal = 'Inline the current item only when no adequate native route exists; re-evaluate the next item.';
   assert(!RETIRED_RUN_WIDE_INLINE.test(cleanItemLocal),
     'A10-delegation/next-whole-surface-mutation: an item-local exhausted-route fallback is accepted');
   assert(RETIRED_RUN_WIDE_INLINE.test(cleanItemLocal
     + ' If the runtime cannot spawn a role agent, keep the work inline and say so.'),
   'A10-delegation/next-whole-surface-mutation: appending the retired broad fallback anywhere in the render is detected');
-  assert(codexV2FieldHits(dispatchCommon).length === 0
-    && codexV2FieldHits(dispatchCommon + '\n  task_name="universal_repair",').length === 1,
+  assert(codexV2FieldHits(dispatchSource).length === 0
+    && codexV2FieldHits(dispatchSource + '\n  task_name="universal_repair",').length === 1,
   'A10-delegation/codex-v2-scope-mutation: injecting task_name into the universal decision contract is detected');
 }
 

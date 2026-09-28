@@ -158,7 +158,9 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not c
 const initSkill = `${pluginRoot}/skills/kaola-workflow-init/SKILL.md`;
 assertPortableInit(initSkill);
 assertPortableInit('commands/workflow-init.md', false);
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'does not itself reject finalize');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'unverified scope');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 // #336: keep-open partial-close sink lane (codex SKILL.md is the finalize seam — no command file).
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_action');
@@ -386,8 +388,8 @@ const routingSkels = [
 const dispatchContract = read('templates/routing/dispatch-contract.md');
 const normalizedDispatchContract = norm(dispatchContract);
 const HOST_DECIDES = /let its own defaults, limits, and permissions[\s\S]*decide model, effort/i;
-assert(/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
-  'shared dispatch contract must carry the execution-economics judgment');
+assert(!/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
+  'shared dispatch contract must not carry a KW dispatch-benefit policy');
 assert(HOST_DECIDES.test(normalizedDispatchContract),
   'shared dispatch contract must leave model/effort selection to the host and the user');
 for (const rel of routingSkels) {
@@ -401,9 +403,10 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
   'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md']) {
   const rendered = norm(read(rel));
-  assert(/dispatch when it materially reduces main-context residue/i.test(rendered),
-    rel + ' must render the shared execution-economics judgment');
-  assert(HOST_DECIDES.test(rendered), rel + ' must render the host-owned model-selection rule');
+  assert(!/dispatch when it materially reduces main-context residue/i.test(rendered),
+    rel + ' must not render a KW dispatch-benefit policy');
+  assert(HOST_DECIDES.test(rendered) || rendered.includes('always-loaded Kaola rule already carries the runtime dispatch contract'),
+    rel + ' must render the host-owned model-selection rule or point at the always-loaded carrier');
 }
 
 // #400: registry-driven route-reachability contract. Every route/skill target a claim/startup/resume

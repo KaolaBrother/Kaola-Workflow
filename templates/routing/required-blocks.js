@@ -179,27 +179,6 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // Concurrency carries no machinery. This is a SUBTRACTION made durable:
-    // the grant is the only thing standing between these surfaces and a
-    // re-introduced proof obligation, so its wording is obligated on all six
-    // rather than left to survive by habit.
-    block_id: 'nx-concurrency-is-judgment',
-    topic: 'next',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    // #1069: these tokens live in the shared dispatch contract. On the
-    // always-loaded-carrier runtimes (RECOVERY_FULL_DISPATCH_RUNTIMES) the
-    // generated command carries only the pointer, so the obligation is scoped
-    // to the command surfaces that embed the block.
-    deferred_on_full_dispatch: true,
-    content_tokens: [
-      'Choose dispatch or inline per item',
-      'Dispatch when it materially reduces main-context residue',
-      'Keep one owner for the current cohesive production surface',
-      'Both modes are first-class',
-    ],
-  },
-  {
     // The claim survives, and it is bookkeeping: it records the issue, the
     // branch and the worktree.
     block_id: 'nx-claim-is-bookkeeping',

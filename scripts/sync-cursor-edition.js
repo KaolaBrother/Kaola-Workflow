@@ -87,7 +87,6 @@ function cursorCliStartupResumePrepProse() {
     '',
     'Apply only when the product is the standalone Cursor CLI on the local host; sibling binary is',
     'not evidence. Cursor App local IDE Agent and App-started Cloud are separate hosts:',
-    'inspect their live Task catalog and',
     'do not apply or infer this CLI materialization rule for either App host.',
     '',
     'Startup and resume run Repo prep through the installed',

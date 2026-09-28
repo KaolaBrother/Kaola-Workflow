@@ -150,11 +150,9 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T6b: acceptance-walk pin — all 6 finalize-route surfaces must bind their acceptance check to
-// something CONCRETE. "Verify the deliverable matches the acceptance criteria" verifies against
-// nothing; the check needs an object, and the object is now the run's own recorded results plus
-// the issue statement. Fail-closed on all six, matched whitespace-normalized so a re-wrap that
-// changes nothing semantically cannot redden the pin (and invite someone to weaken it).
+// T6b: finalize records the lifecycle facts a later reader can check. #1111 removed the fixed
+// satisfaction taxonomy and the DOCKED/BLOCKED documentation ledger. The surfaces still name the
+// candidate, the evidence, unresolved parts, and that a missing validation record is a finding.
 // ---------------------------------------------------------------------------
 {
   const finalizeSurfaces = [
@@ -170,15 +168,17 @@ for (const ed of codexEditions) {
     // semantically would redden the pin (and, worse, invite someone to weaken it).
     const content = fs.readFileSync(path.join(REPO, f), 'utf8').replace(/\s+/g, ' ');
     assert(content.includes('kaola-workflow/.ledger/issue-<N>.jsonl') && !content.includes('mission-list.md'),
-      `T6b: ${f} must bind its acceptance check to the run's own recorded results (the mission ledger, #1089)`);
-    assert(/issue statement/.test(content),
-      `T6b: ${f} must name the issue statement as the outer obligation`);
-    assert(/covering test/.test(content) && /validation receipt/.test(content) && /prose evidence/.test(content),
-      `T6b: ${f} must name the three ways a part is satisfied (covering test / validation receipt / prose evidence)`);
-    assert(/judged in context/.test(content),
-      `T6b: ${f} must state that satisfaction is JUDGED in context — never a mechanical match`);
-    assert(/is a blocker, not a footnote/.test(content),
-      `T6b: ${f} must state that an unsatisfied part is a blocker`);
+      `T6b: ${f} must keep the mission ledger as the run record (#1089)`);
+    assert(/the candidate, the acceptance outcome, where the evidence is/.test(content),
+      `T6b: ${f} must record the candidate, the acceptance outcome, and the evidence location`);
+    assert(/known failure or unverified scope/.test(content),
+      `T6b: ${f} must keep known failures and unverified scope visible`);
+    assert(/cannot satisfy stays unresolved/.test(content),
+      `T6b: ${f} must keep an unsatisfied part unresolved`);
+    assert(/does not itself reject finalize/.test(content),
+      `T6b: ${f} must not describe the validation measurement as a mechanical rejection`);
+    assert(/not a separate/.test(content) && /DOCKED/.test(content) && /BLOCKED/.test(content),
+      `T6b: ${f} must not require a separate DOCKED/BLOCKED documentation ledger`);
   }
 }
 
@@ -782,8 +782,8 @@ function checkGlobalContract({ blocks, globalContract }) {
       && block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
       `consent: the ${topic} consent block needs >=1 token that is not a substring of its marker`);
   }
-  assert(exists('templates/axioms.md'),
-    'the canonical First Principles source must exist');
+  assert(!exists('templates/axioms.md'),
+    'templates/axioms.md is not an active policy source; the machine-global contract holds the principles');
 }
 
 // --- AXIOM POINTER SANITY: the `next` surfaces reach the axiom layer by a short POINTER — the

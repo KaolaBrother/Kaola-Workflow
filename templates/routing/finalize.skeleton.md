@@ -43,9 +43,11 @@ node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
   --project {project} --verdict "<pass|fail>" --command "<exact command>"
 ```
 
-Pass the verdict you observed. The recorder writes `.cache/final-validation.md` with column-0
-`verdict:`, the exact command, and `validated_candidate_hash`; the finalize gate accepts only
-`verdict: pass`. Run it from the candidate worktree the finalize transaction reads.
+Pass the verdict you observed. When you record consumer evidence, the recorder writes
+`.cache/final-validation.md` with column-0 `verdict:`, the exact command, and
+`validated_candidate_hash`. Run that record from the candidate worktree the finalize transaction
+reads. Missing, stale, or failed evidence is a reported finding: that mechanical step does not
+itself reject finalize, and it does not turn an unrun check into `verdict: pass`.
 
 On failure, repair a trivial correction inline, or dispatch the repair through the host's native
 route with a brief naming the exact failure, evidence path, working directory, custody, and stop
@@ -54,21 +56,17 @@ follows a review finding waits for your own verdict on the finding.
 
 The runner **measures** the receipt and **reports** what it found; you own the verdict. The finalize
 transaction writes its typed validation finding under `## Validation` in `finalization-summary.md`;
-leave that heading's body empty. Preserve `chain-receipt.json` and `final-validation.md`. Fix
-meaningful findings, re-freeze, then rerun affected evidence.
+leave that heading's body empty. Preserve `chain-receipt.json` and `final-validation.md` when they
+already exist. Reuse evidence that still matches this candidate. Rerun only what that evidence does
+not cover. Pending coverage stays pending.
 
-Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit,
-and anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
-
-Walk the issue statement for every claimed member and name what satisfies each part: a covering
-test, validation receipt, or prose evidence, judged in context. Mission results record the run's
-answers, but there is no mechanical match; a part you cannot satisfy is a blocker, not a footnote.
-
-Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
-architecture, environment, validation, README, API docs, architecture docs, changelog, and
-examples. Documentation work, inline or dispatched, transcribes real signatures, JSON/help/schema
-or returns BLOCK, never invents fields. Write one docking evidence file, `.cache/doc-docking.md`,
-with checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
+Record the candidate, the acceptance outcome, where the evidence is, and any known failure or
+unverified scope. A user may own an explicit acceptance exception; record its boundary. A part of
+the issue you cannot satisfy stays unresolved. Do not open a second QA pass or a documentation
+ledger because finalization started. Documentation judgment belongs to the executing agent and,
+when Kaola Project Runner is in use, to its own guidance. The lifecycle record is this summary
+plus the validation measurement and changed-path report already written here — not a separate
+`DOCKED`/`BLOCKED` file.
 
 The finalize transaction measures `validation` and `changed_paths` (every path the branch changed
 outside `kaola-workflow/` run state) and writes them under `## Validation` and `## Changed Paths`.
@@ -76,13 +74,12 @@ It fills an empty heading and never overwrites one that has a body, so leave bot
 
 ## Card: summary
 
-Create `finalization-summary.md` with Delivered, Files Changed, Test Coverage, `## Validation` and
-`## Changed Paths` (empty, for the transaction), Documentation Docking, Follow-Up Items, and final
-readiness status. Scan all run records for deferred items, partial work, conflicts, review
-follow-ups, and user value decisions. Ask before reorganizing forge work. A run may intentionally
-keep the whole issue set open only through the recorded closure decision; never silently mix
-per-member outcomes. Record a keep-open decision as `issue_action: comment_keep_open` in the
-`## Sink` block of `workflow-state.md` (merge sink only).
+Create `finalization-summary.md` with Delivered, the candidate, evidence locations, known failures
+or unverified scope, `## Validation` and `## Changed Paths` (empty, for the transaction),
+Follow-Up Items, and final readiness status. Read the run records that already exist. Ask before
+reorganizing forge work. A run may intentionally keep the whole issue set open only through the
+recorded closure decision; never silently mix per-member outcomes. Record a keep-open decision as
+`issue_action: comment_keep_open` in the `## Sink` block of `workflow-state.md` (merge sink only).
 
 ## Card: file or correct run-discovered work
 

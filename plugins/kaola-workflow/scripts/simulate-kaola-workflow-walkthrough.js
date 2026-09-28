@@ -781,10 +781,12 @@ function testCodexPreflight266() {
     let { r, j } = preflight266();
     assert(r.status === 0 && j.status === 'ok',
       '#266 fresh RED-discriminator: a trusted project with no residue must exit 0 ok, got ' + r.status + '\n' + r.stdout);
-    assert(j.multi_agent_v2_enabled === false && j.dispatch_mode === null && j.dispatch_posture === 'none',
-      '#1101: a clean home with multi_agent_v2 off must pass and REPORT multi_agent_v2_enabled:false, '
-      + 'dispatch_mode:null (no v1 fallback) and posture none, got ' + JSON.stringify({
-        multi_agent_v2_enabled: j.multi_agent_v2_enabled, dispatch_mode: j.dispatch_mode, dispatch_posture: j.dispatch_posture }));
+    assert(j.multi_agent_v2_enabled === false && j.dispatch_mode === null && j.dispatch_posture === null
+      && j.dispatch_posture_warning && !/does not expose/.test(j.dispatch_posture_warning),
+      '#1111: a clean home reports the config flag as not enabled and does not invent a posture or missing tools, got '
+      + JSON.stringify({
+        multi_agent_v2_enabled: j.multi_agent_v2_enabled, dispatch_mode: j.dispatch_mode,
+        dispatch_posture: j.dispatch_posture, warning: j.dispatch_posture_warning }));
     ({ r, j } = preflight266(['--codex-version', '0.140.0']));
     assert(r.status === 0 && j.status === 'ok',
       'a5bb3385: a below-0.145 --codex-version must no longer refuse, got ' + r.status + '\n' + r.stdout);
@@ -841,30 +843,34 @@ function testCodexPreflight266() {
 
     // #598 AC2: effort-gated dispatch POSTURE — reported, never a failure (#1101: including
     // `none`, which used to coincide with the retired v2 refusal).
-    function assertDispatchPostureForConfig(body, expectedPosture, label) {
+    function assertDispatchPostureForConfig(body, label, expectEffort) {
       fs.writeFileSync(configPath, body);
       const result = runScript(preflightScript,
         ['--project-root', root266, '--no-autofix', '--json'], h266);
       assert(result.status === 0,
-        label + ': the dispatch posture is reported, never enforced — must exit 0, got ' + result.status + '\n' + result.stdout);
+        label + ': the config fact is reported, never enforced — must exit 0, got ' + result.status + '\n' + result.stdout);
       const json = JSON.parse(result.stdout);
-      assert(json.dispatch_posture === expectedPosture,
-        label + ': expected dispatch_posture ' + expectedPosture + ', got ' + json.dispatch_posture);
-      assert((json.dispatch_posture_warning === null) === (expectedPosture === 'proactive'),
-        label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
+      assert(json.dispatch_posture === null,
+        label + ': dispatch_posture stays unknown, got ' + json.dispatch_posture);
+      assert(json.dispatch_posture_warning && !/does not expose/.test(json.dispatch_posture_warning),
+        label + ': warning is a config fact, got ' + JSON.stringify(json.dispatch_posture_warning));
+      if (expectEffort) {
+        assert(json.dispatch_posture_warning.includes('model_reasoning_effort is ' + expectEffort),
+          label + ': expected effort ' + expectEffort + ', got ' + json.dispatch_posture_warning);
+      }
     }
-    assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 base fixture (v2 enabled via HOME layer, no effort)');
-    assertDispatchPostureForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, 'none',
-      '#1101 v2 disabled -> posture none, reported at exit 0');
-    assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
-      '#598 effort=ultra with v2 enabled -> proactive');
-    assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
-      '#598 effort=xhigh (below ultra) stays explicitRequestOnly');
-    assertDispatchPostureForConfig(configWithAgentsEnabled(), 'explicitRequestOnly',
-      '#775 v2 enabled at the project layer too, no effort -> explicitRequestOnly');
+    assertDispatchPostureForConfig(origConfig, '#1111 base fixture (v2 enabled via HOME layer, no effort)', 'absent');
+    assertDispatchPostureForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig,
+      '#1111 v2 disabled stays unknown', 'absent');
+    assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig,
+      '#1111 effort=ultra is not an authorization', '"ultra"');
+    assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig,
+      '#1111 effort=xhigh is reported as read', '"xhigh"');
+    assertDispatchPostureForConfig(configWithAgentsEnabled(),
+      '#1111 v2 enabled at the project layer, no effort', 'absent');
     assertDispatchPostureForConfig(
       configWithAgentsEnabled('model_reasoning_effort = "ultra"'),
-      'explicitRequestOnly', '#775 effort INSIDE the [features.multi_agent_v2] table is not a root key -> ignored');
+      '#1111 effort inside the table is not a root key', 'absent');
 
     // --- Case 1 RED: the retired managed block → retired_role_residue ---
     const userAgentTable = '[agents.my-reviewer]\ndescription = "user-defined role"\n';
@@ -999,10 +1005,11 @@ function testCodexDispatchPosture598() {
       '#775/#1101 AC1: a fresh install (Kaola never writes the flag) must report multi_agent_v2 not enabled: ' + fresh.stdout);
     assert(!/codex_multi_agent_v2_required/.test(fresh.stdout),
       '#1101: the report must not point at the retired codex_multi_agent_v2_required refusal: ' + fresh.stdout);
-    assert(/^Kaola-Workflow Codex dispatch posture: none\b/m.test(fresh.stdout),
-      '#775 AC1: a fresh install with v2 off must report posture none: ' + fresh.stdout);
-    assert(fresh.stdout.includes('Kaola-Workflow Codex dispatch posture: ' + mod.dispatchPostureRemediation('none')),
-      '#598 AC1: a non-proactive posture must print its posture note: ' + fresh.stdout);
+    assert(/Kaola-Workflow Codex config: Config fact:/.test(fresh.stdout)
+      && !/does not expose/.test(fresh.stdout),
+      '#1111 AC1: a fresh install reports the config fact and does not claim missing tools: ' + fresh.stdout);
+    assert(fresh.stdout.includes('Kaola-Workflow Codex config: ' + mod.dispatchPostureRemediation('')),
+      '#1111 AC1: the config-fact note is the module wording: ' + fresh.stdout);
     assert(fresh.stdout.includes(mod.DISPATCH_POSTURE_VERSION_NOTE) && /0\.145\.0/.test(mod.DISPATCH_POSTURE_VERSION_NOTE),
       '#598 AC1/AC2: report must carry the observed-version note (0.145.0): ' + fresh.stdout);
     assert(!fs.existsSync(path.join(postureProj, '.codex')),
@@ -1015,28 +1022,30 @@ function testCodexDispatchPosture598() {
     const ultraConfig = 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n';
     fs.writeFileSync(postureConfigPath, ultraConfig);
     const reinstalled = runInstallProfiles(postureProj, postureEnv);
-    assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
-      '#775 AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    assert(/model_reasoning_effort is "ultra"/.test(reinstalled.stdout)
+      && !/dispatch posture: proactive/.test(reinstalled.stdout),
+      '#1111 AC1: effort=ultra is a config fact, not a posture: ' + reinstalled.stdout);
     // #842: the label reports STATE and must not credit the RETIRED key for it. The fixture
     // enables V2 through [features.multi_agent_v2]; `[agents] enabled = true` is not what enabled it.
     assert(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstalled.stdout),
       '#775 AC1: enabled config must report multi_agent_v2 enabled: ' + reinstalled.stdout);
     assert(!/multi_agent_v2: enabled \([^)]*\[agents\]/.test(reinstalled.stdout),
       '#842 AC1: ...and must NOT attribute it to [agents]: ' + reinstalled.stdout);
-    assert(!reinstalled.stdout.includes(mod.dispatchPostureRemediation('none'))
-      && !reinstalled.stdout.includes(mod.dispatchPostureRemediation('explicitRequestOnly')),
-      '#598 AC1: a proactive posture must NOT print a non-proactive posture note: ' + reinstalled.stdout);
+    assert(!/does not expose/.test(reinstalled.stdout)
+      && !/dispatch posture: (?:none|proactive|explicitRequestOnly)/.test(reinstalled.stdout),
+      '#1111 AC1: an enabled config must not print a capability verdict: ' + reinstalled.stdout);
     assert(fs.readFileSync(postureConfigPath, 'utf8') === ultraConfig,
       '#598/#1101: the installer never writes model_reasoning_effort or multi_agent_v2 — the config must be byte-identical');
 
     // Pure-function unit coverage on the exported deriveDispatchPosture (same module the
     // installer's REPORT step calls).
     const none = mod.deriveDispatchPosture('[features.multi_agent_v2]\nenabled = false\n');
-    assert(none.dispatch_posture === 'none', '#775: v2 enabled=false must derive none, got ' + JSON.stringify(none));
-    assert(none.dispatch_posture_warning !== null, '#598: a non-proactive posture must carry its note');
+    assert(none.dispatch_posture === null && /not true/.test(none.dispatch_posture_warning)
+      && !/does not expose/.test(none.dispatch_posture_warning),
+      '#1111: v2 enabled=false stays unknown and does not claim missing tools, got ' + JSON.stringify(none));
     const proactive = mod.deriveDispatchPosture('model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n');
-    assert(proactive.dispatch_posture === 'proactive', '#775: effort=ultra + v2 enabled must derive proactive, got ' + JSON.stringify(proactive));
-    assert(proactive.dispatch_posture_warning === null, '#598: a proactive posture must carry NO note');
+    assert(proactive.dispatch_posture === null && /model_reasoning_effort is "ultra"/.test(proactive.dispatch_posture_warning),
+      '#1111: effort=ultra is reported and is not a posture, got ' + JSON.stringify(proactive));
 
     console.log('testCodexDispatchPosture598 (#598 AC1 installer report): PASSED');
   } finally {
@@ -1117,8 +1126,9 @@ function testCodexMultiAgentV2Bounds611() {
       + 'max_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\n'
       + 'default_wait_timeout_ms = 60000\n\n' + beforeV2);
     const v2Install = runInstallProfiles(boundsProj, { HOME: boundsHome, USERPROFILE: boundsHome });
-    assert(/effective subagent width 2 \(max_concurrent_threads_per_session=3 \[config\]\)/.test(v2Install.stdout),
-      '#611 AC6: configured threads=3 must report width=2 (threads-1) and source=config: ' + v2Install.stdout);
+    assert(/config max_concurrent_threads_per_session=3 \[config\]/.test(v2Install.stdout)
+      && !/effective subagent width \d/.test(v2Install.stdout),
+      '#1111 AC6: configured threads=3 are reported without an inferred width: ' + v2Install.stdout);
     assert(/min_wait_timeout_ms=1000/.test(v2Install.stdout), '#611 AC6: must report configured min_wait_timeout_ms: ' + v2Install.stdout);
     assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#611 AC6: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
     assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#611 AC6: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
@@ -1130,8 +1140,9 @@ function testCodexMultiAgentV2Bounds611() {
     // the AC6 note assertions above), but the key being inert for this cap math is true either way.
     fs.writeFileSync(boundsConfigPath, '[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n\n' + beforeV2);
     const aliasInstall = runInstallProfiles(boundsProj, { HOME: boundsHome, USERPROFILE: boundsHome });
-    assert(/effective subagent width 3 \(max_concurrent_threads_per_session=4 \[observed_default\]\)/.test(aliasInstall.stdout),
-      'AC6: stray max_threads must NOT set the v2 cap — it falls back to the observed default: ' + aliasInstall.stdout);
+    assert(!/max_concurrent_threads_per_session=6/.test(aliasInstall.stdout)
+      && !/effective subagent width \d/.test(aliasInstall.stdout),
+      'AC6: stray max_threads must NOT set or invent the v2 cap: ' + aliasInstall.stdout);
 
     // Pure-function unit coverage on the exported deriveMultiAgentV2Bounds (same module the
     // installer's REPORT step calls) — the observed default (absent key) case.
@@ -1139,11 +1150,12 @@ function testCodexMultiAgentV2Bounds611() {
     assert(notApplicable.max_concurrent_threads_per_session === null,
       '#611: v2 disabled must derive max_concurrent_threads_per_session null, got ' + JSON.stringify(notApplicable));
     const observedDefault = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\n', true);
-    assert(observedDefault.max_concurrent_threads_per_session === 4 && observedDefault.effective_subagent_width === 3,
-      '#611: absent threads value must derive the observed default 4 (width 3), got ' + JSON.stringify(observedDefault));
+    assert(observedDefault.max_concurrent_threads_per_session === null && observedDefault.effective_subagent_width === null
+      && observedDefault.max_concurrent_threads_per_session_source === 'absent',
+      '#1111: absent threads value stays absent, got ' + JSON.stringify(observedDefault));
     const strayMaxThreads = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\nmax_threads = 6\n', true);
-    assert(strayMaxThreads.max_concurrent_threads_per_session === 4 && strayMaxThreads.effective_subagent_width === 3,
-      'max_threads is NOT an alias for max_concurrent_threads_per_session — must stay at the observed default, got ' + JSON.stringify(strayMaxThreads));
+    assert(strayMaxThreads.max_concurrent_threads_per_session === null && strayMaxThreads.effective_subagent_width === null,
+      'max_threads is NOT an alias and does not invent a cap, got ' + JSON.stringify(strayMaxThreads));
 
     console.log('testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED');
   } finally {

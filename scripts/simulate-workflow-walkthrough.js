@@ -12336,11 +12336,9 @@ function testSinkTransactionCleanEndToEnd() {
   }
 }
 
-// #645/#1033/#1047: templates/axioms.md remains a non-empty source for operation-level
-// decision guidance, while the compatible machine-global contract is the runtime carrier for
-// universal principles. #1071 cut the contract's First Principles to the custody/autonomy pair;
-// the operational trio lives only in axioms.md. Project instructions, README, the Claude bridge,
-// and all runtime/init surfaces must not copy the complete canonical block.
+// #645/#1033/#1047/#1111: the machine-global contract is the principle source. The old
+// templates/axioms.md cost leanings and dispatch policy are not an active source, and
+// project/runtime surfaces must not carry that retired block.
 function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
@@ -12352,9 +12350,8 @@ function testAxiomBlockByteIdentity() {
   const droidSync = require('./sync-droid-edition.js');
   const dshSync = require('./sync-dsh-edition.js');
 
-  const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
-  assert(axioms.startsWith('## First Principles') && axioms.trim().length > 100,
-    'templates/axioms.md remains a non-vacuous operation-guidance source');
+  assert(!fs.existsSync(path.join(repoRoot, 'templates', 'axioms.md')),
+    'templates/axioms.md is not an active policy source');
 
   const globalContract = read(path.join(repoRoot, 'templates', 'global',
     'kaola-workflow-global.md'));
@@ -12418,9 +12415,14 @@ function testAxiomBlockByteIdentity() {
     'axiom-duplication sweep covers every runtime x forge init surface plus two named project '
       + 'surfaces — expected ' + expected + ', got ' + surfaces.length);
 
-  const duplicates = surfaces.filter(surface => surface.body.includes(axioms)).map(surface => surface.id);
+  const retired = [
+    'Choose dispatch or inline per item',
+    'Then spend as little as possible',
+  ];
+  const duplicates = surfaces.filter(surface => retired.some(sentence => surface.body.includes(sentence)))
+    .map(surface => surface.id);
   assert(duplicates.length === 0,
-    'project/runtime surfaces must not duplicate the canonical First Principles block: '
+    'project/runtime surfaces must not carry the retired axiom or dispatch policy: '
       + duplicates.join(', '));
 
   console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' non-authoring surfaces)');

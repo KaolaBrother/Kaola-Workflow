@@ -2,6 +2,9 @@
 
 Status: Accepted · Date: 2026-09-27 · Issue: #1101
 
+The per-item dispatch-or-inline judgment kept in decision 2 is superseded by
+[ADR 0030](0030-forge-and-engineering-lifecycle.md) (#1111). The rest of this record stands.
+
 Supersedes ADR 0025 (lean orchestrator; one subagent binding per runtime; seven roles) in full,
 and every earlier decision that ADR carried forward about Kaola role profiles, role catalogs,
 subagent model or effort bindings, and named-role fallback. ADR 0017/0027 (the mission ledger) and

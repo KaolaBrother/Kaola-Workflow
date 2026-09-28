@@ -3861,27 +3861,31 @@ function testGiteaPreflight266() {
 
     // #598 AC2 gt: effort-gated dispatch POSTURE (distinct from dispatch_mode). Report-only: every
     // posture — 'none' included, now that V2 off is no refusal — exits 0.
-    function assertDispatchPostureForConfig(body, expectedPosture, label) {
+    function assertDispatchPostureForConfig(body, label, expectEffort) {
       fs.writeFileSync(configPath, body);
       const result = pf(readOnly);
       assert.strictEqual(result.status, 0,
-        label + ': dispatch-posture WARN must never fail preflight, got ' + result.status + '\n' + result.stdout);
-      assert.strictEqual(result.json.dispatch_posture, expectedPosture,
-        label + ': expected dispatch_posture ' + expectedPosture + ', got ' + result.json.dispatch_posture);
-      assert.strictEqual(result.json.dispatch_posture_warning === null, expectedPosture === 'proactive',
-        label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(result.json.dispatch_posture_warning));
+        label + ': config-fact report must never fail preflight, got ' + result.status + '\n' + result.stdout);
+      assert.strictEqual(result.json.dispatch_posture, null,
+        label + ': dispatch_posture stays unknown, got ' + result.json.dispatch_posture);
+      assert.ok(result.json.dispatch_posture_warning && !/does not expose/.test(result.json.dispatch_posture_warning),
+        label + ': warning is a config fact, got ' + JSON.stringify(result.json.dispatch_posture_warning));
+      if (expectEffort) {
+        assert.ok(result.json.dispatch_posture_warning.includes('model_reasoning_effort is ' + expectEffort),
+          label + ': expected effort ' + expectEffort + ', got ' + result.json.dispatch_posture_warning);
+      }
     }
-    assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture (V2 enabled via HOME layer, no effort)');
-    assertDispatchPostureForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, 'none',
-      '#1101 gt V2 off -> posture none is reported and passes');
-    assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
-      '#598 gt effort=ultra with V2 enabled -> proactive');
-    assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
-      '#598 gt effort=xhigh (below ultra) stays explicitRequestOnly');
-    assertDispatchPostureForConfig(configWithV2Enabled(), 'explicitRequestOnly',
-      '#775 gt V2 enabled at the project layer too, no effort -> explicitRequestOnly');
-    assertDispatchPostureForConfig(configWithV2Enabled('model_reasoning_effort = "ultra"'), 'explicitRequestOnly',
-      '#775 gt effort INSIDE a table is not a TOML root key -> ignored');
+    assertDispatchPostureForConfig(origConfig, '#1111 gt base fixture (V2 enabled via HOME, no effort)', 'absent');
+    assertDispatchPostureForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig,
+      '#1111 gt V2 off stays unknown', 'absent');
+    assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig,
+      '#1111 gt effort=ultra is not an authorization', '"ultra"');
+    assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig,
+      '#1111 gt effort=xhigh is reported as read', '"xhigh"');
+    assertDispatchPostureForConfig(configWithV2Enabled(),
+      '#1111 gt V2 enabled at the project layer, no effort', 'absent');
+    assertDispatchPostureForConfig(configWithV2Enabled('model_reasoning_effort = "ultra"'),
+      '#1111 gt effort inside a table is not a root key', 'absent');
 
     // --- Case 1 RED (#1101): the managed block an earlier release wrote is retired-role residue,
     // named by path, with the exact scoped installer command as the repair; --no-autofix writes nothing.
@@ -3990,8 +3994,9 @@ function testGiteaDispatchPosture598() {
       '#1101 gt AC1: a fresh install must report multi_agent_v2 not enabled: ' + fresh.stdout);
     assert.ok(!/codex_multi_agent_v2_required/.test(fresh.stdout),
       '#1101 gt AC1: V2 off must not be framed as a preflight requirement: ' + fresh.stdout);
-    assert.ok(/Kaola-Workflow Codex dispatch posture: none/.test(fresh.stdout),
-      '#775 gt AC1: a fresh install with V2 off must report posture none: ' + fresh.stdout);
+    assert.ok(/Kaola-Workflow Codex config: Config fact:/.test(fresh.stdout)
+      && !/does not expose/.test(fresh.stdout),
+      '#1111 gt AC1: a fresh install reports the config fact and does not claim missing tools: ' + fresh.stdout);
     assert.ok(/0\.145\.0/.test(fresh.stdout), '#775 gt AC2: the posture report must carry its Codex-version note: ' + fresh.stdout);
     assert.ok(!/set model_reasoning_effort|model_reasoning_effort\s*=\s*"ultra"/.test(fresh.stdout),
       '#1101 gt: the non-proactive note must not direct the user to set a model or effort: ' + fresh.stdout);
@@ -4004,8 +4009,9 @@ function testGiteaDispatchPosture598() {
     const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
       { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
     assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with V2 enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);
-    assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
-      '#775 gt AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    assert.ok(/model_reasoning_effort is "ultra"/.test(reinstalled.stdout)
+      && !/dispatch posture: proactive/.test(reinstalled.stdout),
+      '#1111 gt AC1: effort=ultra is a config fact, not a posture: ' + reinstalled.stdout);
     // #842: the label reports STATE and must not credit the RETIRED key for it — the detector reads
     // features.multi_agent_v2, and `[agents] enabled = true` is not what enabled V2 here or anywhere.
     assert.ok(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstalled.stdout),

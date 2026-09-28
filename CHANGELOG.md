@@ -6,6 +6,24 @@
 
 - **Finalization no longer copies an unrelated untracked file from the main checkout into the run (#1110).** The residue mirror treated a file missing from the linked worktree as this run's forward residue, copied it, and then exempted that copy from attribution. An untracked path that is absent from the worktree is copied only when the run's current commit already contains that exact path. A path the main index already contains — a staged rename or a staged add — is still copied. Any other main-only untracked file stays in the main checkout, with its bytes and untracked state unchanged, and is named on `residue_unattributed`. `finalize --check` reports the same declined paths. A forward edit of a file the worktree already holds, and the `#1077` overwrite refusal, are unchanged.
 
+### Changed
+
+- **Kaola-Workflow no longer adds a runtime dispatch or scheduling policy (#1111).** Active prompts
+  keep the native boundary: subagents follow the current harness schema, defaults, permissions, and
+  user instructions, and Kaola-Workflow defines no roles, models, or dispatch policy. The per-item
+  dispatch-or-inline rules, fan-out prescriptions, mandatory main-thread takeover, fixed 3–5 issue
+  batches, and shared-contract solo rule are gone from Next, Finalization, and compact recovery.
+  `templates/axioms.md` is no longer an active source; the two universal principles stay in
+  `templates/global/kaola-workflow-global.md`. Adapter prompts no longer name platform type
+  catalogs, default models, nesting, or concurrency counts. Dated route measurements remain in
+  `docs/runtime-capabilities.md`. Codex doctor and install output report the config values read
+  (`features.multi_agent_v2`, `model_reasoning_effort`, numeric fields when present) and do not
+  turn a missing flag or an effort value into a session capability, a dispatch posture, or an
+  inferred concurrency cap. Finalization records candidate, acceptance evidence, known failures or
+  unverified scope, and the existing validation measurement. It does not require a second QA pass
+  or a `.cache/doc-docking.md` `DOCKED`/`BLOCKED` ledger. See
+  [ADR 0030](docs/decisions/0030-forge-and-engineering-lifecycle.md).
+
 ## [12.3.1] - 2026-09-27
 
 ### Fixed

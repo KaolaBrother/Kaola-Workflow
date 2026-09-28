@@ -28,14 +28,15 @@ claim ──► write the mission ledger ──► run it ──► finalize ─
   only on the owner's answer — never as a side effect of installing or upgrading.
 - **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes the mission ledger
   `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, and runs it.
-- **`/kaola-workflow-finalize`** — validates, docks documentation, writes the summary, settles
-  closure, archives, commits, and sinks.
+- **`/kaola-workflow-finalize`** — records the acceptance evidence already produced, writes the
+  summary, settles closure, archives, commits, and sinks.
 
-Everything between the claim and finalization is the orchestrator's. It decides what to decompose,
-what to dispatch, at what width, and in what order, with the frontier in front of it — and nothing
-inspects that decision. There is no plan grammar, no freeze, no gate, no disjointness proof, no
-fan-out cap, and no refusal in the run design. See `decisions/0017-the-mission-list.md` for the
-derivation and `decisions/0027-the-mission-ledger.md` for the carrier.
+Everything between the claim and finalization is the executing agent's, inside the current
+harness. Kaola-Workflow does not choose subagent use, width, or order. It records the claim, the
+mission ledger, and the delivery. There is no plan grammar, no freeze, no dispatch policy, and no
+refusal in the run design. See `decisions/0017-the-mission-list.md` for the
+derivation, `decisions/0027-the-mission-ledger.md` for the carrier, and
+`decisions/0030-forge-and-engineering-lifecycle.md` for the runtime boundary.
 
 ## Global behavior, local facts
 

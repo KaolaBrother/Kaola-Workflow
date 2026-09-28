@@ -2,10 +2,13 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json` (`schema_version: 2`),
-loaded and validated by `scripts/runtime-adapter-facts.js`; this page explains its operational
-consequences and records the first-party evidence used through 2026-09-19. The authority records
-facts only: instruction loading, hook scope, native subagent routes and their availability, the
-compact-recovery carrier, and install scope.
+loaded and validated by `scripts/runtime-adapter-facts.js`. The authority records instruction
+loading, hook scope, compact-recovery carriers, and install scope. Rendered delegation guidance
+does not name type catalogs, models, nesting, or concurrency counts (#1111).
+
+The capability map below is a dated measurement through 2026-09-19. It was not re-probed on
+2026-09-28. It is evidence, not an instruction to call those tools or types. The live host schema
+wins.
 
 ## One repository authority
 
@@ -25,9 +28,10 @@ owner-chosen `CLAUDE.md` containing `@AGENTS.md` as a stated exception. The work
 environment requirement and does not provision or maintain the file. Codex, opencode, Kimi Code,
 Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
 
-## Capability map
+## Capability map (measurement through 2026-09-19)
 
-Kaola-Workflow installs no subagent profile on any runtime; every route below is the host's own.
+Kaola-Workflow installs no subagent profile on any runtime. The rows below record what was
+observed then. They are not copied into Next, Finalization, or compact recovery.
 
 | Runtime | Native dispatch | Native routes | Native limits that affect routing |
 | --- | --- | --- | --- |

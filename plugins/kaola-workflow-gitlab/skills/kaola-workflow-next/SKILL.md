@@ -29,23 +29,6 @@ concurrency, isolation, and resume. Where the native schema requires a type, pas
 reports, under its real meaning.
 Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.
 
-Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's
-choice never establishes a run-wide default. Keep one owner for the current cohesive production
-surface when handoff and integration cost exceed the benefit, but that scope does not absorb
-independent research, test authorship, documentation, or review items. Dispatch when it materially
-reduces main-context residue, lets a clean context check what your own cannot, or enables genuinely
-independent parallel work. Both modes are first-class; width follows the true work frontier. No
-dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the
-judgment.
-
-A subagent is an executor in a clean context, not a judge. Its handback is evidence. You hold the
-verdict, and you reach it by reading the candidate — the diff, the findings, the command output —
-never the `result` prose alone. Ask for small, structured handbacks rather than fanning out and
-reading everything. Fan out where breadth pays and every handback stays small: exploring,
-measuring, refuting one stated claim, reviewing the same frozen diff along different cuts
-(correctness, test custody, trust boundary), or producing candidates you then choose between. When
-a child keeps failing an item, take it over and finish it inline.
-
 Send a bounded, self-sufficient brief naming the outcome, evidence, worktree or commit, custody, and
 stop condition.
 
@@ -54,8 +37,8 @@ stop condition.
 
 Host: Codex. If the running host is not Codex, ignore this adapter section and follow the running host's own native subagent schema and catalog.
 
-Dispatch with the `spawn_agent` schema this Codex host exposes; `agent_type` names a type the host reports, such as the general `default`, implementation-owning `worker`, or read-heavy `explorer`, each under its real contract, and supported `fork_turns` and service-tier choices are preserved.
-Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; child model and reasoning effort follow Codex's own defaults and the user's configuration.
+Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.
+Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool.
 <!-- KW-RUNTIME-DELEGATION-END -->
 
 <!-- KW-RUNTIME-DISPATCH-END -->
@@ -78,8 +61,8 @@ forge-reorganization action and why; wait. Everything checkable remains yours to
 - If neither is named, start from `list-open` (below: at most 100 open issues, sorted by priority
   tier, then number; an empty list means unmeasured, not an empty backlog), then apply
   `kaola-workflow/.roadmap/_rules.md`, active folders, and archived summaries, and break ties by
-  scope. A shared contract/schema runs alone; otherwise prefer a closeable three-to-five issue set
-  when the frontier offers it.
+  scope. Respect the user's priority, the forge backlog, real dependencies, which workspace owns
+  the write, and whether the result can merge safely.
 
 State the selection aloud before you claim it, including any skipped frontier item. **Everything
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely
