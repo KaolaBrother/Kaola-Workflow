@@ -552,6 +552,7 @@ function snapshotHome(root) {
     assert.deepStrictEqual(skills.preflightSkills({ src: STAGED_SKILLS, dest, record }),
       { ok: true, conflicts: [] }, 'preflightSkills: clean dest is ok');
     seedSkill(dest, 'workflow-next', Buffer.from('# foreign\n'));
+    // spawn-class: cli-contract
     r = spawnSync(process.execPath, [cli, 'preflight', '--src', STAGED_SKILLS,
       '--dest', dest, '--record', record], { encoding: 'utf8' });
     assert.strictEqual(r.status, 1, 'preflight: foreign entry exits 1');
