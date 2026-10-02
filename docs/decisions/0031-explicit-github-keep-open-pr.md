@@ -16,6 +16,11 @@ stays open. Astra's standing closeout memo (SHA-256
 capability under Yanlei's standing authority, relayed 2026-10-02. This ADR records the delegated
 decision. It does not rewrite #1098.
 
+On 2026-10-02 the owner corrected issue #1113, and that correction is this capability's governing
+authorization. The scoped-adoption decision and any installer, adoption, activation, or uninstall
+scope are superseded and out of scope for this issue; none is implemented here. The memo and
+adoption records cited above remain historical motivation only. #1098 history is unchanged.
+
 ## Decision
 
 1. Default close mode is unchanged. A keep-open state that does not carry the explicit agreement is
