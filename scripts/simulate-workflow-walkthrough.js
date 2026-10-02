@@ -7950,6 +7950,217 @@ function testSinkPrKeepOpenRefusal() {
   }
 }
 
+// #1113: partial explicit intent must refuse before close-mode effects; OPEN reuse must refuse a
+// native closing association or an already-enabled auto-merge; a closing keyword associates only
+// the reference it immediately precedes. Full-URL references are not asserted here.
+function testExplicitKeepOpenPrP1Repairs() {
+  const sinkPr = require(sinkPrScript);
+  const nums = (text) => JSON.stringify([...sinkPr.closingIssueNumbers(text)].sort((a, b) => a - b));
+  assert(nums('Fixes #143') === '[143]', '#1113 scanner: Fixes #143 associates 143, got ' + nums('Fixes #143'));
+  assert(nums('closes #143') === '[143]', '#1113 scanner: closes #143 associates 143, got ' + nums('closes #143'));
+  assert(nums('Fixes other/repo#143') === '[]',
+    '#1113 scanner: a qualified reference is not this repository, got ' + nums('Fixes other/repo#143'));
+  assert(nums('Fix #999; related #143') === '[999]',
+    '#1113 scanner: the keyword associates only #999, got ' + nums('Fix #999; related #143'));
+
+  const gate = (args, text, members) => sinkPr.assessKeepOpenPr(args, [text], members);
+  const closeGate = gate(
+    { project: 'issue-7', branch: 'workflow/issue-7', issue: 7 },
+    '## Sink\nsink: pr\nissue_number: 7\nbranch: workflow/issue-7\n', [7]);
+  assert(closeGate.kind === 'close', '#1113: a marker-free state stays close mode, got ' + closeGate.kind);
+  const legacyGate = gate(
+    { project: 'issue-900', branch: 'workflow/issue-900', issue: 900 },
+    'issue_action: comment_keep_open\n', [900]);
+  assert(legacyGate.kind === 'legacy_refuse' && /merge-sink-only/.test(legacyGate.message),
+    '#1113: issue_action alone stays the #336/#1098 refusal, got ' + legacyGate.kind);
+  const dupText = '## Sink\nsink: pr\nissue_number: 143\nbranch: workflow/issue-143\n' +
+    'keep_open_pr: \nkeep_open_pr: explicit_singleton\n';
+  const dupGate = gate(
+    { project: 'issue-143', branch: 'workflow/issue-143', issue: 143 }, dupText, [143]);
+  assert(dupGate.kind === 'malformed' && dupGate.reason === 'ambiguous_identity',
+    '#1113: an empty line plus a second marker is ambiguous_identity, got ' + dupGate.reason);
+  const emptyGate = gate(
+    { project: 'issue-143', branch: 'workflow/issue-143', issue: 143 }, 'keep_open_pr: \n', [143]);
+  assert(emptyGate.kind === 'malformed' && emptyGate.reason === 'partial_marker',
+    '#1113: a lone empty keep_open_pr line is partial_marker, got ' + emptyGate.reason);
+
+  const explicitState = (issue, branch) =>
+    '## Project\nname: issue-' + issue + '\nstatus: active\n\n## Sink\nbranch: ' + branch +
+    '\nissue_number: ' + issue + '\nsink: pr\nissue_action: comment_keep_open\n' +
+    'keep_open_pr: explicit_singleton\n';
+
+  function runCase(tag, opts) {
+    const issue = opts.issue;
+    const project = 'issue-' + issue;
+    const branch = 'workflow/' + project;
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-1113-' + tag + '-')));
+    const remotePath = tmp + '-remote';
+    const homeDir = tmp + '-home';
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    try {
+      initGitRepoWithBareRemote(tmp);
+      G.git(tmp, ['checkout', '-q', 'main'], { env });
+      G.git(tmp, ['checkout', '-b', branch], { env });
+      const projectDir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), opts.state);
+      fs.writeFileSync(path.join(projectDir, 'finalization-summary.md'), '# Finalization\n');
+      G.git(tmp, ['add', 'kaola-workflow'], { env });
+      G.git(tmp, ['commit', '-m', opts.commitMessage || 'publish the run archive'], { env });
+      if (opts.pushBranch) G.git(tmp, ['push', 'origin', branch], { env });
+      const localBefore = G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim();
+      const remoteBefore = G.git(tmp, ['ls-remote', '--heads', 'origin', branch], { env }).stdout.toString();
+      writeSinkPrConfigHome(homeDir, { pr_auto_merge: true });
+      const binDir = path.join(tmp, '.bin');
+      const argvLog = writeSinkPrStubGh(binDir, opts.gh || { list: '[]' });
+      const argv = ['--project', project, '--branch', branch, '--issue', String(issue)];
+      if (opts.flag !== false) argv.push('--keep-open-pr', 'explicit_singleton');
+      // spawn-class: cli-contract
+      const result = spawnSync(process.execPath, [sinkPrScript, ...argv], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: {
+          ...sinkPrOnlineEnv(binDir, env),
+          HOME: homeDir,
+          USERPROFILE: homeDir,
+          KAOLA_WORKFLOW_OFFLINE: opts.offline ? '1' : '0'
+        }
+      });
+      return {
+        result,
+        calls: readGhArgvLog(argvLog),
+        localBefore,
+        localAfter: G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim(),
+        remoteBefore,
+        remoteAfter: G.git(tmp, ['ls-remote', '--heads', 'origin', branch], { env }).stdout.toString(),
+        state: fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8')
+      };
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(remotePath, { recursive: true, force: true });
+    }
+  }
+
+  function assertNoEffects(s, label) {
+    assert(!s.calls.some(c => c[0] === 'pr' && (c[1] === 'create' || c[1] === 'merge')),
+      label + ': must not create or merge, got ' + JSON.stringify(s.calls));
+    assert(!s.calls.some(c => c[0] === 'api'),
+      label + ': must not probe the merge queue, got ' + JSON.stringify(s.calls));
+    assert(s.localBefore === s.localAfter, label + ': the local branch must not move');
+    assert(s.remoteBefore === s.remoteAfter,
+      label + ': the remote branch must not move\nbefore: ' + s.remoteBefore + '\nafter: ' + s.remoteAfter);
+    assert(!s.state.includes('OFFLINE_PLACEHOLDER'), label + ': must not write an OFFLINE placeholder');
+  }
+
+  const dupState = '## Project\nname: issue-143\nstatus: active\n\n## Sink\nbranch: workflow/issue-143\n' +
+    'issue_number: 143\nsink: pr\nkeep_open_pr: \nkeep_open_pr: explicit_singleton\n';
+  const partial = runCase('partial', { issue: 143, state: dupState, flag: false });
+  assert(partial.result.status !== 0,
+    '#1113 P1-1: partial duplicate marker must refuse\nstderr: ' + partial.result.stderr);
+  assert(/explicit_keep_open_refused: ambiguous_identity/.test(partial.result.stderr),
+    '#1113 P1-1: refusal reason must be ambiguous_identity, got: ' + partial.result.stderr);
+  assertNoEffects(partial, '#1113 P1-1');
+
+  const partialOffline = runCase('partial-off', { issue: 143, state: dupState, flag: false, offline: true });
+  assert(partialOffline.result.status !== 0 && /explicit_keep_open_refused/.test(partialOffline.result.stderr),
+    '#1113 P1-1 OFFLINE: partial intent must refuse, got: ' + partialOffline.result.stderr);
+  assertNoEffects(partialOffline, '#1113 P1-1 OFFLINE');
+
+  const created = runCase('create', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    commitMessage: 'Fix #999; related #143\n\nFixes other/repo#143\n',
+    gh: { list: '[]', create: 'https://github.com/test/repo/pull/143' }
+  });
+  assert(created.result.status === 0,
+    '#1113 create: explicit singleton should exit 0\nstdout: ' + created.result.stdout +
+    '\nstderr: ' + created.result.stderr);
+  assert(/sink_pr: created/.test(created.result.stdout) &&
+    /pr_auto_merge: suppressed_request_only/.test(created.result.stdout),
+    '#1113 create: got ' + created.result.stdout);
+  const createCall = created.calls.find(c => c[0] === 'pr' && c[1] === 'create');
+  assert(createCall && !createCall.includes('--fill'),
+    '#1113 create: must not use --fill, got ' + JSON.stringify(createCall));
+  const createBody = createCall[createCall.indexOf('--body') + 1];
+  assert(String(createBody).startsWith('Keeps #143 open.') && !/Closes\s+#143/.test(createBody),
+    '#1113 create: body got ' + createBody);
+  assert(!created.calls.some(c => (c[0] === 'pr' && c[1] === 'merge') || c[0] === 'api'),
+    '#1113 create: must not merge or probe the queue, got ' + JSON.stringify(created.calls));
+  const listCall = created.calls.find(c => c[0] === 'pr' && c[1] === 'list');
+  const listJson = listCall && String(listCall[listCall.indexOf('--json') + 1]);
+  assert(listJson && listJson.includes('closingIssuesReferences') && listJson.includes('autoMergeRequest'),
+    '#1113 create: discovery must request the native fields, got ' + JSON.stringify(listCall));
+
+  for (const message of ['Fixes #143', 'closes #143']) {
+    const refused = runCase('scan-' + message.slice(0, 4), {
+      issue: 143,
+      state: explicitState(143, 'workflow/issue-143'),
+      commitMessage: message
+    });
+    assert(refused.result.status !== 0 && /explicit_keep_open_refused: closing_linkage/.test(refused.result.stderr),
+      '#1113 scanner: ' + JSON.stringify(message) + ' must refuse\nstderr: ' + refused.result.stderr);
+    assertNoEffects(refused, '#1113 scanner ' + message);
+  }
+
+  const openPr = (extra) => JSON.stringify([Object.assign({
+    url: 'https://github.com/test/repo/pull/143', number: 143, state: 'OPEN',
+    headRefName: 'workflow/issue-143', baseRefName: 'main',
+    title: 'Publish issue-143 (keeps #143 open)',
+    body: 'Keeps #143 open.\n\nRequest-only synthetic existing PR.\n'
+  }, extra)]);
+  const reused = runCase('reuse', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    pushBranch: true,
+    gh: { list: openPr({ closingIssuesReferences: [], autoMergeRequest: null }) }
+  });
+  assert(reused.result.status === 0,
+    '#1113 reuse: clean OPEN reuse should exit 0\nstdout: ' + reused.result.stdout +
+    '\nstderr: ' + reused.result.stderr);
+  assert(/sink_pr: reused/.test(reused.result.stdout) &&
+    /pr_auto_merge: suppressed_request_only/.test(reused.result.stdout),
+    '#1113 reuse: got ' + reused.result.stdout);
+  assert(!reused.calls.some(c => c[0] === 'pr' && (c[1] === 'create' || c[1] === 'merge')),
+    '#1113 reuse: must not create or merge, got ' + JSON.stringify(reused.calls));
+
+  const linked = runCase('native', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    pushBranch: true,
+    gh: { list: openPr({
+      closingIssuesReferences: [{ number: 143, url: 'https://github.com/test/repo/issues/143' }],
+      autoMergeRequest: null
+    }) }
+  });
+  assert(linked.result.status !== 0 && /explicit_keep_open_refused: native_closing_linkage/.test(linked.result.stderr),
+    '#1113 P1-2: native closing link must refuse\nstderr: ' + linked.result.stderr);
+  assertNoEffects(linked, '#1113 P1-2');
+
+  const autoOn = runCase('automerge', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    pushBranch: true,
+    gh: { list: openPr({
+      closingIssuesReferences: [],
+      autoMergeRequest: { enabledAt: '2026-10-02T00:00:00Z', mergeMethod: 'SQUASH' }
+    }) }
+  });
+  assert(autoOn.result.status !== 0 && /explicit_keep_open_refused: auto_merge_enabled/.test(autoOn.result.stderr),
+    '#1113 P1-3: enabled auto-merge must refuse\nstderr: ' + autoOn.result.stderr);
+  assertNoEffects(autoOn, '#1113 P1-3');
+
+  const unmeasured = runCase('unmeasured', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    pushBranch: true,
+    gh: { list: openPr({}) }
+  });
+  assert(unmeasured.result.status !== 0 &&
+    /explicit_keep_open_refused: native_closing_unmeasured/.test(unmeasured.result.stderr),
+    '#1113: an unmeasured closingIssuesReferences field must refuse\nstderr: ' + unmeasured.result.stderr);
+  assertNoEffects(unmeasured, '#1113 unmeasured');
+  console.log('testExplicitKeepOpenPrP1Repairs: PASSED');
+}
+
 // #1094 — the PR sink closes the whole claimed set: one `Closes #n` per member of `--issue-numbers`
 // (or of the state's issue_numbers line when the flag is absent); a singleton stays `Closes #N`.
 function testSinkPrClosesEveryMember() {
@@ -12971,6 +13182,7 @@ function buildRegistry() {
   add('testSinkMergeKeepOpenRequiresIssue',               testSinkMergeKeepOpenRequiresIssue);
   add('testSinkMergeKeepOpenArchivedStateGuard',          testSinkMergeKeepOpenArchivedStateGuard);
   add('testSinkPrKeepOpenRefusal',                        testSinkPrKeepOpenRefusal);
+  add('testExplicitKeepOpenPrP1Repairs',                  testExplicitKeepOpenPrP1Repairs);
   add('testSinkPrClosesEveryMember',                      testSinkPrClosesEveryMember);
   add('testSinkPrReusesExistingPr',                       testSinkPrReusesExistingPr);
   add('testSinkPrReentryIdempotent',                      testSinkPrReentryIdempotent);
