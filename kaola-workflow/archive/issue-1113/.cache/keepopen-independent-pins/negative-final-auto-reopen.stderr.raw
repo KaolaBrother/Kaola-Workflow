@@ -1,0 +1,3 @@
+AssertionError [ERR_ASSERTION]: archive-watch-closed: keep-open route automatically reopened the issue
+    at assertNoAutoMerge (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:92:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:258:7)

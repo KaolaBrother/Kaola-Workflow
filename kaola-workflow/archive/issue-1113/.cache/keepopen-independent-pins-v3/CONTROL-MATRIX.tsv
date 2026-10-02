@@ -1,0 +1,43 @@
+name	group	lane	commit	stages_tested	expected	v3_verdict	v2_verdict_on_v2_source	exit	refusal_detail	unsafe_effects	failed_checks
+safe-explicit-singleton-positive	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	one_request_only_no_close_or_merge	PASS	PASS	0		pr.create,git.push,request.record,archive	
+duplicate-action-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	ambiguous_identity		
+duplicate-branch-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	ambiguous_identity		
+duplicate-issue-number-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	ambiguous_identity		
+duplicate-member-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	ambiguous_identity		
+duplicate-repository-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	RED	RED	0		pr.create,git.push,request.record,archive	nonzeroExit,explicitRefusalDiagnostic,noUnsafeOperations,noArchiveOrPlaceholderMutation
+duplicate-digest-field	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	RED	RED	0		pr.create,git.push,request.record,archive	nonzeroExit,explicitRefusalDiagnostic,noUnsafeOperations,noArchiveOrPlaceholderMutation
+duplicate-claim-identity-section	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	RED	RED	0		pr.create,git.push,request.record,archive	nonzeroExit,explicitRefusalDiagnostic,noUnsafeOperations,noArchiveOrPlaceholderMutation
+duplicate-sink-section	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	ambiguous_identity		
+noninteger-state-issue-prefix	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+noninteger-state-member-prefix	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+nonnumeric-state-member-prefix	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+noninteger-cli-issue-prefix	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+noninteger-cli-member-prefix	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+duplicate-cli-member-token-after-normalization	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+noncanonical-cli-member-number	sink	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	request	refuse_before_any_publication_or_mutation	PASS	RED	1	malformed_issue		
+wctl-live-valid-positive	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a	liveWatch	watch_valid_explicit_kept_open	PASS	n/a (new v3 control)	0		claim.cleanup,claim.cleanup,archive,worktree.remove,closure.receipt	
+wctl-archive-valid-positive	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a	archiveReconcile	watch_valid_explicit_kept_open	PASS	n/a (new v3 control)	0		claim.cleanup,claim.cleanup,worktree.remove,closure.receipt	
+wctl-live-dup-keep-open-pr	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-dup-issue-action	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-dup-issue-number	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-dup-branch	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-dup-base-branch	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-dup-sink-section	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-live-mode-mismatch-action	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	mode_mismatch		
+wctl-live-noninteger-issue	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	malformed_issue		
+wctl-live-noncanonical-member	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	malformed_issue		
+wctl-live-bundle-members	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	bundle_refused		
+wctl-live-member-mismatch	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	issue_mismatch		
+wctl-live-missing-branch	watch	live	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	branch_mismatch		
+wctl-archive-dup-keep-open-pr	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-dup-issue-action	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-dup-issue-number	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-dup-branch	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-dup-base-branch	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-dup-sink-section	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	ambiguous_identity		
+wctl-archive-mode-mismatch-action	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	mode_mismatch		
+wctl-archive-noninteger-issue	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	malformed_issue		
+wctl-archive-noncanonical-member	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	malformed_issue		
+wctl-archive-bundle-members	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	bundle_refused		
+wctl-archive-member-mismatch	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	issue_mismatch		
+wctl-archive-missing-branch	watch	archive	1203f76510f5dff3418b18ae6b5db116e0c1899a		watch_refuse_before_archive_cleanup_or_receipt	PASS	n/a (new v3 control)	1	branch_mismatch		

@@ -1,0 +1,4 @@
+AssertionError [ERR_ASSERTION]: live-create: auto-merge or merge-queue operation occurred while pr_auto_merge=true
+    at assertNoAutoMerge (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:81:3)
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:107:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:169:7)

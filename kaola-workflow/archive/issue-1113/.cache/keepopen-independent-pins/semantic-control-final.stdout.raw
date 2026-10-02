@@ -1,0 +1,2 @@
+issue-1113 keep-open acceptance adapter: 42 scenarios passed
+coverage: singleton live/archive; default close/refusal; malformed identity and unsupported set refusals; linkage; request-only; retry identity; truthful live/archive watches

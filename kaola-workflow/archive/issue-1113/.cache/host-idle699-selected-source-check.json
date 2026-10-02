@@ -1,0 +1,279 @@
+{
+  "memo_sha256": "3eedcc40d7568d4a9bfa95a5890e1e5b28e687abf54ad812cc1cf0a28213747a",
+  "manifest_sha256": "4db73237051a156376e5b1f477be9fc9390bbfeb967cdb12678833f6cf5312f6",
+  "count": 45,
+  "all_match": true,
+  "rows": [
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kaola/owner-20261002-1727-standing-auth.json",
+      "expected": "fd4f3befa4cd575d32bb845e8a28796a04e6e9f63be77f6531b63e11fadf6ae1",
+      "actual": "fd4f3befa4cd575d32bb845e8a28796a04e6e9f63be77f6531b63e11fadf6ae1",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/AGENTS.md",
+      "expected": "ec371ac0f145f09fbae323d9515fb2f983934ae594466a1dec6be4b4657b6575",
+      "actual": "ec371ac0f145f09fbae323d9515fb2f983934ae594466a1dec6be4b4657b6575",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/AGENTS.md",
+      "expected": "ec371ac0f145f09fbae323d9515fb2f983934ae594466a1dec6be4b4657b6575",
+      "actual": "ec371ac0f145f09fbae323d9515fb2f983934ae594466a1dec6be4b4657b6575",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/workflow-state.md",
+      "expected": "39039ce58c8c34370437168fbf6db20763ad818ee350ca74f3dbf2cce45be8f5",
+      "actual": "39039ce58c8c34370437168fbf6db20763ad818ee350ca74f3dbf2cce45be8f5",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/finalization-summary.md",
+      "expected": "44d1dd65066392980b82bb09d2e7557fabf3f078b4cd8a933ae61c0722429a27",
+      "actual": "44d1dd65066392980b82bb09d2e7557fabf3f078b4cd8a933ae61c0722429a27",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/.ledger/issue-143.jsonl",
+      "expected": "cf31b82168185fe220d1b72ae1886225be597290568721dc112842cc9a37a121",
+      "actual": "cf31b82168185fe220d1b72ae1886225be597290568721dc112842cc9a37a121",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-acceptance.md",
+      "expected": "cb8fe58d0d5ddfb5b933712af4685ace9001ac3fdd5344f7a9dedad2926a8b36",
+      "actual": "cb8fe58d0d5ddfb5b933712af4685ace9001ac3fdd5344f7a9dedad2926a8b36",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-closeout-preparation-review.md",
+      "expected": "f5a804b5657c71bd8a2d550c6bb2c2b4ad2a12449fba1a41d515c854bf769bb4",
+      "actual": "f5a804b5657c71bd8a2d550c6bb2c2b4ad2a12449fba1a41d515c854bf769bb4",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-cpu-closeout-acceptance.md",
+      "expected": "31a84c67b0bc9829ba619e491cd4d0198648514ddb92623b45f8d3239a238df1",
+      "actual": "31a84c67b0bc9829ba619e491cd4d0198648514ddb92623b45f8d3239a238df1",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/lifecycle-receipts.json",
+      "expected": "48b62e944efe745557a5cf1254e1fc7ae5ed2bb8f7b94d9c4aec3ab9788b4d13",
+      "actual": "48b62e944efe745557a5cf1254e1fc7ae5ed2bb8f7b94d9c4aec3ab9788b4d13",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/final-validation.md",
+      "expected": "8d3b70d3a2aa24ae244891aefe9f45d5f04ec7aec15236431a1304c11b16fc0d",
+      "actual": "8d3b70d3a2aa24ae244891aefe9f45d5f04ec7aec15236431a1304c11b16fc0d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/cpu-closeout-02ef0883/identity.txt",
+      "expected": "2e437ffb3e1df5ac82905dcde005244e5de4067a60e915a7c574e19bf590eb3b",
+      "actual": "2e437ffb3e1df5ac82905dcde005244e5de4067a60e915a7c574e19bf590eb3b",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/research/issue-143-step-source-edge-adjudication-2026-10-02.md",
+      "expected": "a4c404438300c9a7f31de8ab0a2e008ee425a570405e0627e3effbd63f3ab213",
+      "actual": "a4c404438300c9a7f31de8ab0a2e008ee425a570405e0627e3effbd63f3ab213",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/README.md",
+      "expected": "5194b1b8074397a9374ca51dda80a6edc35da9a54fdfa620d77b9fad4e4fee18",
+      "actual": "5194b1b8074397a9374ca51dda80a6edc35da9a54fdfa620d77b9fad4e4fee18",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/decisions/decisions.md",
+      "expected": "fdb8535bec126921f1969a6b5219d8f914488422b84cb43f08d957f662cace40",
+      "actual": "fdb8535bec126921f1969a6b5219d8f914488422b84cb43f08d957f662cace40",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/reference/development-state.md",
+      "expected": "778aaaa370c5f70c9b9d2342cf1888bec627b50bfb639fc9eb2cf680733c4307",
+      "actual": "778aaaa370c5f70c9b9d2342cf1888bec627b50bfb639fc9eb2cf680733c4307",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/research/393-free-edge-gap-distribution.md",
+      "expected": "0b3c23cc62f0134e63e9b7d8a7f5294325fafd2e73bcae3be5edf1fe5a40c720",
+      "actual": "0b3c23cc62f0134e63e9b7d8a7f5294325fafd2e73bcae3be5edf1fe5a40c720",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/docs/reference/testing.md",
+      "expected": "bb66c186f22ee7dd831394dc4cbc3401423ff2f5e7a99669793c6256746d1c9f",
+      "actual": "bb66c186f22ee7dd831394dc4cbc3401423ff2f5e7a99669793c6256746d1c9f",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/crates/cadcore-verify/tests/probe_143_filleted_box.rs",
+      "expected": "eaed104dda89fd9141be5186c044227f0f7627f7305bb728e2ea3bd40ebd132e",
+      "actual": "eaed104dda89fd9141be5186c044227f0f7627f7305bb728e2ea3bd40ebd132e",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/crates/cadcore-step/src/lib.rs",
+      "expected": "1b391db3d302d0ed52a46770ea15528e66d83cc787888ec734406826fe9a18f2",
+      "actual": "1b391db3d302d0ed52a46770ea15528e66d83cc787888ec734406826fe9a18f2",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/crates/cadcore-verify/tests/golden_comparison.rs",
+      "expected": "9eca87aba4f33ec9e72a78dea04b93c33a92f2eb0d1e6b17cce6f63a844f57ad",
+      "actual": "9eca87aba4f33ec9e72a78dea04b93c33a92f2eb0d1e6b17cce6f63a844f57ad",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/tests/gate_renderer_pin.json",
+      "expected": "1e3f0ddce388789b7106c2106065396c4575a336b6c7468af4ec42208f3f429b",
+      "actual": "1e3f0ddce388789b7106c2106065396c4575a336b6c7468af4ec42208f3f429b",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.kw/worktrees/issue-143/.claude/skills/vrpcadcore-gates/rules/verification-gates.md",
+      "expected": "59133a1ab9f23d3185e37dc5c7701e9de345a23d4316cf3da4d730352b9324a9",
+      "actual": "59133a1ab9f23d3185e37dc5c7701e9de345a23d4316cf3da4d730352b9324a9",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/skills/workflow-next/SKILL.md",
+      "expected": "ef0817158253f89ee84d680e3139217b6059d463452404b2b2c0c006e21c314a",
+      "actual": "ef0817158253f89ee84d680e3139217b6059d463452404b2b2c0c006e21c314a",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/skills/kaola-workflow-finalize/SKILL.md",
+      "expected": "4362cc9ab5fe524976e11cdb3230963a07c90d3164ba428a5cf2026084bf9b20",
+      "actual": "4362cc9ab5fe524976e11cdb3230963a07c90d3164ba428a5cf2026084bf9b20",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/skills/kaola-workflow-finalize/SKILL.md",
+      "expected": "28a53fe83fa44e89d131e89b452503a3526ab7f46af7ec81b19141025e7ea51a",
+      "actual": "28a53fe83fa44e89d131e89b452503a3526ab7f46af7ec81b19141025e7ea51a",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/AGENTS.md",
+      "expected": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29",
+      "actual": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/package.json",
+      "expected": "4304893c7c7c7edabdbc96b80fb7854b5242f09ffa3ab91e1a3b943012559fa5",
+      "actual": "4304893c7c7c7edabdbc96b80fb7854b5242f09ffa3ab91e1a3b943012559fa5",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/templates/routing/finalize.skeleton.md",
+      "expected": "02048e1ba98ec134571d03fb51cc62406cd0788aaff07e929de5858d9610d6ad",
+      "actual": "02048e1ba98ec134571d03fb51cc62406cd0788aaff07e929de5858d9610d6ad",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/templates/routing/slots.js",
+      "expected": "a0d03ec6f3bc36924a718c19d095f79c26cc81e9245951ee5f479276ebba3523",
+      "actual": "a0d03ec6f3bc36924a718c19d095f79c26cc81e9245951ee5f479276ebba3523",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/scripts/simulate-workflow-walkthrough.js",
+      "expected": "f70059744c0ecbd132fa81bdebb811b26ad5a010a85e478badb56556a7afa0a5",
+      "actual": "f70059744c0ecbd132fa81bdebb811b26ad5a010a85e478badb56556a7afa0a5",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "actual": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "actual": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-sink-merge.js",
+      "expected": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "actual": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-closure-contract.js",
+      "expected": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "actual": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "actual": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "actual": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-sink-merge.js",
+      "expected": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "actual": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-closure-contract.js",
+      "expected": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "actual": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "actual": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "actual": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/scripts/kaola-workflow-sink-merge.js",
+      "expected": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "actual": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/scripts/kaola-workflow-closure-contract.js",
+      "expected": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "actual": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-active-folders.js",
+      "expected": "b7b21a2eb66022aa62a2c00cbbf4d519e2389fe1a66509a53b58ab863eb287b7",
+      "actual": "b7b21a2eb66022aa62a2c00cbbf4d519e2389fe1a66509a53b58ab863eb287b7",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-closure-audit.js",
+      "expected": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e",
+      "actual": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e",
+      "match": true
+    }
+  ],
+  "scope": "selected source/context identity check, not runtime QA"
+}

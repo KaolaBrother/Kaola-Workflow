@@ -1,0 +1,8 @@
+worktree /Users/ylmacstudio/Workspace/kaola-workflow
+HEAD fe7e4443a8c367cfc111c65755191ae6790e810e
+branch refs/heads/main
+
+worktree /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+HEAD fe7e4443a8c367cfc111c65755191ae6790e810e
+branch refs/heads/workflow/issue-1113
+

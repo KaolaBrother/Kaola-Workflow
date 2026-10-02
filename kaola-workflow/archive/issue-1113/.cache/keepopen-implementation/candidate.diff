@@ -1,0 +1,1973 @@
+# frozen candidate for Host review
+# base fe7e4443a8c367cfc111c65755191ae6790e810e
+# worktree /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+# branch workflow/issue-1113
+# uncommitted; not a git commit
+# part 1: git diff HEAD (tracked)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 461a9653..2d060d01 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,11 @@
+ # Changelog
+ 
++## [Unreleased]
++
++### Added
++
++- **GitHub explicit singleton keep-open research/artifact PR (#1113).** `kaola-workflow-sink-pr.js` accepts `--keep-open-pr explicit_singleton` only together with durable `issue_action: comment_keep_open`, `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue. The request body does not use a closing keyword, commit messages that would close the issue are refused before push, and the mode never queues or auto-merges even when `pr_auto_merge` is true. `watch-pr` records an intentionally open issue as `kept_open`, a later CLOSED issue as `keep_open_violation` (no reopen), and an unreadable probe as `unknown`. Default close mode and the #336/#1098 merge-sink-only keep-open refusal are unchanged. GitLab and Gitea do not gain the mode. See ADR 0031.
++
+ ## [12.4.0] - 2026-09-28
+ 
+ ### Fixed
+diff --git a/README.md b/README.md
+index 03cf7794..231247ba 100644
+--- a/README.md
++++ b/README.md
+@@ -36,7 +36,12 @@ run's archive with it, and once that request merges `watch-pr`/`watch-mr` reconc
+ when auto-merge is opted in, the PR sink honors a base branch that requires a merge queue: it probes
+ once and, on a queue branch, hands the PR to the queue with `gh pr merge <url> --auto` (the queue
+ picks the merge method, and the branch is not deleted) instead of the direct squash call, which the
+-forge rejects there; every other branch, forge, and config keeps the previous behavior. The merge
++forge rejects there; every other branch, forge, and config keeps the previous behavior. GitHub has one
++explicit singleton keep-open request (`--keep-open-pr explicit_singleton` with durable
++`keep_open_pr: explicit_singleton`, `issue_action: comment_keep_open`, and `sink: pr` on exactly one
++issue). It publishes a review request that does not close the issue, and it never queues or
++auto-merges, even when `pr_auto_merge` is true. The default close path and the older keep-open
++refusal stay in place. GitLab and Gitea do not have this mode. The merge
+ sink also reports what it found: every envelope names
+ whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private
+ integration worktree rather than the shared checkout, so it never switches or rebases your working
+diff --git a/commands/kaola-workflow-finalize.md b/commands/kaola-workflow-finalize.md
+index 8bee3079..7e739305 100644
+--- a/commands/kaola-workflow-finalize.md
++++ b/commands/kaola-workflow-finalize.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -153,6 +156,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -176,10 +180,13 @@ The archive still fails loudly if it would lose a file. Every run file must land
+ 
+ ```bash
+ # keep-open is merge-sink-only — a PR sink would close the kept-open issue.
+-if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
++# Explicit singleton is the one supported request-only PR. Any other keep-open request sink still stops here.
++if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ] && [ "$SINK_KEEP_OPEN_PR" != explicit_singleton ]; then exit 1; fi
+ case "$SINK_KIND" in
+   pr)
+-    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}
++    SINK_KEEP_OPEN_PR_FLAG=""
++    if [ "$SINK_KEEP_OPEN_PR" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG="--keep-open-pr explicit_singleton"; fi
++    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}
+     ;;
+   merge|*)
+     node "$KAOLA_SCRIPTS/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json
+@@ -202,6 +209,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/docs/README.md b/docs/README.md
+index c8d35bff..11073cfd 100644
+--- a/docs/README.md
++++ b/docs/README.md
+@@ -49,6 +49,9 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
+ 
+ ## Decisions
+ 
++- **[0031 — Explicit GitHub singleton keep-open PR](decisions/0031-explicit-github-keep-open-pr.md)**
++  — #1113. #1098 D4=(a) stays the historical default. One explicit GitHub singleton may publish a
++  request-only PR that does not close the issue.
+ - **[0030 — Forge and engineering lifecycle, no runtime bias](decisions/0030-forge-and-engineering-lifecycle.md)**
+   — #1111. Supersedes ADR 0029's retained dispatch-or-inline judgment. Active prompts follow the
+   host. Per-issue QA and documentation docking are not a second ceremony.
+diff --git a/docs/api.md b/docs/api.md
+index aadabb14..fc122f7b 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -1390,7 +1390,8 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
+ - **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` /
+   `kaola-gitea-workflow-sink-pr.js`.
+ - **Usage**: `--branch B --project P [--issue N] [--issue-numbers A,B]`. Finalize passes the
+-  claimed member set as `--issue-numbers`, the same set the merge sink takes.
++  claimed member set as `--issue-numbers`, the same set the merge sink takes. GitHub only, and only
++  for the explicit singleton below: `--keep-open-pr explicit_singleton`. Any other value is refused.
+ - **Main checkout**: every project-directory read and write targets the MAIN checkout
+   (`resolveMainRoot`), not the linked worktree's own toplevel. A folder that is neither live
+   (`kaola-workflow/{project}/`) nor archived (`kaola-workflow/archive/{project}/`) is refused before
+@@ -1436,12 +1437,33 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
+   false and when the probe itself failed or could not be parsed; `failed` means the merge call threw
+   (still warning-only on stderr, still exit 0). Before #1099 the direct argv ran unconditionally, and
+   on a queue-required branch gh ≥2.64.0 rejects `--delete-branch` outright, so the sink warned and
+-  exited 0 while the PR stayed open and never entered the queue.
++  exited 0 while the PR stayed open and never entered the queue. Explicit singleton keep-open mode
++  never enters this block: it writes `pr_auto_merge: suppressed_request_only` and does not probe or
++  call `gh pr merge`, even when `pr_auto_merge` is true. It does not edit the config file.
+ - **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
+   the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
+   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
+   is always a member. A singleton claim writes exactly `Closes #N`, as before. Keep-open stays
+   merge-sink-only: the sink refuses a project carrying `issue_action: comment_keep_open`.
++- **Explicit singleton GitHub keep-open (#1113)**: the one supported exception. It requires the flag
++  value `explicit_singleton` together with durable `issue_action: comment_keep_open`,
++  `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue whose `issue_number`,
++  `branch`, and optional `issue_numbers` / `base_branch` agree with the invocation. A bundle, another
++  forge, a partial marker, or a mismatched issue, branch, base, or head is refused before any push
++  or create (`explicit_keep_open_refused`). The created body is `Keeps #N open.` plus non-closing
++  sentences; the title is `Publish {project} (keeps #N open)`. Commit messages reachable from the
++  head and not from the base are scanned for a closing keyword on the same line as `#N`
++  (`close`/`fix`/`resolve` and their inflections, including `owner/repo#N`). An unsafe body, title,
++  or commit refuses before effects. An OPEN request is reused only when its text names `#N` and does
++  not close it. A MERGED request is not republished: stdout is `pr_request: request_only`,
++  `publication: already_published`, `mainline_publication: pending_reconciliation`,
++  `keep_open_linkage: clean|closing_present`, then `sink_pr: already_merged`. A closing keyword on
++  that merged text is noted on stderr and does not open a second PR. CLOSED-unmerged stays
++  `pr_closed_unmerged` with no mutation. Created or reused success prints
++  `pr_auto_merge: suppressed_request_only`, `pr_request: request_only`,
++  `publication: request_published`, `mainline_publication: pending`, then `sink_pr: created|reused`.
++  The durable record adds `keep_open_pr`, `pr_request`, and `mainline_publication` only in this mode.
++  OFFLINE refuses this mode before writing a placeholder. Close mode's OFFLINE placeholder is unchanged.
+ - **Exit codes**: `0` created/reused/already-merged and recorded · `1` push, creation, probe failure
+   (`pr_probe_failed` / `mr_probe_failed` on a durable record), or a reuse/closed-unmerged refusal.
+ - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` record instead of real
+@@ -1506,7 +1528,12 @@ For a completed linked issue N:
+ - `branch-worktree-resolved` — neither `worktree_removed` nor `branch_removed` is `failed`.
+ - `remote-members-closed` — for a bundle, every member of `issue_numbers` is closed. A member left
+   in `failed_issue_closures` or `open_issues` while online is a violation. Never fires for
+-  single-issue receipts.
++  single-issue receipts that do not carry those arrays. It also does not fire when
++  `keep_open_pr` is `explicit_singleton` and `keep_open_observation` is `intentionally_kept_open`.
++  A CLOSED explicit observation adds `keep-open-pr-violated`. An unreadable explicit probe records
++  the issue in `failed_issue_closures` and adds `keep-open-pr-unknown`; that same array also trips
++  `remote-members-closed`, because the skip applies only to `intentionally_kept_open`. Those two
++  new ids are not entries in `CLOSURE_INVARIANTS`.
+ 
+ `ok` is `true` only when `violations` is empty.
+ 
+@@ -1535,7 +1562,7 @@ success.
+   "issue_number": "N",
+   "archive": "closed|abandoned|skipped|failed",
+   "anchored_root": "/absolute/path/to/main/root",
+-  "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed",
++  "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed|unknown",
+   "closure": { "attempted": [], "closed": [], "failed": [], "skipped_offline": [], "kept_open": [] },
+   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
+   "worktree_removed": "removed|missing|kept|failed",
+@@ -1580,7 +1607,17 @@ comment_keep_open` (written at the closure decision; default `close` when absent
+ sink under keep-open; a `sink-merge` exit-3 is a blocked refusal requiring manual remediation rather
+ than an auto-pivot to a `Closes #N` PR; and `sink-pr.js` / `sink-mr.js` themselves refuse when the
+ live or archived state carries `issue_action: comment_keep_open`. `sink-merge` also re-reads the
+-archived state and honors the field even if the flag was not passed.
++archived state and honors the field even if the flag was not passed. That refusal is still the
++default, including #1098 D4=(a). #1113 adds one GitHub exception, not a replacement: durable
++`keep_open_pr: explicit_singleton` plus `--keep-open-pr explicit_singleton` on a singleton `sink: pr`
++run. The watcher then records `keep_open_pr` and `keep_open_observation` after
++`buildClosureReceipt()`. An issue observed open is `remote_issue_closed: kept_open`,
++`keep_open_observation: intentionally_kept_open`, and closeout `intentionally_kept_open`, with the
++issue still listed in `open_issues`. An issue observed closed is `remote_issue_closed: failed`,
++`keep_open_observation: keep_open_violation`, and closeout `keep_open_violation`. The disposition is
++`keep-open-violation`. Nothing reopens the issue and nothing closes it by hand. An unavailable probe
++is `remote_issue_closed: unknown` and `keep_open_observation: unknown`, not `skipped_offline` and not
++a success. GitLab and Gitea do not emit this mode.
+ 
+ **Bundle projects — additive receipt fields.** Attached after `buildClosureReceipt()` returns;
+ absent on single-issue receipts.
+@@ -1640,7 +1677,11 @@ emitted.
+ `cleanups[]` and `warnings[]` are preserved for backward compatibility; `receipt` and
+ `closure_invariants` are additive. On the MERGED lane the disposition is OBSERVATION-derived via
+ `probeIssueState`: `closed` when observed closed, `kept-open` when observed open (a merged PR with
+-no close keyword), `unknown` when the probe is unavailable.
++no close keyword), `unknown` when the probe is unavailable. Default close-mode vocabulary stays,
++including `skipped_offline` for a singleton open close-mode PR. Explicit singleton keep-open
++overrides that token after the same probe: open stays `kept-open` with `remote_issue_closed:
++kept_open`; closed becomes disposition `keep-open-violation` with `remote_issue_closed: failed`;
++an unavailable probe stays disposition `unknown` with `remote_issue_closed: unknown`.
+ 
+ **`reconciled[]` (archived `sink: pr` / `sink: mr` runs).** The live-folder loop above never sees a
+ standard PR-path run again, because finalize archives it before the sink runs. `reconciled[]` is the
+@@ -1676,7 +1717,10 @@ last carries `reason: 'pr_closed_unmerged'` / `'mr_closed_unmerged'`. On the pub
+ is `published` when the archive reached `origin/<default>`, else `local_only` (the pre-#1098 legacy
+ shape, reported and not repaired); `closeout` is `closed` when every member's issue is observed
+ closed, else `incomplete`; `main_checkout` is `advanced` or a `behind: ...` string naming the exact
+-refusal. GitLab entries carry `mr_url` where GitHub and Gitea carry `pr_url`. The key is emitted only
++refusal. An explicit singleton keep-open archive does not report closeout `closed` for an
++intentionally open issue: closeout is `intentionally_kept_open`, `keep_open_violation`, or `unknown`.
++Run archive status `closed` still means the run archived. A violation or unknown observation adds
++`warnings` on that reconciled item. GitLab entries carry `mr_url` where GitHub and Gitea carry `pr_url`. The key is emitted only
+ when at least one run reconciles.
+ 
+ ### Closure history
+diff --git a/docs/architecture.md b/docs/architecture.md
+index b2d59ebe..ec195a22 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -356,6 +356,11 @@ on GitLab), rewriting the other forge's noun. A merge sink that exits 3 (merge-i
+ permission denied) can pivot to a PR, except under keep-open, where a PR body's `Closes #N` would
+ close the issue the run deliberately kept open.
+ 
++#1113 does not remove that rule. The default keep-open path is still merge-sink-only (#1098 D4=(a)).
++One GitHub singleton may opt in with `keep_open_pr: explicit_singleton`. That request carries no
++closing linkage, is not queued, and is not auto-merged. The watcher treats a later CLOSED issue as a
++keep-open violation and does not reopen it. GitLab and Gitea stay on the refusal.
++
+ ### Closure
+ 
+ `kaola-workflow-closure-contract.js` holds the machine-readable receipt schema; every closure path
+diff --git a/docs/workflow-state-contract.md b/docs/workflow-state-contract.md
+index cf290649..a9c84a03 100644
+--- a/docs/workflow-state-contract.md
++++ b/docs/workflow-state-contract.md
+@@ -248,7 +248,10 @@ progress journal or execution plan. Its live blocks are:
+ 
+ - `## Project` — `name` and `status`, plus the issue identity carried by the claim identity block.
+ - `## Sink` — issue number, sink mode (`merge` or `pr`), branch, worktree path when known,
+-  `run_posture`, and optional keep-open action. The sink fields are the durable ownership and
++  `run_posture`, and optional keep-open action. `issue_action: comment_keep_open` without
++  `keep_open_pr` remains the historical merge-sink-only keep-open. `keep_open_pr: explicit_singleton`
++  is the GitHub-only #1113 marker and is meaningful only together with that action, `sink: pr`, and
++  exactly one issue. The sink fields are the durable ownership and
+   integration facts; an active run has no executable resume pointer.
+ - Claim-time liveness — `main_root`, `session_marker`, and `claim_ts`. `main_root` is the resolved
+   main-repository authority; `session_marker` identifies the claiming session; `claim_ts` is the
+diff --git a/plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md b/plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md
+index 964efc2f..683a2721 100644
+--- a/plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md
++++ b/plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -153,6 +156,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -202,6 +206,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js b/plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js
+index c6b28773..c407c9be 100644
+--- a/plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js
++++ b/plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js
+@@ -27,7 +27,9 @@ const CLOSURE_RECEIPT_FIELDS = {
+   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
+   // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
+   // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
+-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
++  // #1113: `unknown` is the explicit singleton keep-open probe token when the forge state cannot
++  // be read. It is not a success and it is not `skipped_offline`. Only that GitHub watcher emits it.
++  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed', 'unknown'],
+   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
+   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
+   branch_removed: ['removed', 'kept', 'failed'],
+diff --git a/plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md b/plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md
+index f2102d54..92e1d829 100644
+--- a/plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md
++++ b/plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -153,6 +156,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -202,6 +206,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md b/plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md
+index 5cf14129..df460ea7 100644
+--- a/plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md
++++ b/plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -154,6 +157,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -203,6 +207,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js b/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js
+index c6b28773..c407c9be 100644
+--- a/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js
++++ b/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js
+@@ -27,7 +27,9 @@ const CLOSURE_RECEIPT_FIELDS = {
+   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
+   // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
+   // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
+-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
++  // #1113: `unknown` is the explicit singleton keep-open probe token when the forge state cannot
++  // be read. It is not a success and it is not `skipped_offline`. Only that GitHub watcher emits it.
++  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed', 'unknown'],
+   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
+   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
+   branch_removed: ['removed', 'kept', 'failed'],
+diff --git a/plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md b/plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md
+index c33d93d3..6432e944 100644
+--- a/plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md
++++ b/plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -154,6 +157,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -203,6 +207,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js b/plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js
+index 0f6db09e..bb7b6d23 100644
+--- a/plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js
++++ b/plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js
+@@ -221,7 +221,10 @@ function parseStateFile(stateFile) {
+     // Absent in pre-#579 state files → empty string (backward compat).
+     main_root: field(content, 'main_root') || '',
+     session_marker: field(content, 'session_marker') || '',
+-    claim_ts: field(content, 'claim_ts') || ''
++    claim_ts: field(content, 'claim_ts') || '',
++    // #1113: additive readers. Empty when the line is absent. Not part of SHARED_STATE_FIELDS.
++    issue_action: field(content, 'issue_action') || '',
++    keep_open_pr: field(content, 'keep_open_pr') || ''
+   };
+ }
+ 
+@@ -277,7 +280,10 @@ function readActiveFolders(root, options) {
+       // #579: liveness-marker fields (empty string when absent — pre-#579 backward compat).
+       main_root: state.main_root || '',
+       session_marker: state.session_marker || '',
+-      claim_ts: state.claim_ts || ''
++      claim_ts: state.claim_ts || '',
++      // #1113: additive. Empty string when the state file has no such line.
++      issue_action: state.issue_action || '',
++      keep_open_pr: state.keep_open_pr || ''
+     };
+     if (opts.includeContent) item.content = state.content;
+     result.push(item);
+diff --git a/plugins/kaola-workflow/scripts/kaola-workflow-claim.js b/plugins/kaola-workflow/scripts/kaola-workflow-claim.js
+index a46a2d7e..00386fe6 100644
+--- a/plugins/kaola-workflow/scripts/kaola-workflow-claim.js
++++ b/plugins/kaola-workflow/scripts/kaola-workflow-claim.js
+@@ -3308,7 +3308,12 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
+   // invariant in that case (the members WILL close at sink). sink-merge / watch-pr (post-sink) leave
+   // close_disposition unset, so the invariant fires there truthfully on a real partial close.
+   const closePending = receipt.close_disposition === 'close_pending';
+-  if (!abandoned && !closePending && unclosedMembers.length > 0) {
++  // #1113: an explicit singleton keep-open PR records the issue in open_issues while it is
++  // intentionally still open. That is not a partial close. A CLOSED issue or an unknown probe
++  // is a dedicated violation below, not a successful close.
++  const explicitKeptOpen = receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++    receipt.keep_open_observation === 'intentionally_kept_open';
++  if (!abandoned && !closePending && !explicitKeptOpen && unclosedMembers.length > 0) {
+     const invMc = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-members-closed'; });
+     violations.push({
+       id: 'remote-members-closed',
+@@ -3334,6 +3339,22 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
+       });
+     }
+   }
++  // #1113: explicit singleton keep-open observations that are not a successful open issue.
++  // Additive ids; they are not new entries in CLOSURE_INVARIANTS. No reopen and no manual close.
++  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++      receipt.keep_open_observation === 'keep_open_violation') {
++    violations.push({
++      id: 'keep-open-pr-violated',
++      description: 'explicit singleton keep-open PR observed the issue CLOSED. No reopen was attempted.'
++    });
++  }
++  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++      receipt.keep_open_observation === 'unknown') {
++    violations.push({
++      id: 'keep-open-pr-unknown',
++      description: 'explicit singleton keep-open PR probe is unknown. This is not a successful observation.'
++    });
++  }
+   return { ok: violations.length === 0, violations };
+ }
+ 
+@@ -6795,6 +6816,54 @@ function cmdVerifySink() {
+   output({ project: args.project, ok, checks, reasons }, ok ? 0 : 1);
+ }
+ 
++// #1113: true only for the explicit singleton GitHub keep-open agreement. An absent sink is the
++// historical merge default and is not this mode. A bundle, or a one-entry issue_numbers list that
++// disagrees with issue_number, is not this mode.
++function isExplicitSingletonKeepOpen(content) {
++  if (!content) return false;
++  if (field(content, 'issue_action') !== 'comment_keep_open') return false;
++  if (field(content, 'keep_open_pr') !== 'explicit_singleton') return false;
++  if (field(content, 'sink') !== 'pr') return false;
++  const issue = parseInt(field(content, 'issue_number'), 10);
++  const raw = field(content, 'issue_numbers');
++  const members = raw
++    ? raw.split(',').map(function (s) { return parseInt(s.trim(), 10); }).filter(function (n) { return Number.isFinite(n) && n > 0; })
++    : [];
++  if (members.length > 1) return false;
++  if (members.length === 1 && Number.isFinite(issue) && members[0] !== issue) return false;
++  if (!(Number.isFinite(issue) && issue > 0) && members.length !== 1) return false;
++  return true;
++}
++
++function explicitKeepOpenObservation(probeState) {
++  if (probeState === 'open') {
++    return { remote: 'kept_open', observation: 'intentionally_kept_open', closeout: 'intentionally_kept_open' };
++  }
++  if (probeState === 'closed') {
++    return { remote: 'failed', observation: 'keep_open_violation', closeout: 'keep_open_violation' };
++  }
++  return { remote: 'unknown', observation: 'unknown', closeout: 'unknown' };
++}
++
++function attachExplicitKeepOpenReceipt(receipt, issueNumber, probeState, observation) {
++  receipt.keep_open_pr = 'explicit_singleton';
++  receipt.keep_open_observation = observation;
++  const n = issueNumber;
++  if (probeState === 'open') {
++    receipt.open_issues = [n];
++    receipt.closed_issues = [];
++    receipt.failed_issue_closures = [];
++  } else if (probeState === 'closed') {
++    receipt.closed_issues = [n];
++    receipt.open_issues = [];
++    receipt.failed_issue_closures = [];
++  } else {
++    receipt.failed_issue_closures = [n];
++    receipt.open_issues = [];
++    receipt.closed_issues = [];
++  }
++}
++
+ // #1098 §2.2 — post-merge reconciliation of ARCHIVED `sink: pr` runs. The standard PR path
+ // archives BEFORE the sink runs, so the live-folder loop above never sees it; this face scans the
+ // MAIN checkout's archive band instead. Bounded and stateless by construction: a run leaves the
+@@ -6928,7 +6997,20 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+       else if (p.state === 'unavailable') mFailed.push(n);
+       else mOpen.push(n);
+     }
+-    const closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
++    let closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
++    let remoteToken = closeout === 'closed' ? 'already_closed' : 'partial';
++    // #1113: an explicit singleton that is still OPEN is not closeout closed. A CLOSED issue is a
++    // keep-open violation. A mixed or unavailable probe is unknown. Nothing is reopened or closed.
++    let explicitObs = null;
++    let explicitProbe = null;
++    if (isExplicitSingletonKeepOpen(content)) {
++      if (mClosed.length === members.length) explicitProbe = 'closed';
++      else if (mOpen.length === members.length && mFailed.length === 0) explicitProbe = 'open';
++      else explicitProbe = 'unavailable';
++      explicitObs = explicitKeepOpenObservation(explicitProbe);
++      closeout = explicitObs.closeout;
++      remoteToken = explicitObs.remote;
++    }
+     // 4. Idempotent cleanup: the advisory claim per member, the run's worktree.
+     let claimLabelStatus;
+     for (const n of members) {
+@@ -6951,7 +7033,7 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+     //    archiveProjectDirSafely, no merge, no mainline push.
+     const receipt = buildClosureReceipt(name, issueNumber, {
+       archive: 'closed',
+-      remote_issue_closed: closeout === 'closed' ? 'already_closed' : 'partial',
++      remote_issue_closed: remoteToken,
+       claim_label_removed: claimLabelStatus,
+       worktree_removed: worktreeRemoved,
+       branch_removed: 'kept'
+@@ -6960,9 +7042,10 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+     receipt.closed_issues = mClosed.slice().sort((a, b) => a - b);
+     receipt.failed_issue_closures = mFailed.slice().sort((a, b) => a - b);
+     receipt.open_issues = mOpen.slice().sort((a, b) => a - b);
++    if (explicitObs) attachExplicitKeepOpenReceipt(receipt, issueNumber, explicitProbe, explicitObs.observation);
+     const archiveDir = path.join(root, archiveRel);
+     const folderInvariants = checkClosureInvariants(root, receipt, fs.existsSync(archiveDir) ? archiveDir : undefined);
+-    out.push({
++    const reconciledItem = {
+       folder: name,
+       pr_url: prUrl,
+       publication: 'published',
+@@ -6971,7 +7054,13 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+       main_checkout: mainCheckout,
+       receipt: receipt,
+       closure_invariants: folderInvariants
+-    });
++    };
++    if (explicitObs && explicitObs.observation === 'keep_open_violation') {
++      reconciledItem.warnings = ['issue CLOSED while explicit keep-open was requested; no reopen was attempted'];
++    } else if (explicitObs && explicitObs.observation === 'unknown') {
++      reconciledItem.warnings = ['issue probe unknown; not a successful keep-open observation'];
++    }
++    out.push(reconciledItem);
+   }
+   return out;
+ }
+@@ -7006,6 +7095,11 @@ function cmdWatchPr() {
+     watched++;
+     liveProcessed.add(folder.project); // #1098 §2.2: exclude from this run's reconciliation face
+     if (state === 'MERGED') {
++      // #1113: read explicit-mode state BEFORE archive moves the file. The archive call itself
++      // stays unchanged (keepOpen is still unused inside archiveProjectDir).
++      let explicitStateText = '';
++      try { explicitStateText = fs.readFileSync(folder.state_file, 'utf8'); } catch (_) {}
++      const explicitKeep = isExplicitSingletonKeepOpen(explicitStateText);
+       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
+       if (!closureContract.archiveSucceeded(archiveResult)) {
+         // #906: both halves — see cmdRelease. An entry that could not be compared refuses with an
+@@ -7038,7 +7132,7 @@ function cmdWatchPr() {
+       // closed issue — no close keyword keeps the issue open, the keep-open PR-sink case). watch-pr
+       // is online by construction (OFFLINE early-returns above); probeIssueState catches/degrades.
+       const dispProbe = probeIssueState(folder.issue_number);
+-      const issueDisposition = dispProbe.state === 'closed' ? 'closed'
++      let issueDisposition = dispProbe.state === 'closed' ? 'closed'
+         : (dispProbe.state === 'open' ? 'kept-open' : 'unknown');
+       // #369: bundle-aware truthful receipt. watch-pr is online by construction, so for a bundle we
+       // probe EVERY member, bucket each (closed/unavailable/open — never silent-neither), and derive
+@@ -7055,6 +7149,21 @@ function cmdWatchPr() {
+         }
+         mergedRemoteToken = (mClosed.length === folder.issue_numbers.length) ? 'already_closed' : 'partial';
+       }
++      // #1113: override AFTER the bundle computation so a one-member list cannot leave `partial`
++      // or `skipped_offline` on an explicit singleton. Non-explicit tokens stay as computed.
++      let explicitObs = null;
++      if (explicitKeep) {
++        explicitObs = explicitKeepOpenObservation(dispProbe.state);
++        mergedRemoteToken = explicitObs.remote;
++        if (explicitObs.observation === 'intentionally_kept_open') issueDisposition = 'kept-open';
++        else if (explicitObs.observation === 'keep_open_violation') issueDisposition = 'keep-open-violation';
++        else issueDisposition = 'unknown';
++        if (explicitObs.observation === 'keep_open_violation') {
++          warnings.push('keep-open PR for ' + folder.project + ' observed issue #' + folder.issue_number + ' CLOSED; no reopen was attempted');
++        } else if (explicitObs.observation === 'unknown') {
++          warnings.push('keep-open PR for ' + folder.project + ' issue #' + folder.issue_number + ' probe is unknown; not a successful observation');
++        }
++      }
+       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
+         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
+         remote_issue_closed: mergedRemoteToken,
+@@ -7069,6 +7178,9 @@ function cmdWatchPr() {
+         folderReceipt.failed_issue_closures = mFailed.sort(function(a, b){ return a - b; });
+         folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
+       }
++      if (explicitObs) {
++        attachExplicitKeepOpenReceipt(folderReceipt, folder.issue_number, dispProbe.state, explicitObs.observation);
++      }
+       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
+       // #333: append the terminal receipt to the archived state. watch-pr archives into the MAIN
+       // working tree without committing (today's behavior); the append lands inside the untracked
+diff --git a/plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js b/plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js
+index c6b28773..c407c9be 100644
+--- a/plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js
++++ b/plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js
+@@ -27,7 +27,9 @@ const CLOSURE_RECEIPT_FIELDS = {
+   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
+   // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
+   // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
+-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
++  // #1113: `unknown` is the explicit singleton keep-open probe token when the forge state cannot
++  // be read. It is not a success and it is not `skipped_offline`. Only that GitHub watcher emits it.
++  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed', 'unknown'],
+   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
+   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
+   branch_removed: ['removed', 'kept', 'failed'],
+diff --git a/plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js b/plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js
+index a064fda3..69f7dab2 100644
+--- a/plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js
++++ b/plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js
+@@ -12,12 +12,17 @@
+ //   index onto the branch tip, the local branch is advanced (ff-only where checked out, CAS
+ //   update-ref otherwise), then pushed — never the default branch, never a force. The main
+ //   checkout's index and HEAD are never touched. The final stdout line is machine-readable:
+-//   `sink_pr: created | reused | already_merged`. Keep-open stays merge-sink-only (#336, D4=(a)).
++//   `sink_pr: created | reused | already_merged`. Legacy keep-open stays merge-sink-only
++//   (#336, #1098 D4=(a)): issue_action: comment_keep_open without the explicit mode below is
++//   still refused. #1113 adds one supported exception, GitHub only: --keep-open-pr
++//   explicit_singleton together with durable keep_open_pr: explicit_singleton, a singleton
++//   issue, and sink: pr. That mode writes no closing linkage and never queues or auto-merges.
+ //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
+ //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
+ //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
+ //   original `--auto --squash --delete-branch` call (a false or unreadable probe), `failed` when
+-//   the call itself failed (still warning-only, still exit 0).
++//   the call itself failed (still warning-only, still exit 0). #1113 explicit mode emits
++//   `pr_auto_merge: suppressed_request_only` instead and never probes or merges.
+ const fs = require('fs');
+ const path = require('path');
+ const os = require('os');
+@@ -87,6 +92,9 @@ function parseArgs(argv) {
+     // #1094: the claimed member set (finalize's `--issue-numbers`) — one `Closes #n` per member.
+     if (argv[i] === '--issue-numbers' && argv[i + 1]) { args.issueNumbers = parseIssueNumbers(argv[++i]); continue; }
+     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
++    // #1113: explicit singleton GitHub keep-open research/artifact PR. Any other value is
++    // retained and refused; absence leaves the #336/#1098 legacy refusal unchanged.
++    if (argv[i] === '--keep-open-pr' && argv[i + 1]) { args.keepOpenPr = String(argv[++i]); continue; }
+   }
+   return args;
+ }
+@@ -116,6 +124,152 @@ function closesBody(members) {
+   return members.map(n => 'Closes #' + n).join('\n');
+ }
+ 
++// #1113: a closing keyword and every #N on that same line. Qualified owner/repo#N is included
++// because the digits are still a #N. "closing" does not match: the keyword is a whole word.
++const CLOSING_KEYWORD_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b/i;
++
++function closingIssueNumbers(text) {
++  const found = new Set();
++  for (const line of String(text || '').split(/\r?\n/)) {
++    if (!CLOSING_KEYWORD_RE.test(line)) continue;
++    const re = /#(\d+)\b/g;
++    let match;
++    while ((match = re.exec(line)) !== null) found.add(parseInt(match[1], 10));
++  }
++  return found;
++}
++
++function sinkField(text, name) {
++  if (typeof text !== 'string') return '';
++  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++  const match = text.match(new RegExp('^' + escaped + ':[ \\t]*(.*)$', 'm'));
++  return match ? match[1].trim() : '';
++}
++
++function keepOpenLinkageBody(issue) {
++  const body = 'Keeps #' + issue + ' open.\n\n' +
++    'This request publishes the run archive for review.\n' +
++    'The issue stays open after merge.\n' +
++    'Request-only: this request is not queued and is not automatically merged.\n';
++  if (closingIssueNumbers(body).size !== 0) {
++    throw new Error('sink-pr: internal: keep-open linkage body contains a closing reference');
++  }
++  return body;
++}
++
++const LEGACY_KEEP_OPEN_REFUSAL = (project) =>
++  'sink-pr: refusing: project ' + project + ' carries issue_action: comment_keep_open. ' +
++  'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
++  'Remediate the merge sink and re-run sink-merge instead.';
++
++function explicitRefusal(reason) {
++  return 'sink-pr: refusing: explicit_keep_open_refused: ' + reason +
++    '. Explicit singleton GitHub keep-open PR mode requires --keep-open-pr explicit_singleton ' +
++    'together with issue_action: comment_keep_open, keep_open_pr: explicit_singleton, sink: pr, ' +
++    'and exactly one issue. Nothing was pushed or created.';
++}
++
++// Pure gate. texts are the live and archived workflow-state bodies that exist.
++// kind: close | legacy_refuse | explicit | malformed.
++function assessKeepOpenPr(args, texts, members) {
++  const present = (Array.isArray(texts) ? texts : []).filter(t => typeof t === 'string');
++  const flag = args && args.keepOpenPr;
++  const flagExact = flag === 'explicit_singleton';
++  const anyLegacy = present.some(t => sinkField(t, 'issue_action') === 'comment_keep_open');
++  const anyMarker = present.some(t => sinkField(t, 'keep_open_pr') !== '');
++  const project = (args && args.project) || '';
++  if (!flag && !anyMarker) {
++    if (anyLegacy) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
++    return { kind: 'close' };
++  }
++  if (!flagExact) {
++    if (anyLegacy && !flag) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
++    return { kind: 'malformed', reason: flag ? 'mode_mismatch' : 'partial_marker', message: explicitRefusal(flag ? 'mode_mismatch' : 'partial_marker') };
++  }
++  if (present.length === 0) return { kind: 'malformed', reason: 'state_missing', message: explicitRefusal('state_missing') };
++  const signature = (t) => [
++    sinkField(t, 'issue_action'), sinkField(t, 'keep_open_pr'), sinkField(t, 'sink'),
++    sinkField(t, 'issue_number'), sinkField(t, 'branch'), sinkField(t, 'issue_numbers'),
++    sinkField(t, 'base_branch')
++  ].join('\0');
++  if (new Set(present.map(signature)).size > 1) {
++    return { kind: 'malformed', reason: 'state_conflict', message: explicitRefusal('state_conflict') };
++  }
++  const text = present[0];
++  if (sinkField(text, 'issue_action') !== 'comment_keep_open' || sinkField(text, 'keep_open_pr') !== 'explicit_singleton') {
++    return { kind: 'malformed', reason: 'mode_mismatch', message: explicitRefusal('mode_mismatch') };
++  }
++  if (sinkField(text, 'sink') !== 'pr') return { kind: 'malformed', reason: 'sink_mismatch', message: explicitRefusal('sink_mismatch') };
++  const set = Array.isArray(members) ? members : [];
++  if (set.length !== 1) return { kind: 'malformed', reason: 'bundle_refused', message: explicitRefusal('bundle_refused') };
++  const stateIssue = parseInt(sinkField(text, 'issue_number'), 10);
++  const stateMembers = parseIssueNumbers(sinkField(text, 'issue_numbers'));
++  if (!(args && Number.isInteger(args.issue) && args.issue > 0) || args.issue !== set[0]) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (stateMembers.length > 1) return { kind: 'malformed', reason: 'bundle_refused', message: explicitRefusal('bundle_refused') };
++  if (stateMembers.length === 1 && stateMembers[0] !== args.issue) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (!Number.isFinite(stateIssue) || stateIssue !== args.issue) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (sinkField(text, 'branch') !== args.branch) {
++    return { kind: 'malformed', reason: 'branch_mismatch', message: explicitRefusal('branch_mismatch') };
++  }
++  return { kind: 'explicit', base_branch: sinkField(text, 'base_branch') };
++}
++
++function gitRefExists(root, ref) {
++  try {
++    execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', ref], { stdio: 'ignore' });
++    return true;
++  } catch (_) { return false; }
++}
++
++function commitMessagesNotOnBase(root, baseBranch, branch) {
++  if (!gitRefExists(root, branch) && !gitRefExists(root, 'refs/heads/' + branch)) {
++    return { ok: false, reason: 'head_missing' };
++  }
++  const headRef = gitRefExists(root, branch) ? branch : ('refs/heads/' + branch);
++  const baseCandidates = [baseBranch, 'origin/' + baseBranch, 'refs/heads/' + baseBranch, 'refs/remotes/origin/' + baseBranch];
++  const baseRef = baseCandidates.find(candidate => gitRefExists(root, candidate));
++  if (!baseRef) return { ok: false, reason: 'base_unavailable' };
++  try {
++    const text = execFileSync('git', ['-C', root, 'log', '--format=%B%x1e', baseRef + '..' + headRef], {
++      encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe']
++    });
++    return { ok: true, text: text };
++  } catch (_) {
++    return { ok: false, reason: 'commit_scan_failed' };
++  }
++}
++
++function assertNoClosingCommits(root, baseBranch, branch, members) {
++  const scanned = commitMessagesNotOnBase(root, baseBranch, branch);
++  if (!scanned.ok) throw new Error(explicitRefusal(scanned.reason));
++  const hit = members.filter(n => closingIssueNumbers(scanned.text).has(n));
++  if (hit.length) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. Commit messages reachable from ' +
++      branch + ' and not from ' + baseBranch + ' close issue(s) ' + hit.join(', ') + '. Nothing was pushed or created.');
++  }
++}
++
++function assertExplicitReuseSafe(existing, members) {
++  const text = String(existing.body || '') + '\n' + String(existing.title || '');
++  const hit = members.filter(n => closingIssueNumbers(text).has(n));
++  if (hit.length) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. PR ' + existing.url +
++      ' carries a closing reference to issue(s) ' + hit.join(', ') + '. The PR was not modified.');
++  }
++  for (const n of members) {
++    if (!new RegExp('#' + n + '\\b').test(text)) {
++      throw new Error('sink-pr: refusing: explicit_keep_open_refused: linkage_missing. PR ' + existing.url +
++        ' does not identify issue #' + n + '. The PR was not modified.');
++    }
++  }
++}
++
+ // #1098: write pr_url/pr_number into the state file's `## Sink` block — in place when the line
+ // already exists, appended to the block otherwise, and SKIPPED entirely when the result would be
+ // byte-identical. Re-entry used to re-insert the two lines because the block's extent was matched
+@@ -175,17 +329,22 @@ function resolveProjectDir(root, project) {
+ // watch-pr. Written into the resolved project's .cache (archive folder in the standard exit-3 lane).
+ // #1098: idempotent — when {project, branch, pr_url, pr_number} are unchanged the file is NOT
+ // rewritten; a fresh timestamp would mint a new archive commit on every re-entry.
+-function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
++// #1113: explicit mode passes keep_open_pr / pr_request / mainline_publication. Absent keys
++// compare as '' so a close-mode record stays the same shape and stays idempotent.
++function recordPrResult(projectDir, project, prUrl, prNumber, branch, extra) {
+   try {
+     const cacheDir = path.join(projectDir, '.cache');
+     fs.mkdirSync(cacheDir, { recursive: true });
+     const recordPath = path.join(cacheDir, 'sink-pr-result.json');
+     const next = { project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() };
++    if (extra && typeof extra === 'object') Object.assign(next, extra);
++    const same = (prevRec, key) => (prevRec[key] || '') === (next[key] || '');
+     try {
+       const prev = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+       if (prev && typeof prev === 'object' &&
+           prev.project === next.project && prev.branch === next.branch &&
+-          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number) return;
++          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number &&
++          same(prev, 'keep_open_pr') && same(prev, 'pr_request') && same(prev, 'mainline_publication')) return;
+     } catch (_) {}
+     // Atomic (tmp + fsync + rename): the whole point of this record is to be DURABLE before any step
+     // that can throw after PR creation. A bare write is neither fsynced nor all-or-nothing, so the
+@@ -221,7 +380,8 @@ function normalizePrView(data) {
+     state: String(data.state || '').toUpperCase(),
+     head: String(data.headRefName || ''),
+     base: String(data.baseRefName || ''),
+-    body: String(data.body || '')
++    body: String(data.body || ''),
++    title: String(data.title || '')
+   };
+ }
+ 
+@@ -230,7 +390,7 @@ function normalizePrView(data) {
+ // Any probe failure returns null so the caller falls back to the head-based discovery.
+ function viewRecordedPr(prUrl) {
+   try {
+-    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body'])));
++    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body,title'])));
+   } catch (_) { return null; }
+ }
+ 
+@@ -243,7 +403,7 @@ function listOpenPrs(branch, baseBranch) {
+   let raw = '';
+   try {
+     raw = ghExec(['pr', 'list', '--head', branch, '--base', baseBranch, '--state', 'open',
+-      '--json', 'url,number,state,headRefName,baseRefName,body']);
++      '--json', 'url,number,state,headRefName,baseRefName,body,title']);
+   } catch (_) { return []; }
+   let list = null;
+   try { list = JSON.parse(raw || '[]'); } catch (_) { return []; }
+@@ -309,19 +469,30 @@ function main() {
+   const summaryFile = path.join(projectFolder, 'finalization-summary.md');
+   const members = resolveMemberSet(args, stateFile);
+ 
+-  // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
+-  // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
+-  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the finalize
+-  // transaction archives the project BEFORE the sink runs, so the live state file is already gone);
+-  // the LIVE path covers a sink: pr project that gained issue_action by mistake. Guard sits
+-  // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
+-  const keepOpenRe = /^issue_action:\s*comment_keep_open\s*$/m;
++  // #336 / #1098 D4=(a): keep-open without the explicit #1113 agreement stays merge-sink-only.
++  // The PR body 'Closes #N' would auto-close the kept-open issue. The ARCHIVED path is the one
++  // that fires in the real exit-3 fallback flow (the finalize transaction archives the project
++  // BEFORE the sink runs); the LIVE path covers a sink: pr project that gained issue_action by
++  // mistake. The gate sits BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
++  // #1113: the same gate is the only way into explicit singleton mode. A partial marker or a
++  // mismatched flag refuses before any placeholder, push, or create.
++  const keepOpenTexts = [];
++  const keepOpenSeen = new Set();
+   for (const f of [stateFile, path.join(root, 'kaola-workflow', 'archive', args.project, 'workflow-state.md')]) {
+-    let s = ''; try { s = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+-    assert(!keepOpenRe.test(s),
+-      'sink-pr: refusing: project ' + args.project + ' carries issue_action: comment_keep_open. ' +
+-      'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
+-      'Remediate the merge sink and re-run sink-merge instead.');
++    let resolved = f;
++    try { resolved = fs.realpathSync(f); } catch (_) { continue; }
++    if (keepOpenSeen.has(resolved)) continue;
++    keepOpenSeen.add(resolved);
++    try { keepOpenTexts.push(fs.readFileSync(resolved, 'utf8')); } catch (_) {}
++  }
++  const keepOpenDecision = assessKeepOpenPr(args, keepOpenTexts, members);
++  if (keepOpenDecision.kind === 'legacy_refuse' || keepOpenDecision.kind === 'malformed') {
++    throw new Error(keepOpenDecision.message);
++  }
++  const explicitMode = keepOpenDecision.kind === 'explicit';
++  if (explicitMode && OFFLINE) {
++    throw new Error(explicitRefusal('offline') +
++      ' Explicit mode does not write an OFFLINE placeholder.');
+   }
+ 
+   if (OFFLINE) {
+@@ -370,6 +541,10 @@ function main() {
+   if (baseBranch === 'main') {
+     try { baseBranch = defaultBranch(root) || 'main'; } catch (_) { baseBranch = 'main'; }
+   }
++  if (explicitMode && keepOpenDecision.base_branch && keepOpenDecision.base_branch !== baseBranch) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: base_mismatch. State base_branch is ' +
++      keepOpenDecision.base_branch + ', resolved base is ' + baseBranch + '. Nothing was pushed or created.');
++  }
+ 
+   // #1098 §2.1-2: find the existing PR BEFORE any push. Identity comes from the durable record
+   // first; record-less discovery queries open PRs for this head/base.
+@@ -395,9 +570,33 @@ function main() {
+   }
+ 
+   if (existing) {
++    // #1113: explicit mode checks head/base before the merged early-return. Close mode does not:
++    // an already-merged close-mode PR still reports already_merged without a head comparison.
++    if (explicitMode) {
++      if (existing.head !== args.branch) {
++        throw new Error(explicitRefusal('head_mismatch') + ' PR ' + existing.url + ' head is ' +
++          (existing.head || '(empty)') + ', expected ' + args.branch + '.');
++      }
++      if (existing.base !== baseBranch) {
++        throw new Error(explicitRefusal('base_mismatch') + ' PR ' + existing.url + ' base is ' +
++          (existing.base || '(empty)') + ', expected ' + baseBranch + '.');
++      }
++    }
+     if (existing.state === 'MERGED') {
+       // Merged: no push, no create, no merge — the remote branch (even deleted) stays exactly as
+       // the forge left it, and §2.2's reconciliation owns the disposition.
++      if (explicitMode) {
++        const mergedText = String(existing.body || '') + '\n' + String(existing.title || '');
++        const closingPresent = members.some(n => closingIssueNumbers(mergedText).has(n));
++        if (closingPresent) {
++          process.stderr.write('sink-pr: note: explicit keep-open PR ' + existing.url +
++            ' is merged and its text carries a closing reference. No second PR was created.\n');
++        }
++        process.stdout.write('pr_request: request_only\n');
++        process.stdout.write('publication: already_published\n');
++        process.stdout.write('mainline_publication: pending_reconciliation\n');
++        process.stdout.write('keep_open_linkage: ' + (closingPresent ? 'closing_present' : 'clean') + '\n');
++      }
+       process.stdout.write('sink_pr: already_merged\n');
+       return;
+     }
+@@ -408,36 +607,51 @@ function main() {
+         'sink-pr: refusing: PR ' + existing.url + ' is closed without merging (pr_closed_unmerged). ' +
+         'The orchestrator decides whether to reopen; nothing was pushed or created.');
+     }
+-    // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
+-    assert(existing.head === args.branch,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
+-      (existing.head || '(empty)') + ', expected ' + args.branch);
+-    assert(existing.base === baseBranch,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
+-      (existing.base || '(empty)') + ', expected ' + baseBranch);
+-    const missingCloses = members.filter(n =>
+-      !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
+-    assert(missingCloses.length === 0,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
+-      missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
+-      '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
++    if (explicitMode) {
++      // OPEN explicit reuse: no closing linkage, and the body or title must still name the issue.
++      // Commit messages are scanned before any archive publish. Close mode keeps the Closes check.
++      assertExplicitReuseSafe(existing, members);
++      assertNoClosingCommits(root, baseBranch, args.branch, members);
++    } else {
++      // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
++      assert(existing.head === args.branch,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
++        (existing.head || '(empty)') + ', expected ' + args.branch);
++      assert(existing.base === baseBranch,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
++        (existing.base || '(empty)') + ', expected ' + baseBranch);
++      const missingCloses = members.filter(n =>
++        !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
++      assert(missingCloses.length === 0,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
++        missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
++        '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
++    }
+   }
+ 
+   const reused = !!existing;
+   let prUrl;
+   let prNumber;
++  let explicitTitle = '';
++  let explicitBody = '';
+   if (!reused) {
++    if (explicitMode) {
++      assertNoClosingCommits(root, baseBranch, args.branch, members);
++      explicitBody = keepOpenLinkageBody(members[0]);
++      explicitTitle = 'Publish ' + args.project + ' (keeps #' + members[0] + ' open)';
++      if (closingIssueNumbers(explicitTitle).size !== 0) {
++        throw new Error(explicitRefusal('closing_linkage') + ' The generated title was not used.');
++      }
++    }
+     // Step 3 — push branch (the lookup above already ruled out an existing PR on this head)
+     execFileSync('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
+ 
+-    // Step 4 — create PR
+-    const prCreateArgs = [
+-      'pr', 'create',
+-      '--head', args.branch,
+-      '--base', baseBranch,
+-      '--fill',
+-    ];
+-    if (members.length > 0) {
++    // Step 4 — create PR. Close mode stays --fill plus one Closes line per member.
++    // Explicit mode names the issue without a closing keyword and never uses --fill.
++    const prCreateArgs = explicitMode
++      ? ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--title', explicitTitle, '--body', explicitBody]
++      : ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--fill'];
++    if (!explicitMode && members.length > 0) {
+       prCreateArgs.push('--body', closesBody(members));
+     }
+ 
+@@ -459,7 +673,12 @@ function main() {
+   // identified, BEFORE updateStateSinkBlock / appendSummary / the archive publish (any of which
+   // can throw). Without this, a crash after PR creation left an orphaned open PR with no durable
+   // pr_url — watch-pr never saw it. The record lives in the resolved project's .cache.
+-  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch);
++  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch,
++    explicitMode ? {
++      keep_open_pr: 'explicit_singleton',
++      pr_request: 'request_only',
++      mainline_publication: 'pending'
++    } : undefined);
+ 
+   // Step 7 — update workflow-state.md Sink block
+   updateStateSinkBlock(stateFile, prUrl, prNumber);
+@@ -488,7 +707,11 @@ function main() {
+   // branches" setting). Probe false OR probe failure/unparseable → the ORIGINAL argv, verbatim, so
+   // a forge we cannot probe behaves exactly as before. The probe never throws: any gh error, JSON
+   // error, or unexpected envelope is a `false`.
+-  if (config.pr_auto_merge === true) {
++  // #1113: explicit request-only mode never probes the merge queue and never calls gh pr merge,
++  // even when the operator config has pr_auto_merge true. The config file is not modified.
++  if (explicitMode) {
++    process.stdout.write('pr_auto_merge: suppressed_request_only\n');
++  } else if (config.pr_auto_merge === true) {
+     let queueEnabled = false;
+     try {
+       const probe = JSON.parse(ghExec([
+@@ -521,6 +744,12 @@ function main() {
+     process.stdout.write('pr_auto_merge: ' + lane + '\n');
+   }
+ 
++  // #1113: request-only receipt lines precede the final sink_pr line, which stays last.
++  if (explicitMode) {
++    process.stdout.write('pr_request: request_only\n');
++    process.stdout.write('publication: request_published\n');
++    process.stdout.write('mainline_publication: pending\n');
++  }
+   // #1098 §2.1-6: the machine-readable result line — additive; this sink had no stdout contract.
+   process.stdout.write('sink_pr: ' + (reused ? 'reused' : 'created') + '\n');
+ }
+@@ -529,4 +758,7 @@ if (require.main === module) {
+   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+ }
+ 
+-module.exports = { parseArgs, resolveMemberSet, closesBody };
++module.exports = {
++  parseArgs, resolveMemberSet, closesBody,
++  keepOpenLinkageBody, closingIssueNumbers, assessKeepOpenPr
++};
+diff --git a/plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md b/plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md
+index dd59eb63..5bf09218 100644
+--- a/plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md
++++ b/plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md
+@@ -131,6 +131,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -153,6 +156,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -176,10 +180,13 @@ The archive still fails loudly if it would lose a file. Every run file must land
+ 
+ ```bash
+ # keep-open is merge-sink-only — a PR sink would close the kept-open issue.
+-if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
++# Explicit singleton is the one supported request-only PR. Any other keep-open request sink still stops here.
++if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ] && [ "$SINK_KEEP_OPEN_PR" != explicit_singleton ]; then exit 1; fi
+ case "$SINK_KIND" in
+   pr)
+-    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}
++    SINK_KEEP_OPEN_PR_FLAG=""
++    if [ "$SINK_KEEP_OPEN_PR" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG="--keep-open-pr explicit_singleton"; fi
++    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}
+     ;;
+   merge|*)
+     node "$KAOLA_SCRIPTS/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json
+@@ -202,6 +209,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/scripts/kaola-workflow-active-folders.js b/scripts/kaola-workflow-active-folders.js
+index 0f6db09e..bb7b6d23 100755
+--- a/scripts/kaola-workflow-active-folders.js
++++ b/scripts/kaola-workflow-active-folders.js
+@@ -221,7 +221,10 @@ function parseStateFile(stateFile) {
+     // Absent in pre-#579 state files → empty string (backward compat).
+     main_root: field(content, 'main_root') || '',
+     session_marker: field(content, 'session_marker') || '',
+-    claim_ts: field(content, 'claim_ts') || ''
++    claim_ts: field(content, 'claim_ts') || '',
++    // #1113: additive readers. Empty when the line is absent. Not part of SHARED_STATE_FIELDS.
++    issue_action: field(content, 'issue_action') || '',
++    keep_open_pr: field(content, 'keep_open_pr') || ''
+   };
+ }
+ 
+@@ -277,7 +280,10 @@ function readActiveFolders(root, options) {
+       // #579: liveness-marker fields (empty string when absent — pre-#579 backward compat).
+       main_root: state.main_root || '',
+       session_marker: state.session_marker || '',
+-      claim_ts: state.claim_ts || ''
++      claim_ts: state.claim_ts || '',
++      // #1113: additive. Empty string when the state file has no such line.
++      issue_action: state.issue_action || '',
++      keep_open_pr: state.keep_open_pr || ''
+     };
+     if (opts.includeContent) item.content = state.content;
+     result.push(item);
+diff --git a/scripts/kaola-workflow-claim.js b/scripts/kaola-workflow-claim.js
+index a46a2d7e..00386fe6 100644
+--- a/scripts/kaola-workflow-claim.js
++++ b/scripts/kaola-workflow-claim.js
+@@ -3308,7 +3308,12 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
+   // invariant in that case (the members WILL close at sink). sink-merge / watch-pr (post-sink) leave
+   // close_disposition unset, so the invariant fires there truthfully on a real partial close.
+   const closePending = receipt.close_disposition === 'close_pending';
+-  if (!abandoned && !closePending && unclosedMembers.length > 0) {
++  // #1113: an explicit singleton keep-open PR records the issue in open_issues while it is
++  // intentionally still open. That is not a partial close. A CLOSED issue or an unknown probe
++  // is a dedicated violation below, not a successful close.
++  const explicitKeptOpen = receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++    receipt.keep_open_observation === 'intentionally_kept_open';
++  if (!abandoned && !closePending && !explicitKeptOpen && unclosedMembers.length > 0) {
+     const invMc = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-members-closed'; });
+     violations.push({
+       id: 'remote-members-closed',
+@@ -3334,6 +3339,22 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
+       });
+     }
+   }
++  // #1113: explicit singleton keep-open observations that are not a successful open issue.
++  // Additive ids; they are not new entries in CLOSURE_INVARIANTS. No reopen and no manual close.
++  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++      receipt.keep_open_observation === 'keep_open_violation') {
++    violations.push({
++      id: 'keep-open-pr-violated',
++      description: 'explicit singleton keep-open PR observed the issue CLOSED. No reopen was attempted.'
++    });
++  }
++  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
++      receipt.keep_open_observation === 'unknown') {
++    violations.push({
++      id: 'keep-open-pr-unknown',
++      description: 'explicit singleton keep-open PR probe is unknown. This is not a successful observation.'
++    });
++  }
+   return { ok: violations.length === 0, violations };
+ }
+ 
+@@ -6795,6 +6816,54 @@ function cmdVerifySink() {
+   output({ project: args.project, ok, checks, reasons }, ok ? 0 : 1);
+ }
+ 
++// #1113: true only for the explicit singleton GitHub keep-open agreement. An absent sink is the
++// historical merge default and is not this mode. A bundle, or a one-entry issue_numbers list that
++// disagrees with issue_number, is not this mode.
++function isExplicitSingletonKeepOpen(content) {
++  if (!content) return false;
++  if (field(content, 'issue_action') !== 'comment_keep_open') return false;
++  if (field(content, 'keep_open_pr') !== 'explicit_singleton') return false;
++  if (field(content, 'sink') !== 'pr') return false;
++  const issue = parseInt(field(content, 'issue_number'), 10);
++  const raw = field(content, 'issue_numbers');
++  const members = raw
++    ? raw.split(',').map(function (s) { return parseInt(s.trim(), 10); }).filter(function (n) { return Number.isFinite(n) && n > 0; })
++    : [];
++  if (members.length > 1) return false;
++  if (members.length === 1 && Number.isFinite(issue) && members[0] !== issue) return false;
++  if (!(Number.isFinite(issue) && issue > 0) && members.length !== 1) return false;
++  return true;
++}
++
++function explicitKeepOpenObservation(probeState) {
++  if (probeState === 'open') {
++    return { remote: 'kept_open', observation: 'intentionally_kept_open', closeout: 'intentionally_kept_open' };
++  }
++  if (probeState === 'closed') {
++    return { remote: 'failed', observation: 'keep_open_violation', closeout: 'keep_open_violation' };
++  }
++  return { remote: 'unknown', observation: 'unknown', closeout: 'unknown' };
++}
++
++function attachExplicitKeepOpenReceipt(receipt, issueNumber, probeState, observation) {
++  receipt.keep_open_pr = 'explicit_singleton';
++  receipt.keep_open_observation = observation;
++  const n = issueNumber;
++  if (probeState === 'open') {
++    receipt.open_issues = [n];
++    receipt.closed_issues = [];
++    receipt.failed_issue_closures = [];
++  } else if (probeState === 'closed') {
++    receipt.closed_issues = [n];
++    receipt.open_issues = [];
++    receipt.failed_issue_closures = [];
++  } else {
++    receipt.failed_issue_closures = [n];
++    receipt.open_issues = [];
++    receipt.closed_issues = [];
++  }
++}
++
+ // #1098 §2.2 — post-merge reconciliation of ARCHIVED `sink: pr` runs. The standard PR path
+ // archives BEFORE the sink runs, so the live-folder loop above never sees it; this face scans the
+ // MAIN checkout's archive band instead. Bounded and stateless by construction: a run leaves the
+@@ -6928,7 +6997,20 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+       else if (p.state === 'unavailable') mFailed.push(n);
+       else mOpen.push(n);
+     }
+-    const closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
++    let closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
++    let remoteToken = closeout === 'closed' ? 'already_closed' : 'partial';
++    // #1113: an explicit singleton that is still OPEN is not closeout closed. A CLOSED issue is a
++    // keep-open violation. A mixed or unavailable probe is unknown. Nothing is reopened or closed.
++    let explicitObs = null;
++    let explicitProbe = null;
++    if (isExplicitSingletonKeepOpen(content)) {
++      if (mClosed.length === members.length) explicitProbe = 'closed';
++      else if (mOpen.length === members.length && mFailed.length === 0) explicitProbe = 'open';
++      else explicitProbe = 'unavailable';
++      explicitObs = explicitKeepOpenObservation(explicitProbe);
++      closeout = explicitObs.closeout;
++      remoteToken = explicitObs.remote;
++    }
+     // 4. Idempotent cleanup: the advisory claim per member, the run's worktree.
+     let claimLabelStatus;
+     for (const n of members) {
+@@ -6951,7 +7033,7 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+     //    archiveProjectDirSafely, no merge, no mainline push.
+     const receipt = buildClosureReceipt(name, issueNumber, {
+       archive: 'closed',
+-      remote_issue_closed: closeout === 'closed' ? 'already_closed' : 'partial',
++      remote_issue_closed: remoteToken,
+       claim_label_removed: claimLabelStatus,
+       worktree_removed: worktreeRemoved,
+       branch_removed: 'kept'
+@@ -6960,9 +7042,10 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+     receipt.closed_issues = mClosed.slice().sort((a, b) => a - b);
+     receipt.failed_issue_closures = mFailed.slice().sort((a, b) => a - b);
+     receipt.open_issues = mOpen.slice().sort((a, b) => a - b);
++    if (explicitObs) attachExplicitKeepOpenReceipt(receipt, issueNumber, explicitProbe, explicitObs.observation);
+     const archiveDir = path.join(root, archiveRel);
+     const folderInvariants = checkClosureInvariants(root, receipt, fs.existsSync(archiveDir) ? archiveDir : undefined);
+-    out.push({
++    const reconciledItem = {
+       folder: name,
+       pr_url: prUrl,
+       publication: 'published',
+@@ -6971,7 +7054,13 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+       main_checkout: mainCheckout,
+       receipt: receipt,
+       closure_invariants: folderInvariants
+-    });
++    };
++    if (explicitObs && explicitObs.observation === 'keep_open_violation') {
++      reconciledItem.warnings = ['issue CLOSED while explicit keep-open was requested; no reopen was attempted'];
++    } else if (explicitObs && explicitObs.observation === 'unknown') {
++      reconciledItem.warnings = ['issue probe unknown; not a successful keep-open observation'];
++    }
++    out.push(reconciledItem);
+   }
+   return out;
+ }
+@@ -7006,6 +7095,11 @@ function cmdWatchPr() {
+     watched++;
+     liveProcessed.add(folder.project); // #1098 §2.2: exclude from this run's reconciliation face
+     if (state === 'MERGED') {
++      // #1113: read explicit-mode state BEFORE archive moves the file. The archive call itself
++      // stays unchanged (keepOpen is still unused inside archiveProjectDir).
++      let explicitStateText = '';
++      try { explicitStateText = fs.readFileSync(folder.state_file, 'utf8'); } catch (_) {}
++      const explicitKeep = isExplicitSingletonKeepOpen(explicitStateText);
+       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
+       if (!closureContract.archiveSucceeded(archiveResult)) {
+         // #906: both halves — see cmdRelease. An entry that could not be compared refuses with an
+@@ -7038,7 +7132,7 @@ function cmdWatchPr() {
+       // closed issue — no close keyword keeps the issue open, the keep-open PR-sink case). watch-pr
+       // is online by construction (OFFLINE early-returns above); probeIssueState catches/degrades.
+       const dispProbe = probeIssueState(folder.issue_number);
+-      const issueDisposition = dispProbe.state === 'closed' ? 'closed'
++      let issueDisposition = dispProbe.state === 'closed' ? 'closed'
+         : (dispProbe.state === 'open' ? 'kept-open' : 'unknown');
+       // #369: bundle-aware truthful receipt. watch-pr is online by construction, so for a bundle we
+       // probe EVERY member, bucket each (closed/unavailable/open — never silent-neither), and derive
+@@ -7055,6 +7149,21 @@ function cmdWatchPr() {
+         }
+         mergedRemoteToken = (mClosed.length === folder.issue_numbers.length) ? 'already_closed' : 'partial';
+       }
++      // #1113: override AFTER the bundle computation so a one-member list cannot leave `partial`
++      // or `skipped_offline` on an explicit singleton. Non-explicit tokens stay as computed.
++      let explicitObs = null;
++      if (explicitKeep) {
++        explicitObs = explicitKeepOpenObservation(dispProbe.state);
++        mergedRemoteToken = explicitObs.remote;
++        if (explicitObs.observation === 'intentionally_kept_open') issueDisposition = 'kept-open';
++        else if (explicitObs.observation === 'keep_open_violation') issueDisposition = 'keep-open-violation';
++        else issueDisposition = 'unknown';
++        if (explicitObs.observation === 'keep_open_violation') {
++          warnings.push('keep-open PR for ' + folder.project + ' observed issue #' + folder.issue_number + ' CLOSED; no reopen was attempted');
++        } else if (explicitObs.observation === 'unknown') {
++          warnings.push('keep-open PR for ' + folder.project + ' issue #' + folder.issue_number + ' probe is unknown; not a successful observation');
++        }
++      }
+       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
+         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
+         remote_issue_closed: mergedRemoteToken,
+@@ -7069,6 +7178,9 @@ function cmdWatchPr() {
+         folderReceipt.failed_issue_closures = mFailed.sort(function(a, b){ return a - b; });
+         folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
+       }
++      if (explicitObs) {
++        attachExplicitKeepOpenReceipt(folderReceipt, folder.issue_number, dispProbe.state, explicitObs.observation);
++      }
+       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
+       // #333: append the terminal receipt to the archived state. watch-pr archives into the MAIN
+       // working tree without committing (today's behavior); the append lands inside the untracked
+diff --git a/scripts/kaola-workflow-closure-contract.js b/scripts/kaola-workflow-closure-contract.js
+index c6b28773..c407c9be 100644
+--- a/scripts/kaola-workflow-closure-contract.js
++++ b/scripts/kaola-workflow-closure-contract.js
+@@ -27,7 +27,9 @@ const CLOSURE_RECEIPT_FIELDS = {
+   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
+   // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
+   // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
+-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
++  // #1113: `unknown` is the explicit singleton keep-open probe token when the forge state cannot
++  // be read. It is not a success and it is not `skipped_offline`. Only that GitHub watcher emits it.
++  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed', 'unknown'],
+   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
+   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
+   branch_removed: ['removed', 'kept', 'failed'],
+diff --git a/scripts/kaola-workflow-sink-pr.js b/scripts/kaola-workflow-sink-pr.js
+index a064fda3..69f7dab2 100644
+--- a/scripts/kaola-workflow-sink-pr.js
++++ b/scripts/kaola-workflow-sink-pr.js
+@@ -12,12 +12,17 @@
+ //   index onto the branch tip, the local branch is advanced (ff-only where checked out, CAS
+ //   update-ref otherwise), then pushed — never the default branch, never a force. The main
+ //   checkout's index and HEAD are never touched. The final stdout line is machine-readable:
+-//   `sink_pr: created | reused | already_merged`. Keep-open stays merge-sink-only (#336, D4=(a)).
++//   `sink_pr: created | reused | already_merged`. Legacy keep-open stays merge-sink-only
++//   (#336, #1098 D4=(a)): issue_action: comment_keep_open without the explicit mode below is
++//   still refused. #1113 adds one supported exception, GitHub only: --keep-open-pr
++//   explicit_singleton together with durable keep_open_pr: explicit_singleton, a singleton
++//   issue, and sink: pr. That mode writes no closing linkage and never queues or auto-merges.
+ //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
+ //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
+ //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
+ //   original `--auto --squash --delete-branch` call (a false or unreadable probe), `failed` when
+-//   the call itself failed (still warning-only, still exit 0).
++//   the call itself failed (still warning-only, still exit 0). #1113 explicit mode emits
++//   `pr_auto_merge: suppressed_request_only` instead and never probes or merges.
+ const fs = require('fs');
+ const path = require('path');
+ const os = require('os');
+@@ -87,6 +92,9 @@ function parseArgs(argv) {
+     // #1094: the claimed member set (finalize's `--issue-numbers`) — one `Closes #n` per member.
+     if (argv[i] === '--issue-numbers' && argv[i + 1]) { args.issueNumbers = parseIssueNumbers(argv[++i]); continue; }
+     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
++    // #1113: explicit singleton GitHub keep-open research/artifact PR. Any other value is
++    // retained and refused; absence leaves the #336/#1098 legacy refusal unchanged.
++    if (argv[i] === '--keep-open-pr' && argv[i + 1]) { args.keepOpenPr = String(argv[++i]); continue; }
+   }
+   return args;
+ }
+@@ -116,6 +124,152 @@ function closesBody(members) {
+   return members.map(n => 'Closes #' + n).join('\n');
+ }
+ 
++// #1113: a closing keyword and every #N on that same line. Qualified owner/repo#N is included
++// because the digits are still a #N. "closing" does not match: the keyword is a whole word.
++const CLOSING_KEYWORD_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b/i;
++
++function closingIssueNumbers(text) {
++  const found = new Set();
++  for (const line of String(text || '').split(/\r?\n/)) {
++    if (!CLOSING_KEYWORD_RE.test(line)) continue;
++    const re = /#(\d+)\b/g;
++    let match;
++    while ((match = re.exec(line)) !== null) found.add(parseInt(match[1], 10));
++  }
++  return found;
++}
++
++function sinkField(text, name) {
++  if (typeof text !== 'string') return '';
++  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++  const match = text.match(new RegExp('^' + escaped + ':[ \\t]*(.*)$', 'm'));
++  return match ? match[1].trim() : '';
++}
++
++function keepOpenLinkageBody(issue) {
++  const body = 'Keeps #' + issue + ' open.\n\n' +
++    'This request publishes the run archive for review.\n' +
++    'The issue stays open after merge.\n' +
++    'Request-only: this request is not queued and is not automatically merged.\n';
++  if (closingIssueNumbers(body).size !== 0) {
++    throw new Error('sink-pr: internal: keep-open linkage body contains a closing reference');
++  }
++  return body;
++}
++
++const LEGACY_KEEP_OPEN_REFUSAL = (project) =>
++  'sink-pr: refusing: project ' + project + ' carries issue_action: comment_keep_open. ' +
++  'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
++  'Remediate the merge sink and re-run sink-merge instead.';
++
++function explicitRefusal(reason) {
++  return 'sink-pr: refusing: explicit_keep_open_refused: ' + reason +
++    '. Explicit singleton GitHub keep-open PR mode requires --keep-open-pr explicit_singleton ' +
++    'together with issue_action: comment_keep_open, keep_open_pr: explicit_singleton, sink: pr, ' +
++    'and exactly one issue. Nothing was pushed or created.';
++}
++
++// Pure gate. texts are the live and archived workflow-state bodies that exist.
++// kind: close | legacy_refuse | explicit | malformed.
++function assessKeepOpenPr(args, texts, members) {
++  const present = (Array.isArray(texts) ? texts : []).filter(t => typeof t === 'string');
++  const flag = args && args.keepOpenPr;
++  const flagExact = flag === 'explicit_singleton';
++  const anyLegacy = present.some(t => sinkField(t, 'issue_action') === 'comment_keep_open');
++  const anyMarker = present.some(t => sinkField(t, 'keep_open_pr') !== '');
++  const project = (args && args.project) || '';
++  if (!flag && !anyMarker) {
++    if (anyLegacy) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
++    return { kind: 'close' };
++  }
++  if (!flagExact) {
++    if (anyLegacy && !flag) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
++    return { kind: 'malformed', reason: flag ? 'mode_mismatch' : 'partial_marker', message: explicitRefusal(flag ? 'mode_mismatch' : 'partial_marker') };
++  }
++  if (present.length === 0) return { kind: 'malformed', reason: 'state_missing', message: explicitRefusal('state_missing') };
++  const signature = (t) => [
++    sinkField(t, 'issue_action'), sinkField(t, 'keep_open_pr'), sinkField(t, 'sink'),
++    sinkField(t, 'issue_number'), sinkField(t, 'branch'), sinkField(t, 'issue_numbers'),
++    sinkField(t, 'base_branch')
++  ].join('\0');
++  if (new Set(present.map(signature)).size > 1) {
++    return { kind: 'malformed', reason: 'state_conflict', message: explicitRefusal('state_conflict') };
++  }
++  const text = present[0];
++  if (sinkField(text, 'issue_action') !== 'comment_keep_open' || sinkField(text, 'keep_open_pr') !== 'explicit_singleton') {
++    return { kind: 'malformed', reason: 'mode_mismatch', message: explicitRefusal('mode_mismatch') };
++  }
++  if (sinkField(text, 'sink') !== 'pr') return { kind: 'malformed', reason: 'sink_mismatch', message: explicitRefusal('sink_mismatch') };
++  const set = Array.isArray(members) ? members : [];
++  if (set.length !== 1) return { kind: 'malformed', reason: 'bundle_refused', message: explicitRefusal('bundle_refused') };
++  const stateIssue = parseInt(sinkField(text, 'issue_number'), 10);
++  const stateMembers = parseIssueNumbers(sinkField(text, 'issue_numbers'));
++  if (!(args && Number.isInteger(args.issue) && args.issue > 0) || args.issue !== set[0]) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (stateMembers.length > 1) return { kind: 'malformed', reason: 'bundle_refused', message: explicitRefusal('bundle_refused') };
++  if (stateMembers.length === 1 && stateMembers[0] !== args.issue) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (!Number.isFinite(stateIssue) || stateIssue !== args.issue) {
++    return { kind: 'malformed', reason: 'issue_mismatch', message: explicitRefusal('issue_mismatch') };
++  }
++  if (sinkField(text, 'branch') !== args.branch) {
++    return { kind: 'malformed', reason: 'branch_mismatch', message: explicitRefusal('branch_mismatch') };
++  }
++  return { kind: 'explicit', base_branch: sinkField(text, 'base_branch') };
++}
++
++function gitRefExists(root, ref) {
++  try {
++    execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', ref], { stdio: 'ignore' });
++    return true;
++  } catch (_) { return false; }
++}
++
++function commitMessagesNotOnBase(root, baseBranch, branch) {
++  if (!gitRefExists(root, branch) && !gitRefExists(root, 'refs/heads/' + branch)) {
++    return { ok: false, reason: 'head_missing' };
++  }
++  const headRef = gitRefExists(root, branch) ? branch : ('refs/heads/' + branch);
++  const baseCandidates = [baseBranch, 'origin/' + baseBranch, 'refs/heads/' + baseBranch, 'refs/remotes/origin/' + baseBranch];
++  const baseRef = baseCandidates.find(candidate => gitRefExists(root, candidate));
++  if (!baseRef) return { ok: false, reason: 'base_unavailable' };
++  try {
++    const text = execFileSync('git', ['-C', root, 'log', '--format=%B%x1e', baseRef + '..' + headRef], {
++      encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe']
++    });
++    return { ok: true, text: text };
++  } catch (_) {
++    return { ok: false, reason: 'commit_scan_failed' };
++  }
++}
++
++function assertNoClosingCommits(root, baseBranch, branch, members) {
++  const scanned = commitMessagesNotOnBase(root, baseBranch, branch);
++  if (!scanned.ok) throw new Error(explicitRefusal(scanned.reason));
++  const hit = members.filter(n => closingIssueNumbers(scanned.text).has(n));
++  if (hit.length) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. Commit messages reachable from ' +
++      branch + ' and not from ' + baseBranch + ' close issue(s) ' + hit.join(', ') + '. Nothing was pushed or created.');
++  }
++}
++
++function assertExplicitReuseSafe(existing, members) {
++  const text = String(existing.body || '') + '\n' + String(existing.title || '');
++  const hit = members.filter(n => closingIssueNumbers(text).has(n));
++  if (hit.length) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. PR ' + existing.url +
++      ' carries a closing reference to issue(s) ' + hit.join(', ') + '. The PR was not modified.');
++  }
++  for (const n of members) {
++    if (!new RegExp('#' + n + '\\b').test(text)) {
++      throw new Error('sink-pr: refusing: explicit_keep_open_refused: linkage_missing. PR ' + existing.url +
++        ' does not identify issue #' + n + '. The PR was not modified.');
++    }
++  }
++}
++
+ // #1098: write pr_url/pr_number into the state file's `## Sink` block — in place when the line
+ // already exists, appended to the block otherwise, and SKIPPED entirely when the result would be
+ // byte-identical. Re-entry used to re-insert the two lines because the block's extent was matched
+@@ -175,17 +329,22 @@ function resolveProjectDir(root, project) {
+ // watch-pr. Written into the resolved project's .cache (archive folder in the standard exit-3 lane).
+ // #1098: idempotent — when {project, branch, pr_url, pr_number} are unchanged the file is NOT
+ // rewritten; a fresh timestamp would mint a new archive commit on every re-entry.
+-function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
++// #1113: explicit mode passes keep_open_pr / pr_request / mainline_publication. Absent keys
++// compare as '' so a close-mode record stays the same shape and stays idempotent.
++function recordPrResult(projectDir, project, prUrl, prNumber, branch, extra) {
+   try {
+     const cacheDir = path.join(projectDir, '.cache');
+     fs.mkdirSync(cacheDir, { recursive: true });
+     const recordPath = path.join(cacheDir, 'sink-pr-result.json');
+     const next = { project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() };
++    if (extra && typeof extra === 'object') Object.assign(next, extra);
++    const same = (prevRec, key) => (prevRec[key] || '') === (next[key] || '');
+     try {
+       const prev = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+       if (prev && typeof prev === 'object' &&
+           prev.project === next.project && prev.branch === next.branch &&
+-          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number) return;
++          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number &&
++          same(prev, 'keep_open_pr') && same(prev, 'pr_request') && same(prev, 'mainline_publication')) return;
+     } catch (_) {}
+     // Atomic (tmp + fsync + rename): the whole point of this record is to be DURABLE before any step
+     // that can throw after PR creation. A bare write is neither fsynced nor all-or-nothing, so the
+@@ -221,7 +380,8 @@ function normalizePrView(data) {
+     state: String(data.state || '').toUpperCase(),
+     head: String(data.headRefName || ''),
+     base: String(data.baseRefName || ''),
+-    body: String(data.body || '')
++    body: String(data.body || ''),
++    title: String(data.title || '')
+   };
+ }
+ 
+@@ -230,7 +390,7 @@ function normalizePrView(data) {
+ // Any probe failure returns null so the caller falls back to the head-based discovery.
+ function viewRecordedPr(prUrl) {
+   try {
+-    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body'])));
++    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body,title'])));
+   } catch (_) { return null; }
+ }
+ 
+@@ -243,7 +403,7 @@ function listOpenPrs(branch, baseBranch) {
+   let raw = '';
+   try {
+     raw = ghExec(['pr', 'list', '--head', branch, '--base', baseBranch, '--state', 'open',
+-      '--json', 'url,number,state,headRefName,baseRefName,body']);
++      '--json', 'url,number,state,headRefName,baseRefName,body,title']);
+   } catch (_) { return []; }
+   let list = null;
+   try { list = JSON.parse(raw || '[]'); } catch (_) { return []; }
+@@ -309,19 +469,30 @@ function main() {
+   const summaryFile = path.join(projectFolder, 'finalization-summary.md');
+   const members = resolveMemberSet(args, stateFile);
+ 
+-  // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
+-  // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
+-  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the finalize
+-  // transaction archives the project BEFORE the sink runs, so the live state file is already gone);
+-  // the LIVE path covers a sink: pr project that gained issue_action by mistake. Guard sits
+-  // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
+-  const keepOpenRe = /^issue_action:\s*comment_keep_open\s*$/m;
++  // #336 / #1098 D4=(a): keep-open without the explicit #1113 agreement stays merge-sink-only.
++  // The PR body 'Closes #N' would auto-close the kept-open issue. The ARCHIVED path is the one
++  // that fires in the real exit-3 fallback flow (the finalize transaction archives the project
++  // BEFORE the sink runs); the LIVE path covers a sink: pr project that gained issue_action by
++  // mistake. The gate sits BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
++  // #1113: the same gate is the only way into explicit singleton mode. A partial marker or a
++  // mismatched flag refuses before any placeholder, push, or create.
++  const keepOpenTexts = [];
++  const keepOpenSeen = new Set();
+   for (const f of [stateFile, path.join(root, 'kaola-workflow', 'archive', args.project, 'workflow-state.md')]) {
+-    let s = ''; try { s = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+-    assert(!keepOpenRe.test(s),
+-      'sink-pr: refusing: project ' + args.project + ' carries issue_action: comment_keep_open. ' +
+-      'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
+-      'Remediate the merge sink and re-run sink-merge instead.');
++    let resolved = f;
++    try { resolved = fs.realpathSync(f); } catch (_) { continue; }
++    if (keepOpenSeen.has(resolved)) continue;
++    keepOpenSeen.add(resolved);
++    try { keepOpenTexts.push(fs.readFileSync(resolved, 'utf8')); } catch (_) {}
++  }
++  const keepOpenDecision = assessKeepOpenPr(args, keepOpenTexts, members);
++  if (keepOpenDecision.kind === 'legacy_refuse' || keepOpenDecision.kind === 'malformed') {
++    throw new Error(keepOpenDecision.message);
++  }
++  const explicitMode = keepOpenDecision.kind === 'explicit';
++  if (explicitMode && OFFLINE) {
++    throw new Error(explicitRefusal('offline') +
++      ' Explicit mode does not write an OFFLINE placeholder.');
+   }
+ 
+   if (OFFLINE) {
+@@ -370,6 +541,10 @@ function main() {
+   if (baseBranch === 'main') {
+     try { baseBranch = defaultBranch(root) || 'main'; } catch (_) { baseBranch = 'main'; }
+   }
++  if (explicitMode && keepOpenDecision.base_branch && keepOpenDecision.base_branch !== baseBranch) {
++    throw new Error('sink-pr: refusing: explicit_keep_open_refused: base_mismatch. State base_branch is ' +
++      keepOpenDecision.base_branch + ', resolved base is ' + baseBranch + '. Nothing was pushed or created.');
++  }
+ 
+   // #1098 §2.1-2: find the existing PR BEFORE any push. Identity comes from the durable record
+   // first; record-less discovery queries open PRs for this head/base.
+@@ -395,9 +570,33 @@ function main() {
+   }
+ 
+   if (existing) {
++    // #1113: explicit mode checks head/base before the merged early-return. Close mode does not:
++    // an already-merged close-mode PR still reports already_merged without a head comparison.
++    if (explicitMode) {
++      if (existing.head !== args.branch) {
++        throw new Error(explicitRefusal('head_mismatch') + ' PR ' + existing.url + ' head is ' +
++          (existing.head || '(empty)') + ', expected ' + args.branch + '.');
++      }
++      if (existing.base !== baseBranch) {
++        throw new Error(explicitRefusal('base_mismatch') + ' PR ' + existing.url + ' base is ' +
++          (existing.base || '(empty)') + ', expected ' + baseBranch + '.');
++      }
++    }
+     if (existing.state === 'MERGED') {
+       // Merged: no push, no create, no merge — the remote branch (even deleted) stays exactly as
+       // the forge left it, and §2.2's reconciliation owns the disposition.
++      if (explicitMode) {
++        const mergedText = String(existing.body || '') + '\n' + String(existing.title || '');
++        const closingPresent = members.some(n => closingIssueNumbers(mergedText).has(n));
++        if (closingPresent) {
++          process.stderr.write('sink-pr: note: explicit keep-open PR ' + existing.url +
++            ' is merged and its text carries a closing reference. No second PR was created.\n');
++        }
++        process.stdout.write('pr_request: request_only\n');
++        process.stdout.write('publication: already_published\n');
++        process.stdout.write('mainline_publication: pending_reconciliation\n');
++        process.stdout.write('keep_open_linkage: ' + (closingPresent ? 'closing_present' : 'clean') + '\n');
++      }
+       process.stdout.write('sink_pr: already_merged\n');
+       return;
+     }
+@@ -408,36 +607,51 @@ function main() {
+         'sink-pr: refusing: PR ' + existing.url + ' is closed without merging (pr_closed_unmerged). ' +
+         'The orchestrator decides whether to reopen; nothing was pushed or created.');
+     }
+-    // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
+-    assert(existing.head === args.branch,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
+-      (existing.head || '(empty)') + ', expected ' + args.branch);
+-    assert(existing.base === baseBranch,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
+-      (existing.base || '(empty)') + ', expected ' + baseBranch);
+-    const missingCloses = members.filter(n =>
+-      !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
+-    assert(missingCloses.length === 0,
+-      'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
+-      missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
+-      '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
++    if (explicitMode) {
++      // OPEN explicit reuse: no closing linkage, and the body or title must still name the issue.
++      // Commit messages are scanned before any archive publish. Close mode keeps the Closes check.
++      assertExplicitReuseSafe(existing, members);
++      assertNoClosingCommits(root, baseBranch, args.branch, members);
++    } else {
++      // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
++      assert(existing.head === args.branch,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
++        (existing.head || '(empty)') + ', expected ' + args.branch);
++      assert(existing.base === baseBranch,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
++        (existing.base || '(empty)') + ', expected ' + baseBranch);
++      const missingCloses = members.filter(n =>
++        !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
++      assert(missingCloses.length === 0,
++        'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
++        missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
++        '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
++    }
+   }
+ 
+   const reused = !!existing;
+   let prUrl;
+   let prNumber;
++  let explicitTitle = '';
++  let explicitBody = '';
+   if (!reused) {
++    if (explicitMode) {
++      assertNoClosingCommits(root, baseBranch, args.branch, members);
++      explicitBody = keepOpenLinkageBody(members[0]);
++      explicitTitle = 'Publish ' + args.project + ' (keeps #' + members[0] + ' open)';
++      if (closingIssueNumbers(explicitTitle).size !== 0) {
++        throw new Error(explicitRefusal('closing_linkage') + ' The generated title was not used.');
++      }
++    }
+     // Step 3 — push branch (the lookup above already ruled out an existing PR on this head)
+     execFileSync('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
+ 
+-    // Step 4 — create PR
+-    const prCreateArgs = [
+-      'pr', 'create',
+-      '--head', args.branch,
+-      '--base', baseBranch,
+-      '--fill',
+-    ];
+-    if (members.length > 0) {
++    // Step 4 — create PR. Close mode stays --fill plus one Closes line per member.
++    // Explicit mode names the issue without a closing keyword and never uses --fill.
++    const prCreateArgs = explicitMode
++      ? ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--title', explicitTitle, '--body', explicitBody]
++      : ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--fill'];
++    if (!explicitMode && members.length > 0) {
+       prCreateArgs.push('--body', closesBody(members));
+     }
+ 
+@@ -459,7 +673,12 @@ function main() {
+   // identified, BEFORE updateStateSinkBlock / appendSummary / the archive publish (any of which
+   // can throw). Without this, a crash after PR creation left an orphaned open PR with no durable
+   // pr_url — watch-pr never saw it. The record lives in the resolved project's .cache.
+-  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch);
++  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch,
++    explicitMode ? {
++      keep_open_pr: 'explicit_singleton',
++      pr_request: 'request_only',
++      mainline_publication: 'pending'
++    } : undefined);
+ 
+   // Step 7 — update workflow-state.md Sink block
+   updateStateSinkBlock(stateFile, prUrl, prNumber);
+@@ -488,7 +707,11 @@ function main() {
+   // branches" setting). Probe false OR probe failure/unparseable → the ORIGINAL argv, verbatim, so
+   // a forge we cannot probe behaves exactly as before. The probe never throws: any gh error, JSON
+   // error, or unexpected envelope is a `false`.
+-  if (config.pr_auto_merge === true) {
++  // #1113: explicit request-only mode never probes the merge queue and never calls gh pr merge,
++  // even when the operator config has pr_auto_merge true. The config file is not modified.
++  if (explicitMode) {
++    process.stdout.write('pr_auto_merge: suppressed_request_only\n');
++  } else if (config.pr_auto_merge === true) {
+     let queueEnabled = false;
+     try {
+       const probe = JSON.parse(ghExec([
+@@ -521,6 +744,12 @@ function main() {
+     process.stdout.write('pr_auto_merge: ' + lane + '\n');
+   }
+ 
++  // #1113: request-only receipt lines precede the final sink_pr line, which stays last.
++  if (explicitMode) {
++    process.stdout.write('pr_request: request_only\n');
++    process.stdout.write('publication: request_published\n');
++    process.stdout.write('mainline_publication: pending\n');
++  }
+   // #1098 §2.1-6: the machine-readable result line — additive; this sink had no stdout contract.
+   process.stdout.write('sink_pr: ' + (reused ? 'reused' : 'created') + '\n');
+ }
+@@ -529,4 +758,7 @@ if (require.main === module) {
+   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+ }
+ 
+-module.exports = { parseArgs, resolveMemberSet, closesBody };
++module.exports = {
++  parseArgs, resolveMemberSet, closesBody,
++  keepOpenLinkageBody, closingIssueNumbers, assessKeepOpenPr
++};
+diff --git a/templates/routing/finalize.skeleton.md b/templates/routing/finalize.skeleton.md
+index bd292980..bdd0c0ef 100644
+--- a/templates/routing/finalize.skeleton.md
++++ b/templates/routing/finalize.skeleton.md
+@@ -106,6 +106,9 @@ and only after acceptance, the closure decision, and a verified merge. The merge
+ itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+ into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+ applies to the entire claimed set, releases all claims, and is merge-sink-only.
++GitHub has one later exception: `keep_open_pr: explicit_singleton` together with
++`issue_action: comment_keep_open` and `sink: pr` on exactly one issue. That mode is request-only.
++GitLab and Gitea still refuse every keep-open request sink.
+ 
+ ## Card: close, archive, sink, and reconcile
+ 
+@@ -127,6 +130,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
+ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+ SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
++SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
+ ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
+ ```
+ 
+@@ -150,7 +154,6 @@ The archive still fails loudly if it would lose a file. Every run file must land
+ 
+ ```bash
+ <!-- SPLICE:fz-keepopen-comment -->
+-if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
+ case "$SINK_KIND" in
+ <!-- SPLICE:fz-sink-pr-case -->
+     ;;
+@@ -175,6 +178,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there 
+ rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
+ `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
+ the mainline, and leaving manual closure of any remaining members to you only once verified.
++GitHub explicit singleton keep-open (`keep_open_pr: explicit_singleton`) passes
++`--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
++GitLab and Gitea do not gain that mode: their keep-open guard still exits before the request sink.
+ <!-- /PIN -->
+ 
+ <!-- PIN: closure-audit -->
+diff --git a/templates/routing/slots.js b/templates/routing/slots.js
+index e8bf27dc..6a12ea6c 100644
+--- a/templates/routing/slots.js
++++ b/templates/routing/slots.js
+@@ -101,8 +101,8 @@ const SPLICES = {
+   "fz-runchains-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-run-chains.js\" --project {project}","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-run-chains.js\" --project {project}","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-run-chains.js\" --project {project}"},
+   "fz-issue-closure": {"github":"If the project links issues, every claimed GitHub issue closes on the merge and PR sinks alike,","gitlab":"If the project links issues, every claimed GitLab issue closes on the merge and MR sinks alike,","gitea":"If the project links issues, every claimed Gitea issue closes on the merge and PR sinks alike,"},
+   "fz-sink-issue": {"github":"SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')","gitlab":"SINK_ISSUE=$(grep '^issue_iid:' \"$SINK_STATE_FILE\" | awk '{print $2}')\n[ -z \"$SINK_ISSUE\" ] && SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')","gitea":"SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')"},
+-  "fz-keepopen-comment": {"github":"# keep-open is merge-sink-only — a PR sink would close the kept-open issue.","gitlab":"# keep-open is merge-sink-only — an MR sink would close the kept-open issue.","gitea":"# keep-open is merge-sink-only — a PR sink would close the kept-open issue."},
+-  "fz-sink-pr-case": {"github":"  pr)\n    node \"$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}","gitlab":"  mr|pr)\n    node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-sink-mr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}","gitea":"  mr|pr)\n    node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}"},
++  "fz-keepopen-comment": {"github":"# keep-open is merge-sink-only — a PR sink would close the kept-open issue.\n# Explicit singleton is the one supported request-only PR. Any other keep-open request sink still stops here.\nif [ \"$SINK_KIND\" != merge ] && [ -n \"$SINK_KEEP_OPEN_FLAG\" ] && [ \"$SINK_KEEP_OPEN_PR\" != explicit_singleton ]; then exit 1; fi","gitlab":"# keep-open is merge-sink-only — an MR sink would close the kept-open issue.\nif [ \"$SINK_KIND\" != merge ] && [ -n \"$SINK_KEEP_OPEN_FLAG\" ]; then exit 1; fi","gitea":"# keep-open is merge-sink-only — a PR sink would close the kept-open issue.\nif [ \"$SINK_KIND\" != merge ] && [ -n \"$SINK_KEEP_OPEN_FLAG\" ]; then exit 1; fi"},
++  "fz-sink-pr-case": {"github":"  pr)\n    SINK_KEEP_OPEN_PR_FLAG=\"\"\n    if [ \"$SINK_KEEP_OPEN_PR\" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG=\"--keep-open-pr explicit_singleton\"; fi\n    node \"$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}","gitlab":"  mr|pr)\n    node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-sink-mr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}","gitea":"  mr|pr)\n    node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}"},
+   "fz-sink-merge-run": {"github":"    node \"$KAOLA_SCRIPTS/kaola-workflow-sink-merge.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json","gitlab":"    node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-sink-merge.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json","gitea":"    node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-merge.js\" --branch \"$SINK_BRANCH\" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json"},
+   "fz-closure-audit-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped"},
+ };
+
+# part 2: untracked docs/decisions/0031-explicit-github-keep-open-pr.md
+# git diff --no-index /dev/null docs/decisions/0031-explicit-github-keep-open-pr.md (exit 1 expected)
+
+diff --git a/docs/decisions/0031-explicit-github-keep-open-pr.md b/docs/decisions/0031-explicit-github-keep-open-pr.md
+new file mode 100644
+index 00000000..7558b629
+--- /dev/null
++++ b/docs/decisions/0031-explicit-github-keep-open-pr.md
+@@ -0,0 +1,51 @@
++# ADR 0031 — Explicit GitHub singleton keep-open PR
++
++Status: Proposed, pending Host acceptance · Date: 2026-10-02 · Issue: #1113
++
++## Context
++
++#1098 D4=(a) made keep-open merge-sink-only. A PR body of `Closes #N` would close the issue the run
++had decided to keep open, so `sink-pr` refuses `issue_action: comment_keep_open` before any effect.
++That refusal, and the tests that pin the `merge-sink-only` sentence, stay accurate as history and as
++the default.
++
++VRPCadCore #143 needs a GitHub review request for a research/artifact publication while the issue
++stays open. Astra's standing closeout memo (SHA-256
++`3eedcc40d7568d4a9bfa95a5890e1e5b28e687abf54ad812cc1cf0a28213747a`) and the Host adoption record
++(SHA-256 `4aeedbcf2d0e8cbba4eefcaa3a82355cb91c1220a7ea038efd1d82417fcdad50`) authorize that narrow
++capability under Yanlei's standing authority, relayed 2026-10-02. This ADR records the delegated
++decision. It does not rewrite #1098.
++
++## Decision
++
++1. Default close mode is unchanged. A keep-open state that does not carry the explicit agreement is
++   still refused with the historical merge-sink-only sentence.
++2. The only new mode is GitHub, singleton, and explicit. All of these must agree: CLI
++   `--keep-open-pr explicit_singleton`, `issue_action: comment_keep_open`,
++   `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue. The branch, and a
++   `base_branch` when one is recorded, must match. A bundle, another forge, a partial marker, or a
++   mismatched issue, branch, base, or head is refused before push or create.
++3. The request does not close the issue. The body is `Keeps #N open.` plus non-closing sentences.
++   Commit messages on `base..head` that carry a closing keyword and `#N` on the same line are refused
++   before effects. Reuse requires the open request to name `#N` and not to close it.
++4. The mode is request-only. It does not probe the merge queue and does not call `gh pr merge`, even
++   when `pr_auto_merge` is true. It does not edit that config.
++5. The watcher tells the truth. An issue still open is `intentionally_kept_open`. An issue actually
++   closed is `keep_open_violation` and is not reopened. An unreadable probe is `unknown`, not
++   `skipped_offline` and not a success. Run archive status `closed` still means the run archived.
++6. GitLab and Gitea keep the unconditional keep-open request refusal. No other forge semantics change.
++
++## Consequences
++
++Finalize captures `keep_open_pr` and passes the flag only when the value is `explicit_singleton`.
++The script re-checks the full agreement, so a rendered flag without the durable lines still refuses.
++`remote_issue_closed` gains the token `unknown` in the shared closure schema. Only this GitHub
++watcher emits it. `checkClosureInvariants` skips `remote-members-closed` for an intentionally open
++explicit receipt and adds `keep-open-pr-violated` or `keep-open-pr-unknown` otherwise. Those ids are
++not new `CLOSURE_INVARIANTS` entries.
++
++Active-folder readers expose `issue_action` and `keep_open_pr` as empty strings when absent. They
++are not shared-state fields.
++
++This record is the design for the uncommitted #1113 candidate. It becomes accepted only when the
++Host accepts that candidate.

@@ -1,0 +1,118 @@
+{
+  "controls": [
+    {
+      "name": "close-body",
+      "expected_rejection": "closing reference found",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "qualified-commit-close",
+      "expected_rejection": "closing reference found",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "auto-merge",
+      "expected_rejection": "auto-merge or merge-queue operation occurred",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "queue",
+      "expected_rejection": "auto-merge or merge-queue operation occurred",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "identity-loss",
+      "expected_rejection": "claim, branch, MAIN/worktree, ledger, and evidence identity must match",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "ledger-mutation",
+      "expected_rejection": "ledger hash changed",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "artifact-drop",
+      "expected_rejection": "evidence inventory changed",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "wrong-base",
+      "expected_rejection": "PR base mismatch",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "wrong-head",
+      "expected_rejection": "PR head mismatch",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "duplicate-pr",
+      "expected_rejection": "retry duplicated the PR",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "index-mutation",
+      "expected_rejection": "MAIN index changed",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "unknown-as-open",
+      "expected_rejection": "watcher disposition is not truthful",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "closed-as-kept-open",
+      "expected_rejection": "watcher disposition is not truthful",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "auto-reopen",
+      "expected_rejection": "automatically reopened the issue",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "unrelated-scope",
+      "expected_rejection": "watcher changed an unrelated issue folder",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "refusal-effect",
+      "expected_rejection": "unsafe effect occurred before refusal",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "merged-republish",
+      "expected_rejection": "MERGED request was republished",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "accept-missing-action",
+      "expected_rejection": "unsafe or unsupported input must refuse",
+      "exit": 1,
+      "detected": true
+    },
+    {
+      "name": "main-head-mutation",
+      "expected_rejection": "MAIN HEAD changed",
+      "exit": 1,
+      "detected": true
+    }
+  ]
+}

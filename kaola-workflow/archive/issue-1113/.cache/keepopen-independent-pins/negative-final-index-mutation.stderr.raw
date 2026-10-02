@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: retry-push: MAIN index changed
++ actual - expected
+
++ 'fixture-main-index:before'
+- 'fixture-main-index:changed'
+                      ^
+
+    at assertCustody (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:78:10)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:238:7)

@@ -1,0 +1,18 @@
+{
+  "diffs": [
+    {
+      "command": "git diff --no-index -- /dev/null kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js",
+      "exit": 1,
+      "meaning": "expected 1 because the suite is a new file"
+    },
+    {
+      "command": "git diff --no-index -- kaola-workflow/issue-1113/.cache/keepopen-independent-pins/frozen-source/provider-fe7e4443a8c367cfc111c65755191ae6790e810e/package.json kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/package.json",
+      "exit": 1,
+      "meaning": "expected 1 because the proposal adds a focused npm command"
+    }
+  ],
+  "patch_path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test-integration.patch",
+  "patch_sha256": "2416b368c531eb917be8b62243840814dc411561350cc0b7025bee94a7abe5a0",
+  "source_sha256": "213d047aba06a28d8a7ab93d40af5eaaa5246e942ff23983f5c4b2228a47a565",
+  "proposed_package_sha256": "673b4387fb43e3c99df7c7d90072af21f290492e1437e7c307bd5a13089e803f"
+}

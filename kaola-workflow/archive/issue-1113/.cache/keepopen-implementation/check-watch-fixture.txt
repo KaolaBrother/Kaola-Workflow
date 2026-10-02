@@ -1,0 +1,7 @@
+command: node /tmp/kw-1113-watch-fixture.js
+WATCH_FIXTURE_OK
+open-ids 
+closed-ids keep-open-pr-violated
+unknown-ids remote-members-closed,keep-open-pr-unknown
+legacy-token skipped_offline
+exit: 0

@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: live-create: PR head mismatch
++ actual - expected
+
++ 'workflow/wrong'
+- 'workflow/issue-143'
+            ^
+
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:105:10)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:169:7)

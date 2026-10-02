@@ -1,0 +1,1 @@
+{"agent_exit_code": 0, "agent_exit_signal": null, "git": {"branch": "main", "dirty": true}, "mutation_status": "completed", "platform": "grok", "repo": "/Users/ylmacstudio/Workspace/kaola-workflow", "residual_pids": [], "schema_version": 3, "session": "grok-kaolaworkflow-i1113-keepopen-publication", "stopped": true, "swept_child_pgids": [], "transport": {"selected": "acp"}}

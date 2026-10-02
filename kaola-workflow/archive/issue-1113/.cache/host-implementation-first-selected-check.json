@@ -1,0 +1,76 @@
+{
+  "report_sha256": "27928c4d3c131dd33e94c7f7f073ef6447174aaa269796451632ada8e3007bf0",
+  "selected": [
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/candidate.diff",
+      "sha256": "0e582b2fb5e488e17510b7649973773f25e4c720b1bc7c84f3fafe3c7a450235",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/candidate-tracked.diff",
+      "sha256": "c8a8715b2fcb56d6e68722db929641383e24124024d8a6e70f2633e76dc71162",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/candidate-adr.diff",
+      "sha256": "04536801864821262314cbe859d8241cb429da4c6e8805c1408e2b39962395cd",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-syntax.txt",
+      "sha256": "c9f099881453b547118c4d5f3bba2bf3c806b26397bff8f9c9f466493f69fdba",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-field-parity.txt",
+      "sha256": "ea224841ebc14b6d4a2edc1ca53a8afe42ed74a953d4c64046ade4d982c554c6",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-bash-block-guards.txt",
+      "sha256": "35ba5cb737da26372a70ec4c24217ba027fa139880821df2c662a5ab6b04a2b2",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-validators.txt",
+      "sha256": "8949adf6fbbb2e84355620e8c3c35c2be8b00956cb95e321c416a717faa9ff48",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-walkthrough-subset.txt",
+      "sha256": "77fa4901e189d0ec96f4a53c88009b2641ad124e7387c5350831e7b3914c3ff3",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-sink-fixture.txt",
+      "sha256": "c9c3c30e1f542e987aef4561e087cf9d3c39549b8c90fc42b502ba1fed8368b3",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-watch-fixture.txt",
+      "sha256": "0b1e7456a03e91ba4980b7e995cc7942190c5f9f4f5c91f921b2ca841a45b80d",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-sink-pr.js",
+      "sha256": "0a8be33171e6cacce497986360648454e2c094ecccdce8744c305b310ac52edc",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-claim.js",
+      "sha256": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-active-folders.js",
+      "sha256": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "cited": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-closure-contract.js",
+      "sha256": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "cited": true
+    }
+  ],
+  "limit": "Report/raw/source selected identities only; execution fixture files outside MAIN and full candidate-source/runtime custody not yet copied. No acceptance/install/publication."
+}

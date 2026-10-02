@@ -1,0 +1,14 @@
+cwd: /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+command: node scripts/generate-routing-surfaces.js --check
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.
+exit_generate_check: 0
+command: node scripts/validate-script-sync.js
+OK: 14 common scripts, 10 byte-identical groups, 0 rename-normalized families, 2 hooks.json families (config + hooks dir), and 5 forge export-superset families in sync.
+    committed kernel parity: 4 Oracle Kernel copies identical at HEAD.
+exit_script_sync: 0
+command: node scripts/validate-workflow-contracts.js
+Workflow contract validation passed
+exit_workflow_contracts: 0
+command: node scripts/validate-kaola-workflow-contracts.js
+Kaola-Workflow Codex contract validation passed
+exit_kaola_contracts: 0

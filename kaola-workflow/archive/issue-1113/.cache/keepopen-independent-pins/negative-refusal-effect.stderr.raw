@@ -1,0 +1,4 @@
+AssertionError [ERR_ASSERTION]: unsupported-bundle: unsafe effect occurred before refusal: [{"name":"preflight.read","target":"/fixture/canonical-main"},{"name":"pr.create"}]
+    at assertNoUnsafeEffects (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:87:3)
+    at assertRefusal (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:119:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:165:7)

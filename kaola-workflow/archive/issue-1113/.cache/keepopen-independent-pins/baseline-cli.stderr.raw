@@ -1,0 +1,1 @@
+sink-pr: refusing: project issue-143 carries issue_action: comment_keep_open. Keep-open is merge-sink-only (a PR would auto-close the issue on merge). Remediate the merge sink and re-run sink-merge instead.

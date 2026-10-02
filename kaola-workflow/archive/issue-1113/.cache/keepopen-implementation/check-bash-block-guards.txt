@@ -1,0 +1,7 @@
+command: node scripts/test-bash-block-guards.js
+cwd: /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+Preparing worktree (checking out 'workflow/issue-700')
+Preparing worktree (checking out 'workflow/issue-800')
+Preparing worktree (checking out 'workflow/issue-4242')
+test-bash-block-guards: all 49 assertions passed (#361 bash-block execution)
+exit: 0

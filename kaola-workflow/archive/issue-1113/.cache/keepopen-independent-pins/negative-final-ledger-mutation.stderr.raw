@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: live-create: ledger hash changed
++ actual - expected
+
++ '0000000000000000000000000000000000000000000000000000000000000000'
+- 'cf31b82168185fe220d1b72ae1886225be597290568721dc112842cc9a37a121'
+
+    at assertCustody (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:74:10)
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:105:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:195:7)

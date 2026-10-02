@@ -1,0 +1,45 @@
+name	verdict	actual_outcome	actual_request_result	actual_mainline	failure
+live-create	RED	success	created	pending	AssertionError [ERR_ASSERTION]: live-create: durable request receipt lost claim/evidence identity
+archive-create	RED	success	created	pending	AssertionError [ERR_ASSERTION]: archive-create: durable request receipt lost claim/evidence identity
+live-open-reuse	RED	success	reused	pending	AssertionError [ERR_ASSERTION]: live-open-reuse: durable request receipt lost claim/evidence identity
+archive-open-reuse	RED	success	reused	pending	AssertionError [ERR_ASSERTION]: archive-open-reuse: durable request receipt lost claim/evidence identity
+legacy-default-close	PASS	success	created	None	
+legacy-keep-open-refusal	PASS	refused	None	None	
+missing-action	PASS	refused	None	None	
+malformed-action	PASS	refused	None	None	
+conflicting-action	RED	success	created	pending	AssertionError [ERR_ASSERTION]: conflicting-action: unsafe or unsupported input must refuse
+missing-repository	RED	success	created	pending	AssertionError [ERR_ASSERTION]: missing-repository: unsafe or unsupported input must refuse
+malformed-repository	RED	success	created	pending	AssertionError [ERR_ASSERTION]: malformed-repository: unsafe or unsupported input must refuse
+repository-mismatch	RED	success	created	pending	AssertionError [ERR_ASSERTION]: repository-mismatch: unsafe or unsupported input must refuse
+missing-digest	RED	success	created	pending	AssertionError [ERR_ASSERTION]: missing-digest: unsafe or unsupported input must refuse
+malformed-digest	RED	success	created	pending	AssertionError [ERR_ASSERTION]: malformed-digest: unsafe or unsupported input must refuse
+digest-mismatch	RED	success	created	pending	AssertionError [ERR_ASSERTION]: digest-mismatch: unsafe or unsupported input must refuse
+missing-member	RED	success	created	pending	AssertionError [ERR_ASSERTION]: missing-member: unsafe or unsupported input must refuse
+malformed-member	RED	success	created	pending	AssertionError [ERR_ASSERTION]: malformed-member: unsafe or unsupported input must refuse
+member-mismatch	PASS	refused	None	None	
+unsupported-bundle	PASS	refused	None	None	
+mixed-disposition	PASS	refused	None	None	
+missing-branch	PASS	refused	None	None	
+malformed-branch	PASS	refused	None	None	
+branch-mismatch	PASS	refused	None	None	
+unsupported-forge	RED	success	created	pending	AssertionError [ERR_ASSERTION]: unsupported-forge: unsafe or unsupported input must refuse
+closing-commit-reference-create	PASS	refused	None	None	
+qualified-closing-commit-reference-reuse	PASS	refused	reused	pending	
+wrong-base-existing-pr	PASS	refused	reused	pending	
+wrong-head-existing-pr	PASS	refused	reused	pending	
+closed-unmerged-existing-pr	PASS	refused	reused	pending	
+open-probe-failure	RED	unknown	created	pending	AssertionError [ERR_ASSERTION]: open-probe-failure: durable request receipt lost claim/evidence identity
+merged-open-not-republished	RED	success	reused	pending	AssertionError [ERR_ASSERTION]: merged-open-not-republished: merged receipt lost claim/evidence identity
+merged-closed-violation	RED	success	reused	pending	AssertionError [ERR_ASSERTION]: merged-closed-violation: merged receipt lost claim/evidence identity
+merged-probe-unknown	RED	unknown	reused	pending	AssertionError [ERR_ASSERTION]: merged-probe-unknown: merged receipt lost claim/evidence identity
+retry-archive	PASS	success	reused	pending	
+retry-create	PASS	success	reused	pending	
+retry-record	PASS	success	reused	pending	
+retry-push	PASS	success	created	pending	
+live-watch-open	PASS	observed	reused	pending	
+live-watch-closed	PASS	observed	reused	pending	
+live-watch-unknown	PASS	observed	reused	pending	
+archive-watch-open	PASS	observed	reused	published	
+archive-watch-closed	PASS	observed	reused	published	
+archive-watch-unknown	PASS	observed	reused	published	
+unrelated-watch-scope	PASS	observed	reused	pending	

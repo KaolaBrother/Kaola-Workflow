@@ -1,0 +1,653 @@
+{
+  "at": "2026-10-02T20:19:38.730666+08:00",
+  "kind": "Host read/hash/source/selected-artifact verification; no diagnostic execution",
+  "report": "102ca7ea1008412d90f76a619c40e465f3a83f704b84b7b6b38c968bb510f986",
+  "reported_table_rows": [
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/controls/explicit-identity-fixture.js",
+      "expected": "ff98728c915c92d27693526b98fd41fcb0d286a8d28508b28da85f5e03a16375",
+      "actual": "ff98728c915c92d27693526b98fd41fcb0d286a8d28508b28da85f5e03a16375",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/controls/explicit-identity-pre.json",
+      "expected": "5180c771af8343a45366732e371a68cd0b2c82bd0b42ab80a9cebe268aecf8c2",
+      "actual": "5180c771af8343a45366732e371a68cd0b2c82bd0b42ab80a9cebe268aecf8c2",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/controls/explicit-identity-start.json",
+      "expected": "3d9ce4546c354e0b584c53fc879360c66e4f171c1aff7189458d4281a31bf817",
+      "actual": "3d9ce4546c354e0b584c53fc879360c66e4f171c1aff7189458d4281a31bf817",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/controls/explicit-identity-post.json",
+      "expected": "3c8350399b39891ac1bfa125af66305907771b85b91350883687245cdc75a96b",
+      "actual": "3c8350399b39891ac1bfa125af66305907771b85b91350883687245cdc75a96b",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/controls/explicit-identity-stdout.txt",
+      "expected": "3030b87b4af7a89176724c03e7189ccfdf49f0d0a488d5c24bb84c1b79bef3a9",
+      "actual": "3030b87b4af7a89176724c03e7189ccfdf49f0d0a488d5c24bb84c1b79bef3a9",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/tmp-as-found/kw-1113-keepopen-fixture.js",
+      "expected": "59ff065604f2f409b4693625085edc9978b1e58470c4ef493acee283867d6a85",
+      "actual": "59ff065604f2f409b4693625085edc9978b1e58470c4ef493acee283867d6a85",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/tmp-as-found/kw-1113-watch-fixture.js",
+      "expected": "0c6d7f9a5eb3a5a01a5770783959e3a387dc259610eba653c869d55bd1a1954d",
+      "actual": "0c6d7f9a5eb3a5a01a5770783959e3a387dc259610eba653c869d55bd1a1954d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/session-logs/sink-fixture-first-run-FAILURES-1.log",
+      "expected": "3caca8ad5aee5fc3d3787b4fa3de12460060008055beda4a9d57daad9d64e5d5",
+      "actual": "3caca8ad5aee5fc3d3787b4fa3de12460060008055beda4a9d57daad9d64e5d5",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/session-logs/sink-fixture-later-FIXTURE_OK.log",
+      "expected": "7443f1c0bb1c9cc7c628f92de1fde4a5d562d27855743746c4448f4c045a4082",
+      "actual": "7443f1c0bb1c9cc7c628f92de1fde4a5d562d27855743746c4448f4c045a4082",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/session-logs/watch-fixture-WATCH_FIXTURE_OK.log",
+      "expected": "7892e3b299cd42df71d7fe60a7b824dd5da0e01011e24333ccabd1e629e7a883",
+      "actual": "7892e3b299cd42df71d7fe60a7b824dd5da0e01011e24333ccabd1e629e7a883",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/sealed-prior/session-logs/validators-before-provenance-fix.log",
+      "expected": "febe1662c9f8cb2ba99d6dc352e4827484e54a079611a586f62361608e20a78d",
+      "actual": "febe1662c9f8cb2ba99d6dc352e4827484e54a079611a586f62361608e20a78d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-syntax.txt",
+      "expected": "c9f099881453b547118c4d5f3bba2bf3c806b26397bff8f9c9f466493f69fdba",
+      "actual": "c9f099881453b547118c4d5f3bba2bf3c806b26397bff8f9c9f466493f69fdba",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-field-parity.txt",
+      "expected": "ea224841ebc14b6d4a2edc1ca53a8afe42ed74a953d4c64046ade4d982c554c6",
+      "actual": "ea224841ebc14b6d4a2edc1ca53a8afe42ed74a953d4c64046ade4d982c554c6",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-bash-block-guards.txt",
+      "expected": "35ba5cb737da26372a70ec4c24217ba027fa139880821df2c662a5ab6b04a2b2",
+      "actual": "35ba5cb737da26372a70ec4c24217ba027fa139880821df2c662a5ab6b04a2b2",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-validators.txt",
+      "expected": "8949adf6fbbb2e84355620e8c3c35c2be8b00956cb95e321c416a717faa9ff48",
+      "actual": "8949adf6fbbb2e84355620e8c3c35c2be8b00956cb95e321c416a717faa9ff48",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-walkthrough-subset.txt",
+      "expected": "77fa4901e189d0ec96f4a53c88009b2641ad124e7387c5350831e7b3914c3ff3",
+      "actual": "77fa4901e189d0ec96f4a53c88009b2641ad124e7387c5350831e7b3914c3ff3",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-sink-fixture.txt",
+      "expected": "c9c3c30e1f542e987aef4561e087cf9d3c39549b8c90fc42b502ba1fed8368b3",
+      "actual": "c9c3c30e1f542e987aef4561e087cf9d3c39549b8c90fc42b502ba1fed8368b3",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/check-watch-fixture.txt",
+      "expected": "0b1e7456a03e91ba4980b7e995cc7942190c5f9f4f5c91f921b2ca841a45b80d",
+      "actual": "0b1e7456a03e91ba4980b7e995cc7942190c5f9f4f5c91f921b2ca841a45b80d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/CHANGELOG.md",
+      "expected": "eb8971d6693cc16aae855d7c26de09feb92752aa2a8e765d6256fac890f6b299",
+      "actual": "eb8971d6693cc16aae855d7c26de09feb92752aa2a8e765d6256fac890f6b299",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/README.md",
+      "expected": "8f8f90e66ee7d6e19f05258b4d67dd593a83b58d4b6a1821091698e6c89af460",
+      "actual": "8f8f90e66ee7d6e19f05258b4d67dd593a83b58d4b6a1821091698e6c89af460",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/commands/kaola-workflow-finalize.md",
+      "expected": "1c012bf536c245079857d2e6e24ce7881b9c8363ca11c9c4c422db738d434f7a",
+      "actual": "1c012bf536c245079857d2e6e24ce7881b9c8363ca11c9c4c422db738d434f7a",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/docs/README.md",
+      "expected": "affbef6b1c31f73af356634a6201558e3ecbb7de5b740aef98edc0a34ae61ebc",
+      "actual": "affbef6b1c31f73af356634a6201558e3ecbb7de5b740aef98edc0a34ae61ebc",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/docs/api.md",
+      "expected": "9a2ae0a1e4543bb740b55872aebc2e1972e9b002cc06fcbaeb96ebc95a3481cb",
+      "actual": "9a2ae0a1e4543bb740b55872aebc2e1972e9b002cc06fcbaeb96ebc95a3481cb",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/docs/architecture.md",
+      "expected": "2bcfd0dea3457a1efe7fa698b41631bd8dfcbe294a0f36dacbd7b191ed39cfb3",
+      "actual": "2bcfd0dea3457a1efe7fa698b41631bd8dfcbe294a0f36dacbd7b191ed39cfb3",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/docs/decisions/0031-explicit-github-keep-open-pr.md",
+      "expected": "7a548d0192d8d712e02ae5f0c4e0efad052ffc5a87dc46ee5d9062daa4dd0ea7",
+      "actual": "7a548d0192d8d712e02ae5f0c4e0efad052ffc5a87dc46ee5d9062daa4dd0ea7",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/docs/workflow-state-contract.md",
+      "expected": "5817c9fa7a76918745d8981c84959fbfc7aa353f1e7a1cbdd9ef8eb2610e0bdd",
+      "actual": "5817c9fa7a76918745d8981c84959fbfc7aa353f1e7a1cbdd9ef8eb2610e0bdd",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md",
+      "expected": "31d47a308e883145221568fd4dd4ba7aa1e6e7c23fe65161addd2a534c42e921",
+      "actual": "31d47a308e883145221568fd4dd4ba7aa1e6e7c23fe65161addd2a534c42e921",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js",
+      "expected": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "actual": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md",
+      "expected": "c02996f7c87928e3e7ca972360fc41a7bcd9803fded57a9f0f493330ba4128e7",
+      "actual": "c02996f7c87928e3e7ca972360fc41a7bcd9803fded57a9f0f493330ba4128e7",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md",
+      "expected": "f3ce74e57075efd93b2f3c095a37f06405c8f22bd95b819f88274d3593f13390",
+      "actual": "f3ce74e57075efd93b2f3c095a37f06405c8f22bd95b819f88274d3593f13390",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js",
+      "expected": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "actual": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md",
+      "expected": "496b37b141df76ec788cd38e8d1335a3cf3658a22d15e9f0d65018a330f54411",
+      "actual": "496b37b141df76ec788cd38e8d1335a3cf3658a22d15e9f0d65018a330f54411",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js",
+      "expected": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "actual": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "actual": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js",
+      "expected": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "actual": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "actual": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
+      "expected": "31cabe5747715dd15fa8999db679cd055d611ca95e00febd74b9c847fd03511b",
+      "actual": "31cabe5747715dd15fa8999db679cd055d611ca95e00febd74b9c847fd03511b",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/fixtures/issue-1055-render-baseline.json",
+      "expected": "5c6a4ffe3a3276b41a6bf8adcc49aab5c7aba34ecdfdc7833d57d797b946a217",
+      "actual": "5c6a4ffe3a3276b41a6bf8adcc49aab5c7aba34ecdfdc7833d57d797b946a217",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-active-folders.js",
+      "expected": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "actual": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-claim.js",
+      "expected": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "actual": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-closure-contract.js",
+      "expected": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "actual": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/scripts/kaola-workflow-sink-pr.js",
+      "expected": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "actual": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/templates/routing/finalize.skeleton.md",
+      "expected": "f5cb6ec43fb33d7d4ac8bf054c68a338a6ec6072ff2ba6d1d72a5c6518851e98",
+      "actual": "f5cb6ec43fb33d7d4ac8bf054c68a338a6ec6072ff2ba6d1d72a5c6518851e98",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/templates/routing/slots.js",
+      "expected": "242f6d236c7527e6d77ce39aa9764cf361c4bfa58b139736fcc29d87029d1175",
+      "actual": "242f6d236c7527e6d77ce39aa9764cf361c4bfa58b139736fcc29d87029d1175",
+      "match": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/keepopen-independent-pins/REPORT.md",
+      "expected": "71f405f24962af583deec5a4fad9939b9d8231693ec77710828d8bda756c48b8",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/keepopen-independent-pins/ARTIFACT-HASHES",
+      "expected": "619e46bbb98e46b9571c2b2c710a1a31063019b0d02bb8b03f5bf12aeb91a12e",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/keepopen-independent-pins/ARTIFACT-HASHES.sha256",
+      "expected": "86283eca007d11fa19fed5948b72e5896a1c354434243923c41138da9b4a3ae0",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/accepted-astra-memo.md",
+      "expected": "3eedcc40d7568d4a9bfa95a5890e1e5b28e687abf54ad812cc1cf0a28213747a",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/accepted-host-adoption.md",
+      "expected": "4aeedbcf2d0e8cbba4eefcaa3a82355cb91c1220a7ea038efd1d82417fcdad50",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.grok/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.grok/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.agents/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.agents/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.claude/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "expected": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "missing": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113/~/.claude/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "expected": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "missing": true
+    }
+  ],
+  "git_blobs": [
+    {
+      "path": "CHANGELOG.md",
+      "blob": "eb8971d6693cc16aae855d7c26de09feb92752aa2a8e765d6256fac890f6b299",
+      "working": "eb8971d6693cc16aae855d7c26de09feb92752aa2a8e765d6256fac890f6b299",
+      "match": true
+    },
+    {
+      "path": "README.md",
+      "blob": "8f8f90e66ee7d6e19f05258b4d67dd593a83b58d4b6a1821091698e6c89af460",
+      "working": "8f8f90e66ee7d6e19f05258b4d67dd593a83b58d4b6a1821091698e6c89af460",
+      "match": true
+    },
+    {
+      "path": "commands/kaola-workflow-finalize.md",
+      "blob": "1c012bf536c245079857d2e6e24ce7881b9c8363ca11c9c4c422db738d434f7a",
+      "working": "1c012bf536c245079857d2e6e24ce7881b9c8363ca11c9c4c422db738d434f7a",
+      "match": true
+    },
+    {
+      "path": "docs/README.md",
+      "blob": "affbef6b1c31f73af356634a6201558e3ecbb7de5b740aef98edc0a34ae61ebc",
+      "working": "affbef6b1c31f73af356634a6201558e3ecbb7de5b740aef98edc0a34ae61ebc",
+      "match": true
+    },
+    {
+      "path": "docs/api.md",
+      "blob": "9a2ae0a1e4543bb740b55872aebc2e1972e9b002cc06fcbaeb96ebc95a3481cb",
+      "working": "9a2ae0a1e4543bb740b55872aebc2e1972e9b002cc06fcbaeb96ebc95a3481cb",
+      "match": true
+    },
+    {
+      "path": "docs/architecture.md",
+      "blob": "2bcfd0dea3457a1efe7fa698b41631bd8dfcbe294a0f36dacbd7b191ed39cfb3",
+      "working": "2bcfd0dea3457a1efe7fa698b41631bd8dfcbe294a0f36dacbd7b191ed39cfb3",
+      "match": true
+    },
+    {
+      "path": "docs/decisions/0031-explicit-github-keep-open-pr.md",
+      "blob": "7a548d0192d8d712e02ae5f0c4e0efad052ffc5a87dc46ee5d9062daa4dd0ea7",
+      "working": "7a548d0192d8d712e02ae5f0c4e0efad052ffc5a87dc46ee5d9062daa4dd0ea7",
+      "match": true
+    },
+    {
+      "path": "docs/workflow-state-contract.md",
+      "blob": "5817c9fa7a76918745d8981c84959fbfc7aa353f1e7a1cbdd9ef8eb2610e0bdd",
+      "working": "5817c9fa7a76918745d8981c84959fbfc7aa353f1e7a1cbdd9ef8eb2610e0bdd",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md",
+      "blob": "31d47a308e883145221568fd4dd4ba7aa1e6e7c23fe65161addd2a534c42e921",
+      "working": "31d47a308e883145221568fd4dd4ba7aa1e6e7c23fe65161addd2a534c42e921",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js",
+      "blob": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "working": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md",
+      "blob": "c02996f7c87928e3e7ca972360fc41a7bcd9803fded57a9f0f493330ba4128e7",
+      "working": "c02996f7c87928e3e7ca972360fc41a7bcd9803fded57a9f0f493330ba4128e7",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md",
+      "blob": "f3ce74e57075efd93b2f3c095a37f06405c8f22bd95b819f88274d3593f13390",
+      "working": "f3ce74e57075efd93b2f3c095a37f06405c8f22bd95b819f88274d3593f13390",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js",
+      "blob": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "working": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md",
+      "blob": "496b37b141df76ec788cd38e8d1335a3cf3658a22d15e9f0d65018a330f54411",
+      "working": "496b37b141df76ec788cd38e8d1335a3cf3658a22d15e9f0d65018a330f54411",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js",
+      "blob": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "working": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "blob": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "working": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js",
+      "blob": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "working": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "blob": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "working": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "match": true
+    },
+    {
+      "path": "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
+      "blob": "31cabe5747715dd15fa8999db679cd055d611ca95e00febd74b9c847fd03511b",
+      "working": "31cabe5747715dd15fa8999db679cd055d611ca95e00febd74b9c847fd03511b",
+      "match": true
+    },
+    {
+      "path": "scripts/fixtures/issue-1055-render-baseline.json",
+      "blob": "5c6a4ffe3a3276b41a6bf8adcc49aab5c7aba34ecdfdc7833d57d797b946a217",
+      "working": "5c6a4ffe3a3276b41a6bf8adcc49aab5c7aba34ecdfdc7833d57d797b946a217",
+      "match": true
+    },
+    {
+      "path": "scripts/kaola-workflow-active-folders.js",
+      "blob": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "working": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d",
+      "match": true
+    },
+    {
+      "path": "scripts/kaola-workflow-claim.js",
+      "blob": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "working": "3e5bab0b9129766e1e434c6f3bb37c5fbcb175c162d1af25f34bb56ab1b036b7",
+      "match": true
+    },
+    {
+      "path": "scripts/kaola-workflow-closure-contract.js",
+      "blob": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "working": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d",
+      "match": true
+    },
+    {
+      "path": "scripts/kaola-workflow-sink-pr.js",
+      "blob": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "working": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd",
+      "match": true
+    },
+    {
+      "path": "templates/routing/finalize.skeleton.md",
+      "blob": "f5cb6ec43fb33d7d4ac8bf054c68a338a6ec6072ff2ba6d1d72a5c6518851e98",
+      "working": "f5cb6ec43fb33d7d4ac8bf054c68a338a6ec6072ff2ba6d1d72a5c6518851e98",
+      "match": true
+    },
+    {
+      "path": "templates/routing/slots.js",
+      "blob": "242f6d236c7527e6d77ce39aa9764cf361c4bfa58b139736fcc29d87029d1175",
+      "working": "242f6d236c7527e6d77ce39aa9764cf361c4bfa58b139736fcc29d87029d1175",
+      "match": true
+    }
+  ],
+  "main_consumer_mirrors": [
+    {
+      "path": "REPORT.sha256",
+      "sha256": "607341767b094e3e1acda751d43f9a4532a8d2099b203f0547996f28e39e9d54",
+      "mirror_exists": true,
+      "mirror_match": false
+    },
+    {
+      "path": "REPORT.md",
+      "sha256": "102ca7ea1008412d90f76a619c40e465f3a83f704b84b7b6b38c968bb510f986",
+      "mirror_exists": true,
+      "mirror_match": true
+    },
+    {
+      "path": "controls/explicit-identity-stdout.txt",
+      "sha256": "3030b87b4af7a89176724c03e7189ccfdf49f0d0a488d5c24bb84c1b79bef3a9",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "controls/explicit-identity-pre.json",
+      "sha256": "5180c771af8343a45366732e371a68cd0b2c82bd0b42ab80a9cebe268aecf8c2",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "controls/explicit-identity-fixture.js",
+      "sha256": "ff98728c915c92d27693526b98fd41fcb0d286a8d28508b28da85f5e03a16375",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "controls/explicit-identity-start.json",
+      "sha256": "3d9ce4546c354e0b584c53fc879360c66e4f171c1aff7189458d4281a31bf817",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "controls/explicit-identity-post.json",
+      "sha256": "3c8350399b39891ac1bfa125af66305907771b85b91350883687245cdc75a96b",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/run-chains.stdout",
+      "sha256": "1395d065a93fffa131ab65fe6779a603b1681ad32981b8a23d8437a03d50f438",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/fail-gitlab-contracts.txt",
+      "sha256": "4e9102f613b1e470adb23f13b94bd2ea76911fdda3c895541d40cf077af2d335",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/claude-full.stderr",
+      "sha256": "71906ddacc5600e51c968bed584545443dac5ffe5fc95aff8482bfa26ccbc0f1",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/run-chains-r1.stdout",
+      "sha256": "1395d065a93fffa131ab65fe6779a603b1681ad32981b8a23d8437a03d50f438",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/claude-full.stdout",
+      "sha256": "c5ba665c81e66ff38a3e3e9785d7bc1ef4c4c4daeafb220ff399957a8076f864",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/source-manifest-before.txt",
+      "sha256": "ebe2f79abc7fcffc2344b5cd294ef7e7d696c99baf91f9ac1fc8ae09986984c3",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/run-chains.stderr",
+      "sha256": "7bb3d8464e1b0ace1bdeaf524abca0e4e1b9819f510f08379a8da3c2fa1a8772",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/chain-receipt-r1-failed.json",
+      "sha256": "1f19c272eb4311608b45de3b0205353f2d3ecfacfbeed8c0303bfe1dfece774b",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/run-chains-r2.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/chain-receipt.json",
+      "sha256": "eeb5cd8fd6fc8813f8cba9c82a2d6af6f0f6e32792afa46a01f22282fc8670ff",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/fail-gitea-contracts.txt",
+      "sha256": "3507790e7ff7145ae0e0b6caa7c2d8359f110046adc310fb29d025e1d275b13b",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/run-chains-r2.stdout",
+      "sha256": "4051762ff6be687164f0ca3761d66b9703bb4876efccf4d54bebb4cee1c8a953",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "chains/fail-1055.txt",
+      "sha256": "c24f206dfcb10c96e5c2bc8e1fe194d72d32bd53a71e5248de7f23f3f189ed9b",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/session-logs/validators-before-provenance-fix.log",
+      "sha256": "febe1662c9f8cb2ba99d6dc352e4827484e54a079611a586f62361608e20a78d",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/session-logs/watch-fixture-WATCH_FIXTURE_OK.log",
+      "sha256": "7892e3b299cd42df71d7fe60a7b824dd5da0e01011e24333ccabd1e629e7a883",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/session-logs/sink-fixture-first-run-FAILURES-1.log",
+      "sha256": "3caca8ad5aee5fc3d3787b4fa3de12460060008055beda4a9d57daad9d64e5d5",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/session-logs/sink-fixture-later-FIXTURE_OK.log",
+      "sha256": "7443f1c0bb1c9cc7c628f92de1fde4a5d562d27855743746c4448f4c045a4082",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/tmp-as-found/kw-1113-watch-fixture.js",
+      "sha256": "0c6d7f9a5eb3a5a01a5770783959e3a387dc259610eba653c869d55bd1a1954d",
+      "mirror_exists": false,
+      "mirror_match": false
+    },
+    {
+      "path": "sealed-prior/tmp-as-found/kw-1113-keepopen-fixture.js",
+      "sha256": "59ff065604f2f409b4693625085edc9978b1e58470c4ef493acee283867d6a85",
+      "mirror_exists": false,
+      "mirror_match": false
+    }
+  ],
+  "diff_sha256": "a5e0cebeff460ea31c56dfed974d84cdb87583ce6da2441041b98681b8ccb93f"
+}

@@ -1,0 +1,4 @@
+command: node scripts/test-active-folders-field-parity.js
+cwd: /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+active-folders-field-parity tests passed (163 assertions)
+exit: 0

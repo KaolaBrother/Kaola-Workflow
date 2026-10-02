@@ -1,0 +1,8 @@
+command: node /tmp/kw-1113-keepopen-fixture.js
+pure gate: checked
+legacy CLI: checked
+create/reuse: checked
+refusals: checked
+real-config-sha256 e604d6ea484b8a4e438720f5d49765e28714ee568e83139f304d1c96192acb87
+FIXTURE_OK
+exit: 0

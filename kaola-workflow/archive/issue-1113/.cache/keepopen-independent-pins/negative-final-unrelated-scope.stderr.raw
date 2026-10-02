@@ -1,0 +1,10 @@
+AssertionError [ERR_ASSERTION]: unrelated-watch-scope: watcher changed an unrelated issue folder
++ actual - expected
+
+  [
+    'issue-143',
++   'issue-142'
+  ]
+
+    at same (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:64:10)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:263:7)

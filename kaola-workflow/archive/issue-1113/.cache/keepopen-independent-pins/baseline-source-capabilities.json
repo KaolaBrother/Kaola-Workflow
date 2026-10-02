@@ -1,0 +1,70 @@
+{
+  "frozen_source_commit": "fe7e4443a8c367cfc111c65755191ae6790e810e",
+  "parser_arguments": [
+    "--project",
+    "issue-143",
+    "--branch",
+    "workflow/issue-143",
+    "--issue",
+    "143"
+  ],
+  "parser_result": {
+    "project": "issue-143",
+    "branch": "workflow/issue-143",
+    "issue": 143
+  },
+  "default_close_body": "Closes #143",
+  "source_guard_offset": 16853,
+  "offline_branch_offset": 17398,
+  "classification": "UNSUPPORTED_BASELINE: current explicit comment_keep_open state is refused before OFFLINE handling; current close-mode body closes #143",
+  "command": {
+    "executable": "/Users/ylmacstudio/.local/share/node-v24.21.0-darwin-arm64/bin/node",
+    "args": [
+      "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/frozen-source/provider-fe7e4443a8c367cfc111c65755191ae6790e810e/scripts/kaola-workflow-sink-pr.js",
+      "--project",
+      "issue-143",
+      "--branch",
+      "workflow/issue-143",
+      "--issue",
+      "143"
+    ],
+    "cwd": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/fixtures/baseline-current-route",
+    "offline": true
+  },
+  "command_exit": 1,
+  "refusal_text": "sink-pr: refusing: project issue-143 carries issue_action: comment_keep_open. Keep-open is merge-sink-only (a PR would auto-close the issue on merge). Remediate the merge sink and re-run sink-merge instead.",
+  "before": {
+    "state_sha256": "ef747b8d8e52b71f79990d41d87aeade7a57931f9c050869b42fc380c57a6d87",
+    "config_sha256": "0ddc90c4b43acc6770ed9f396208819b9fb64b7ffdf153be7ad37da5fa064f31",
+    "git_status": {
+      "status": 0,
+      "stdout": "?? bin/\n?? gh-argv.jsonl\n?? isolated-home/\n?? kaola-workflow/\n",
+      "stderr": ""
+    },
+    "head": {
+      "status": 128,
+      "stdout": "",
+      "stderr": "fatal: Needed a single revision\n"
+    },
+    "index_sha256": "missing"
+  },
+  "after": {
+    "state_sha256": "ef747b8d8e52b71f79990d41d87aeade7a57931f9c050869b42fc380c57a6d87",
+    "config_sha256": "0ddc90c4b43acc6770ed9f396208819b9fb64b7ffdf153be7ad37da5fa064f31",
+    "git_status": {
+      "status": 0,
+      "stdout": "?? bin/\n?? gh-argv.jsonl\n?? isolated-home/\n?? kaola-workflow/\n",
+      "stderr": ""
+    },
+    "head": {
+      "status": 128,
+      "stdout": "",
+      "stderr": "fatal: Needed a single revision\n"
+    },
+    "index_sha256": "missing",
+    "gh_argv": ""
+  },
+  "fixture_has_git_commit": false,
+  "fixture_has_worktree": false,
+  "no_forge_calls": true
+}

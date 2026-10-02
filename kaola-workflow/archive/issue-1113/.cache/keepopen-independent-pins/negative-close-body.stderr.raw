@@ -1,0 +1,6 @@
+AssertionError [ERR_ASSERTION]: live-create: closing reference found in PR text or commit message: Research artifact for issue #143
+Closes #143
+docs: attach artifact for issue #143
+    at assertNoClosingContent (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:75:3)
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:106:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:169:7)

@@ -1,0 +1,35 @@
+{
+  "rows": [
+    {
+      "path": "scripts/kaola-workflow-sink-pr.js",
+      "git_sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "frozen_sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844",
+      "matches": true
+    },
+    {
+      "path": "scripts/kaola-workflow-claim.js",
+      "git_sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "frozen_sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23",
+      "matches": true
+    },
+    {
+      "path": "scripts/simulate-workflow-walkthrough.js",
+      "git_sha256": "f70059744c0ecbd132fa81bdebb811b26ad5a010a85e478badb56556a7afa0a5",
+      "frozen_sha256": "f70059744c0ecbd132fa81bdebb811b26ad5a010a85e478badb56556a7afa0a5",
+      "matches": true
+    },
+    {
+      "path": "package.json",
+      "git_sha256": "4304893c7c7c7edabdbc96b80fb7854b5242f09ffa3ab91e1a3b943012559fa5",
+      "frozen_sha256": "4304893c7c7c7edabdbc96b80fb7854b5242f09ffa3ab91e1a3b943012559fa5",
+      "matches": true
+    },
+    {
+      "path": "AGENTS.md",
+      "git_sha256": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29",
+      "frozen_sha256": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29",
+      "matches": true
+    }
+  ],
+  "manifest_sidecar_matches": true
+}

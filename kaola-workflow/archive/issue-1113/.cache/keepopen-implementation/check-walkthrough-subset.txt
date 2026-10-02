@@ -1,0 +1,29 @@
+command: node scripts/simulate-workflow-walkthrough.js --only testSinkPr --only testKeepOpen
+cwd: /Users/ylmacstudio/Workspace/kaola-workflow/.kw/worktrees/issue-1113
+env: NO_COLOR=1; FORCE_COLOR and CLICOLOR_FORCE unset
+testKeepOpenArchiveStamp: PASSED
+testSinkPrUsesFinalizationSummary: PASSED
+testKeepOpenSinkLeavesTheIssueReClaimable: PASSED
+testKeepOpenMergeFullChain: PASSED
+testKeepOpenFinalizeFlagAlias: PASSED
+testSinkPrKeepOpenRefusal: PASSED
+testSinkPrClosesEveryMember: PASSED
+testSinkPrReusesExistingPr: PASSED
+testSinkPrReentryIdempotent: PASSED
+testSinkPrAlreadyMergedSkipsRepublish: PASSED
+testSinkPrClosedUnmergedRefuses: PASSED
+testSinkPrReuseRefusesMissingCloses: PASSED
+testSinkPrReuseRefusesBaseMismatch: PASSED
+testSinkPrLinkedPosturePublishesArchive: PASSED
+testSinkPrMergeQueueEnabledUsesQueueArgv: PASSED
+testSinkPrMergeQueueDisabledKeepsOriginalArgv: PASSED
+testSinkPrMergeQueueProbeFailureFallsBack: PASSED
+testSinkPrMergeQueueMergeFailureReportsFailed: PASSED
+testSinkPrMergeQueueInactiveSkipsProbeAndMerge: PASSED
+testSinkPrLiveFolderIsNeverPushed: PASSED
+testSinkPrRePushesArchiveAfterRefusedPush: PASSED
+testSinkPrProbeFailureFailsClosed: PASSED
+testSinkPrOfflineDoesNotCommitOnMain: PASSED
+Walkthrough --only subset passed (24 scenarios)
+spawn-census: {"suite":"simulate-workflow-walkthrough","spawns":387}
+exit: 0

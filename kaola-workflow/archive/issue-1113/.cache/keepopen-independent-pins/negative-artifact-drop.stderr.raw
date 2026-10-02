@@ -1,0 +1,18 @@
+AssertionError [ERR_ASSERTION]: archive-create: evidence inventory changed
++ actual - expected
+
+  [
+    {
+      path: '.cache/fixture/evidence-a.json',
+      sha256: 'a8d88b5fbe6dff2c113b0a056f6c2564f01fb4eeea798a81f2c7c7218e7a3f20'
+    },
+-   {
+-     path: '.cache/fixture/evidence-b.raw',
+-     sha256: 'a373c0e8cf6c1630f29dcadac9753c6cb7a2a706a9e091beaf24a788a46d7016'
+-   }
+  ]
+
+    at same (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:56:10)
+    at assertCustody (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:68:3)
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:96:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:169:7)

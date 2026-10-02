@@ -1,0 +1,2 @@
+baseline: UNSUPPORTED_CURRENT_ROUTE (source-grounded explicit refusal; no guessed option)
+baseline-cli: exit 1; expected refusal; no gh calls; fixture state/index unchanged

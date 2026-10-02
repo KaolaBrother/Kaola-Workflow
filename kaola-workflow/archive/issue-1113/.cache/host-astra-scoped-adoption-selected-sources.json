@@ -1,0 +1,815 @@
+{
+  "schema": 1,
+  "purpose": "Selected read-only evidence for finite provider #1113 / consumer #143 scoped-adoption decision",
+  "captured_at": "2026-10-02T13:55:56.975404+00:00",
+  "limitations": [
+    "No runtime, tests, installer, diagnostics or Forge calls executed.",
+    "Git blobs are immutable source evidence, not proof of behavior.",
+    "File hashes are capture-time identities; no atomic snapshot of concurrent Host activity is claimed.",
+    "Older independent and watcher deliveries remain unaccepted; no test-meaning adjudication.",
+    "Some sources are identity-only as explicitly labeled; manifest presence does not imply full review."
+  ],
+  "decision_artifact": {
+    "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-astra-scoped-adoption-decision.md",
+    "bytes": 26286,
+    "sha256": "82273af0f4d9cfe89e02ebb726d31a6943d2689b9d7485fd93dc81a03625a97d"
+  },
+  "identity_comparisons": {
+    "owner_relay_expected": true,
+    "original_decision_expected": true,
+    "adoption_expected": true,
+    "first_review_expected": true,
+    "coverage_report_expected": true,
+    "installation_retained_matches_git": true,
+    "consumer_ledger_expected": true,
+    "consumer_state_expected": true
+  },
+  "observed_absences": [
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/plugins",
+      "absent": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.codex",
+      "absent": true
+    },
+    {
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/.agents",
+      "absent": true
+    }
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/AGENTS.md",
+      "role": "provider instructions",
+      "review_extent": "read",
+      "bytes": 4424,
+      "sha256": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/AGENTS.md",
+      "role": "consumer instructions",
+      "review_extent": "read",
+      "bytes": 5289,
+      "sha256": "ec371ac0f145f09fbae323d9515fb2f983934ae594466a1dec6be4b4657b6575"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/workflow-state.md",
+      "role": "provider claim identity",
+      "review_extent": "read",
+      "bytes": 633,
+      "sha256": "2b448db32217d7f0eded88d31b19368a1936667c9dd615820077f5d2f6eca7b5"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/.ledger/issue-1113.jsonl",
+      "role": "Host-owned read-only mission ledger, capture-time bytes",
+      "review_extent": "read",
+      "bytes": 4038,
+      "sha256": "96a166d512e7e2b8795b1eaf22eb273e2fd5636c37de434c21707618d9062011"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/workflow-state.md",
+      "role": "consumer current state shape",
+      "review_extent": "read",
+      "bytes": 614,
+      "sha256": "39039ce58c8c34370437168fbf6db20763ad818ee350ca74f3dbf2cce45be8f5"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/.ledger/issue-143.jsonl",
+      "role": "immutable consumer done ledger",
+      "review_extent": "read",
+      "bytes": 1519,
+      "sha256": "cf31b82168185fe220d1b72ae1886225be597290568721dc112842cc9a37a121"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/owner-20261002-1727-standing-auth.json",
+      "role": "standing owner relay",
+      "review_extent": "read",
+      "bytes": 1686,
+      "sha256": "fd4f3befa4cd575d32bb845e8a28796a04e6e9f63be77f6531b63e11fadf6ae1"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-astra-standing-closeout-decision.md",
+      "role": "original delegated decision",
+      "review_extent": "read",
+      "bytes": 25494,
+      "sha256": "3eedcc40d7568d4a9bfa95a5890e1e5b28e687abf54ad812cc1cf0a28213747a"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-standing-closeout-decision-adoption.md",
+      "role": "original Host adoption",
+      "review_extent": "read",
+      "bytes": 2215,
+      "sha256": "4aeedbcf2d0e8cbba4eefcaa3a82355cb91c1220a7ea038efd1d82417fcdad50"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-coverage-idle15830-review.md",
+      "role": "first-read Host review, bounded facts only",
+      "review_extent": "read",
+      "bytes": 4004,
+      "sha256": "2a3974fceb39e355efa4ce7a20be67574feb79c5618b9c8bde3de6084f983b4a"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-implementation/coverage-completion/REPORT.md",
+      "role": "first-read engineering report, not acceptance",
+      "review_extent": "read",
+      "bytes": 28231,
+      "sha256": "102ca7ea1008412d90f76a619c40e465f3a83f704b84b7b6b38c968bb510f986"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-standing-scoped-adoption-prompt.txt",
+      "role": "current finite task",
+      "review_extent": "read",
+      "bytes": 4123,
+      "sha256": "c9efab38628debd62d1e3e31525a2c45080f11d6d42135b5546faaeed3b1a8ca"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/host-standing-scoped-adoption-start.json",
+      "role": "exact decision seat and dispatcher locator",
+      "review_extent": "read",
+      "bytes": 6185,
+      "sha256": "54713fb52c9e966d02aad5b69dd88962197467659de065af555197a9b615c8c9"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-event672-forge1113.json",
+      "role": "supplied authoritative OPEN issue body/comments snapshot",
+      "review_extent": "read",
+      "bytes": 5261,
+      "sha256": "2ed5a3c0cb3de9f44cfc134ee37c19a7e778f0a16433d23442c699725b4742f0"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-event672-provider-installation-193abb2e.md",
+      "role": "retained immutable installation documentation",
+      "review_extent": "read",
+      "bytes": 25855,
+      "sha256": "8f7f3c7a90122662029ba535630ee093da89724a24d6f71463974cb3b899bae4"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-pinrestart-final-codex-vrpcadcore-orchestrator-main.json",
+      "role": "retained exact Host and Accepted pin",
+      "review_extent": "read",
+      "bytes": 44086,
+      "sha256": "7a38b97fe2b79c86bb92e41b8df5824f0429c91ee58a6d102a9de5a028d6cc62"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.agents/skills/workflow-next/SKILL.md",
+      "role": "read-only workflow recovery procedure",
+      "review_extent": "read",
+      "bytes": 9772,
+      "sha256": "ef0817158253f89ee84d680e3139217b6059d463452404b2b2c0c006e21c314a"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-pinrestart-final-field.json",
+      "role": "retained restart context; no new entitlement",
+      "review_extent": "selected context fields",
+      "bytes": 7645,
+      "sha256": "d964f3eadae213adbebcaee4b8eaec1516617f1f09866671aa6edf2792cbd75e"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/Workspace/vrpcadcore/kaola-workflow/issue-143/.cache/host-pinrestart-heartbeat-validation.json",
+      "role": "retained restart context; no new entitlement",
+      "review_extent": "selected context fields",
+      "bytes": 1190,
+      "sha256": "38abfde09db5978f3305e4f69f16be6c75bcbe94fd97a9dcf78981867b6d3969"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-claim.js",
+      "git_blob": "3e5708f6c6f345cb3e05ae68cfa4fadbd7937696",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 450778,
+      "sha256": "4b02b82fd6523377ad1f061ee51ce2da03b5b2634084230857506ae132720942"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "git_blob": "3e5708f6c6f345cb3e05ae68cfa4fadbd7937696",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 450778,
+      "sha256": "4b02b82fd6523377ad1f061ee51ce2da03b5b2634084230857506ae132720942"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-sink-pr.js",
+      "git_blob": "1662b3dbebebb5cf1d7b324abf1f885c8db0bb3d",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 43692,
+      "sha256": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "git_blob": "1662b3dbebebb5cf1d7b324abf1f885c8db0bb3d",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 43692,
+      "sha256": "20ba9a3500597eddbaa7f8777cccaa3992ecd89c05ee0a7a891ca035417b0abd"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-sink-merge.js",
+      "git_blob": "d982d990d9ddceedd55f89dc95c0a21152fb3a3b",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 252079,
+      "sha256": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-sink-merge.js",
+      "git_blob": "d982d990d9ddceedd55f89dc95c0a21152fb3a3b",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 252079,
+      "sha256": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-active-folders.js",
+      "git_blob": "bb7b6d2302401805f9cccc1258d04c672cdbeb17",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 13430,
+      "sha256": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-active-folders.js",
+      "git_blob": "bb7b6d2302401805f9cccc1258d04c672cdbeb17",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 13430,
+      "sha256": "e8f39b678b635ac2400cf7a78a477f499a14afaa7a3d8fc9bd1cfa7108f0f93d"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-closure-contract.js",
+      "git_blob": "c407c9bebd88c3294c7b0c911160a8a8d8c25399",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 9053,
+      "sha256": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js",
+      "git_blob": "c407c9bebd88c3294c7b0c911160a8a8d8c25399",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 9053,
+      "sha256": "ffea91b372bf6011cfa2707ba3265d1ca2a935fb9fbebce64cb6cd45681c102d"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-closure-audit.js",
+      "git_blob": "d9687ad5a42a3d24911e402dc69b00f7f764466c",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 34459,
+      "sha256": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-closure-audit.js",
+      "git_blob": "d9687ad5a42a3d24911e402dc69b00f7f764466c",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 34459,
+      "sha256": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-adaptive-schema.js",
+      "git_blob": "df54ad4ae0ce97a7c40cc265e41a73eed265b595",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 143145,
+      "sha256": "b7c23bdb6818dbd5d10c59a4c929c5eccb8277439c2ec5dee99bf9ec101e0f21"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js",
+      "git_blob": "df54ad4ae0ce97a7c40cc265e41a73eed265b595",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 143145,
+      "sha256": "b7c23bdb6818dbd5d10c59a4c929c5eccb8277439c2ec5dee99bf9ec101e0f21"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-classifier.js",
+      "git_blob": "df5599bfa2177037a2efb1000784d1554fd73e19",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 22289,
+      "sha256": "11a60d3dba4f4687b2d285e28f28d4b326b11d0a46e67bfcb71896dc7738534c"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-classifier.js",
+      "git_blob": "df5599bfa2177037a2efb1000784d1554fd73e19",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 22289,
+      "sha256": "11a60d3dba4f4687b2d285e28f28d4b326b11d0a46e67bfcb71896dc7738534c"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-run-chains.js",
+      "git_blob": "d1bc118c7f81fc063da88e0f9da1b8bc275e0090",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 79570,
+      "sha256": "de8a7744d3004e04445fe933afcda487ca9e0898138e9cebb6125061bee78dae"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-run-chains.js",
+      "git_blob": "d1bc118c7f81fc063da88e0f9da1b8bc275e0090",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 79570,
+      "sha256": "de8a7744d3004e04445fe933afcda487ca9e0898138e9cebb6125061bee78dae"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-validation-runner.js",
+      "git_blob": "5406297d709ab2f2a2c478f6f2ece9f065032cd6",
+      "role": "immutable static dependency/call graph",
+      "review_extent": "selected source lines and static imports",
+      "bytes": 85919,
+      "sha256": "c5e0191c45dd3744e8698ec0eaa89046daa6f0d5c00c13e1255fc0eda77cfb21"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/scripts/kaola-workflow-validation-runner.js",
+      "git_blob": "5406297d709ab2f2a2c478f6f2ece9f065032cd6",
+      "role": "generated helper mirror identity",
+      "review_extent": "hash identity only",
+      "bytes": 85919,
+      "sha256": "c5e0191c45dd3744e8698ec0eaa89046daa6f0d5c00c13e1255fc0eda77cfb21"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "templates/routing/slots.js",
+      "git_blob": "6a12ea6cae79f8c0df48603f4732967a4dd2581d",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 22610,
+      "sha256": "242f6d236c7527e6d77ce39aa9764cf361c4bfa58b139736fcc29d87029d1175"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "templates/routing/finalize.skeleton.md",
+      "git_blob": "be440b485963a5527d60f40681bbe395164dc2a9",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 11235,
+      "sha256": "f5cb6ec43fb33d7d4ac8bf054c68a338a6ec6072ff2ba6d1d72a5c6518851e98"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "templates/routing/next.skeleton.md",
+      "git_blob": "a43f17c7295f7a4306e3928c493bbdac4624e6eb",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 8124,
+      "sha256": "92e63fb26cb81e6e6e8b4e23b7063286c6499fbce340e9de550eb93cbda451cd"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/generate-routing-surfaces.js",
+      "git_blob": "0af8899766e3fedada7d5a39a9c36bc48026aeeb",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 23105,
+      "sha256": "a0e1fd5a118fa95a27a99da71aec3c370870e8843196ab9ab4b1cd3f692eeaeb"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/edition-sync.js",
+      "git_blob": "4e0663d8650fd124952e46c083f53e0df1b6f6b5",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 15963,
+      "sha256": "20e298e59febb2897325c593dc2128060715731d0df82d29bc25832f035ac08d"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/validate-script-sync.js",
+      "git_blob": "f4630fb96dcdc7e405ddec79f02ba379b2558e22",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 29432,
+      "sha256": "7a1dccaddd8960215af238d4652a525c47ccd6249ed4f4509f208d45d7d6f515"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "scripts/kaola-workflow-install-manifest.js",
+      "git_blob": "c380fefd36860f5181f34baa493f93e8ca7ed56d",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 8367,
+      "sha256": "24ac7cfb17ca5eb1515fca0846845647571056a557e8aaad1e7e71175a880fd0"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "templates/agents/runtime-capabilities.json",
+      "git_blob": "a1f171794f4015a0567df44c1586bf74af92084f",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 42555,
+      "sha256": "410011e7dd29cf2533e8f238e90b2f468e9a8fb4b191792fa537f783c1c4f1ed"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/hooks/kaola-workflow-codex-compact-recovery.md",
+      "git_blob": "b71dade9530173ec3135308d4542c52f86ba0533",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 3644,
+      "sha256": "911191206d162aefa28d50b131e1a327036a76a62a8daa3d9e8bd887948c3d6e"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/.codex-plugin/plugin.json",
+      "git_blob": "e468f1e9ebe6d05b16f74a09471d1a08ec29dccf",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 1613,
+      "sha256": "70ed00eeb5ca961e1d9383e2129326ddb42dabb752e4934d52450da298224fb4"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
+      "git_blob": "2b8d44a55b2b9a573f11a68ada3dc22fc8b1eb23",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 15245,
+      "sha256": "31cabe5747715dd15fa8999db679cd055d611ca95e00febd74b9c847fd03511b"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md",
+      "git_blob": "ca951ba464515efd88336e1b25862ad577112719",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 10616,
+      "sha256": "edfcd056ffc6cc93259978f49ff2fff9f0397fb527b9628de22b0383e4bb2943"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "docs/installation.md",
+      "git_blob": "866ef669ca5d0e041d60fe7d62695e2d9e770257",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 25855,
+      "sha256": "8f7f3c7a90122662029ba535630ee093da89724a24d6f71463974cb3b899bae4"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "docs/architecture.md",
+      "git_blob": "29bc438137ab7a20073d8903520b7b58c92ea86d",
+      "role": "source ownership / resolver / installation / recovery",
+      "review_extent": "selected source read; skeleton and Next identities included for ownership",
+      "bytes": 41962,
+      "sha256": "adb5b5f1f934dbef7d1851a6528247f5a6114d3d51b249cb0373d3c711b36021"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "AGENTS.md",
+      "git_blob": "0e55e763459149aa9b8e9386dd439f8338200734",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 4424,
+      "sha256": "4df9a6162072f2bd18631afe2c6654722bec6ebb9bb8a96799cf2e8cd96a4d29"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "README.md",
+      "git_blob": "81be29533945a416e342fcecc4e836a7b1f4733e",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 15363,
+      "sha256": "d656041226f5a4d252fce8f725c20ad243a3a9de21e660f30cdf9d436d5b883b"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "docs/api.md",
+      "git_blob": "6f9730ae87f0cc76ad894a5b0f973238e48626d1",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 200503,
+      "sha256": "600b09594e5c09ba9c847340f9f08192818389b8145b1851024a8f71e8df37cf"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "CHANGELOG.md",
+      "git_blob": "05c20c62a5209bf6a8342831ee48eda6adb8ec71",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 1864406,
+      "sha256": "fda3cbfbf1b4e3803f6b193e8737ed7dae0ca32ab7220b4b47f64d90ea75f8a8"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "docs/README.md",
+      "git_blob": "11073cfdb4e35e1e87b4dd84ba2e9ea92825ee12",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 13278,
+      "sha256": "affbef6b1c31f73af356634a6201558e3ecbb7de5b740aef98edc0a34ae61ebc"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "193abb2eb82f8b9578c8f99c2ad2b5bef3ecb791",
+      "path": "docs/decisions/0031-explicit-github-keep-open-pr.md",
+      "git_blob": "2041e2b60ba2da22fa09c845131d1e9d1dd04c3a",
+      "role": "owning documentation location",
+      "review_extent": "identity only; no full documentation review claimed",
+      "bytes": 4810,
+      "sha256": "b2f7bd22a9197b3c11d5bc3457c7cdb8f7ae24ded48ca44fb6275042619341c6"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "fe7e4443a8c367cfc111c65755191ae6790e810e",
+      "path": "scripts/kaola-workflow-claim.js",
+      "git_blob": "a46a2d7e513e2afdbb9a2797b695b1f5a776568d",
+      "role": "immutable baseline installed identity comparison",
+      "review_extent": "hash identity comparison",
+      "bytes": 441238,
+      "sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "fe7e4443a8c367cfc111c65755191ae6790e810e",
+      "path": "scripts/kaola-workflow-sink-pr.js",
+      "git_blob": "a064fda39d702968ecaded70f3ff1f228f957163",
+      "role": "immutable baseline installed identity comparison",
+      "review_extent": "hash identity comparison",
+      "bytes": 27915,
+      "sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "fe7e4443a8c367cfc111c65755191ae6790e810e",
+      "path": "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
+      "git_blob": "dd59eb6365c2017eb0e3c45bcbad464c4bd815c1",
+      "role": "immutable baseline installed identity comparison",
+      "review_extent": "hash identity comparison",
+      "bytes": 14212,
+      "sha256": "28a53fe83fa44e89d131e89b452503a3526ab7f46af7ec81b19141025e7ea51a"
+    },
+    {
+      "kind": "git_blob",
+      "repository": "/Users/ylmacstudio/Workspace/kaola-workflow",
+      "commit": "fe7e4443a8c367cfc111c65755191ae6790e810e",
+      "path": "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md",
+      "git_blob": "ca951ba464515efd88336e1b25862ad577112719",
+      "role": "immutable baseline installed identity comparison",
+      "review_extent": "hash identity comparison",
+      "bytes": 10616,
+      "sha256": "edfcd056ffc6cc93259978f49ff2fff9f0397fb527b9628de22b0383e4bb2943"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-claim.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 441238,
+      "sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-sink-pr.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 27915,
+      "sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-sink-merge.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 252079,
+      "sha256": "dacbf4d02c1cb42c3b95c9cd665453ca079db671aa7398395dba00b7ad390431"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-active-folders.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 13053,
+      "sha256": "b7b21a2eb66022aa62a2c00cbbf4d519e2389fe1a66509a53b58ab863eb287b7"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-closure-contract.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 8842,
+      "sha256": "7cfe2d00d736474913ba9d12e29cc9415e3d18d1a3e3853e456ca1b1cf8fbcfe"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-closure-audit.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 34459,
+      "sha256": "0ad303572324563d15ea553f94623f3be3fd75fb5c18294987ddf3708f935d0e"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-adaptive-schema.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 143145,
+      "sha256": "b7c23bdb6818dbd5d10c59a4c929c5eccb8277439c2ec5dee99bf9ec101e0f21"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-classifier.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 22289,
+      "sha256": "11a60d3dba4f4687b2d285e28f28d4b326b11d0a46e67bfcb71896dc7738534c"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-run-chains.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 79570,
+      "sha256": "de8a7744d3004e04445fe933afcda487ca9e0898138e9cebb6125061bee78dae"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/scripts/kaola-workflow-validation-runner.js",
+      "role": "installed Codex baseline helper",
+      "review_extent": "hash identity; not executed",
+      "bytes": 85919,
+      "sha256": "c5e0191c45dd3744e8698ec0eaa89046daa6f0d5c00c13e1255fc0eda77cfb21"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/skills/kaola-workflow-finalize/SKILL.md",
+      "role": "installed Codex caller/metadata",
+      "review_extent": "Finalization selected source read; other files identity only",
+      "bytes": 14212,
+      "sha256": "28a53fe83fa44e89d131e89b452503a3526ab7f46af7ec81b19141025e7ea51a"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/skills/kaola-workflow-next/SKILL.md",
+      "role": "installed Codex caller/metadata",
+      "review_extent": "Finalization selected source read; other files identity only",
+      "bytes": 10616,
+      "sha256": "edfcd056ffc6cc93259978f49ff2fff9f0397fb527b9628de22b0383e4bb2943"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/12.4.0/.codex-plugin/plugin.json",
+      "role": "installed Codex caller/metadata",
+      "review_extent": "Finalization selected source read; other files identity only",
+      "bytes": 1613,
+      "sha256": "70ed00eeb5ca961e1d9383e2129326ddb42dabb752e4934d52450da298224fb4"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "role": "other installed helper preserved",
+      "review_extent": "hash identity only",
+      "bytes": 441238,
+      "sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.agents/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "role": "other installed helper preserved",
+      "review_extent": "hash identity only",
+      "bytes": 27915,
+      "sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.grok/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "role": "other installed helper preserved",
+      "review_extent": "hash identity only",
+      "bytes": 441238,
+      "sha256": "029bf7a858bfb74f7abe7f0962e2c1062f07fc54d86602cd287be27dcbb29d23"
+    },
+    {
+      "kind": "file",
+      "path": "/Users/ylmacstudio/.grok/kaola-workflow/scripts/kaola-workflow-sink-pr.js",
+      "role": "other installed helper preserved",
+      "review_extent": "hash identity only",
+      "bytes": 27915,
+      "sha256": "86a450f21418b5b106e9566a53fe60667cc3d751f32b4931822da8b3b049d844"
+    }
+  ]
+}

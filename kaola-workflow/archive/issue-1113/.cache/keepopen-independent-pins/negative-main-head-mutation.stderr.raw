@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: retry-archive: MAIN HEAD changed
++ actual - expected
+
++ 'fixture-main-head:before'
+- 'fixture-main-head:changed'
+                     ^
+
+    at assertCustody (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:69:10)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:205:7)

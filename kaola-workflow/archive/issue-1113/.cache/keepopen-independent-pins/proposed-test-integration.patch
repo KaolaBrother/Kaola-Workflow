@@ -1,0 +1,299 @@
+diff --git a/scripts/test-issue-1113-keepopen-pr.js b/scripts/test-issue-1113-keepopen-pr.js
+new file mode 100644
+index 00000000..ef812cd1
+--- /dev/null
++++ b/scripts/test-issue-1113-keepopen-pr.js
+@@ -0,0 +1,279 @@
++'use strict';
++
++// Test-only acceptance adapter boundary for the bounded GitHub keep-open PR mode.
++// routeMode is a test label; the adapter must bind it to the producer's actual shipped API.
++// This suite intentionally names no production flag, option, function, or receipt schema.
++
++const assert = require('assert');
++const crypto = require('crypto');
++const path = require('path');
++
++function fixtureHash(text) {
++  return crypto.createHash('sha256').update(text).digest('hex');
++}
++
++const adapterPath = process.env.KW_ISSUE_1113_KEEP_OPEN_TEST_ADAPTER;
++if (!adapterPath) {
++  throw new Error('Set KW_ISSUE_1113_KEEP_OPEN_TEST_ADAPTER to the test-only adapter bound to the shipped producer API');
++}
++const adapter = require(path.resolve(adapterPath));
++assert(adapter && typeof adapter.run === 'function', 'test adapter must export async run(fixture)');
++
++const identity = {
++  project: 'issue-143',
++  issue: 143,
++  members: [143],
++  repository: 'https://github.com/KaolaBrother/VRPCadCore.git',
++  claimDigest: '013df64014a5a5354b9796879f1574260b6cb346fec9007586779cb2cf69573b',
++  branch: 'workflow/issue-143',
++  mainRoot: '/fixture/canonical-main',
++  linkedWorktree: '/fixture/canonical-main/.kw/worktrees/issue-143',
++  sourceHead: '02ef0883b5b50fdcdfa8b8ba04a49d4c76756ba5',
++  ledgerSha256: 'cf31b82168185fe220d1b72ae1886225be597290568721dc112842cc9a37a121',
++  // Synthetic fixture files exercise full-inventory preservation; they are not #143 artifacts.
++  evidenceManifest: [
++    { path: '.cache/fixture/evidence-a.json', sha256: fixtureHash('{"fixture":"evidence-a"}\n') },
++    { path: '.cache/fixture/evidence-b.raw', sha256: fixtureHash('fixture-evidence-b\n') },
++  ],
++};
++
++const expectedBase = 'fixture-verified-default-branch';
++const explicitMode = 'explicit-singleton-keep-open'; // semantic test label, not a CLI value
++const autoMergeConfig = { pr_auto_merge: true };
++
++const names = [
++  'live-create', 'archive-create', 'live-open-reuse', 'archive-open-reuse',
++  'legacy-default-close', 'legacy-keep-open-refusal',
++  'missing-action', 'malformed-action', 'conflicting-action',
++  'missing-repository', 'malformed-repository', 'repository-mismatch',
++  'missing-digest', 'malformed-digest', 'digest-mismatch',
++  'missing-member', 'malformed-member', 'member-mismatch', 'unsupported-bundle', 'mixed-disposition',
++  'missing-branch', 'malformed-branch', 'branch-mismatch', 'unsupported-forge',
++  'wrong-base-existing-pr', 'wrong-head-existing-pr', 'closed-unmerged-existing-pr',
++  'open-probe-failure', 'merged-open-not-republished', 'merged-closed-violation', 'merged-probe-unknown',
++  'retry-archive', 'retry-create', 'retry-record', 'retry-push',
++  'live-watch-open', 'live-watch-closed', 'live-watch-unknown',
++  'archive-watch-open', 'archive-watch-closed', 'archive-watch-unknown', 'unrelated-watch-scope',
++];
++
++const closeReference = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#143\b/i;
++const forbiddenOperations = /^(?:archive|pr\.create|request\.record|archive\.push|pr\.close|issue\.close|issue\.reopen|pr\.merge|merge_queue|main\.write|index\.write)$/;
++const autoMergeOperation = /(?:pr\.merge|merge_queue|--auto|merge_queue)/i;
++
++function same(actual, expected, label) {
++  assert.deepStrictEqual(actual, expected, label);
++}
++
++function assertSameIdentity(actual, label) {
++  same(actual, identity, label + ': claim, branch, MAIN/worktree, ledger, and evidence identity must match');
++}
++
++function assertCustody(custody, label) {
++  assert(custody, label + ': normalized custody receipt is required');
++  assert.strictEqual(custody.ledgerBefore, identity.ledgerSha256, label + ': ledger-before hash mismatch');
++  assert.strictEqual(custody.ledgerAfter, identity.ledgerSha256, label + ': ledger hash changed');
++  same(custody.artifactsBefore, identity.evidenceManifest, label + ': initial evidence inventory mismatch');
++  same(custody.artifactsAfter, identity.evidenceManifest, label + ': evidence inventory changed');
++  assert.strictEqual(custody.mainHeadBefore, custody.mainHeadAfter, label + ': MAIN HEAD changed');
++  assert.strictEqual(custody.mainIndexBefore, custody.mainIndexAfter, label + ': MAIN index changed');
++}
++
++function assertNoClosingContent(pr, label) {
++  const allText = [pr.title, pr.body].concat(pr.commitMessages || []).join('\n');
++  assert(!closeReference.test(allText), label + ': closing reference found in PR text or commit message: ' + allText);
++  same(pr.closingLinks || [], [], label + ': forge reports a closing issue association');
++  same(pr.issueMentions || [], [143], label + ': issue mention must remain identifiable without close linkage');
++}
++
++function assertNoAutoMerge(operations, label) {
++  assert(!operations.some(op => autoMergeOperation.test(String(op.name) + ' ' + String(op.argv || ''))),
++    label + ': auto-merge or merge-queue operation occurred while pr_auto_merge=true');
++  assert(!operations.some(op => op.name === 'issue.close'), label + ': keep-open route closed the issue');
++  assert(!operations.some(op => op.name === 'issue.reopen'), label + ': keep-open route automatically reopened the issue');
++}
++
++function assertNoUnsafeEffects(operations, label) {
++  assert(!operations.some(op => forbiddenOperations.test(op.name)),
++    label + ': unsafe effect occurred before refusal: ' + JSON.stringify(operations));
++}
++
++function assertKeepOpenPublication(fixture, result, requestResult) {
++  const label = fixture.name;
++  assert(['success', 'unknown'].includes(result.outcome), label + ': explicit singleton publication did not succeed');
++  assertSameIdentity(result.identityBefore, label);
++  assertSameIdentity(result.identityAfter, label);
++  assertCustody(result.custody, label);
++  assert.strictEqual(result.archiveRoot, identity.mainRoot, label + ': archive must resolve to canonical MAIN');
++  assert.strictEqual(fixture.runCwd, identity.linkedWorktree, label + ': fixture must invoke from the linked worktree');
++  assert.strictEqual(result.runCwd, identity.linkedWorktree, label + ': adapter did not execute from the linked worktree');
++  assert.strictEqual(result.routeMode, explicitMode, label + ': explicit mode must be visible in normalized evidence');
++  assert.strictEqual(fixture.config.pr_auto_merge, true, label + ': request-only control requires global auto-merge config true');
++  assert.strictEqual(result.issueAction, 'comment_keep_open', label + ': durable action was lost');
++  assert.strictEqual(result.receipt.keepOpenRequested, true, label + ': receipt lost durable keep-open intent');
++  assert.strictEqual(result.request.result, requestResult, label + ': request create/reuse result is wrong');
++  assert.strictEqual(result.request.mainline, 'pending', label + ': request publication was conflated with mainline publication');
++  assert.strictEqual(result.request.number, 206, label + ': request identity is not stable');
++  assert.strictEqual(result.request.url, 'https://github.com/KaolaBrother/VRPCadCore/pull/206', label + ': request URL is not stable');
++  assert.strictEqual(result.receipt.requestPublication, requestResult, label + ': receipt lost the created/reused distinction');
++  assert.strictEqual(result.receipt.mainlinePublication, 'pending', label + ': receipt must keep mainline publication pending');
++  same(result.receipt.identity, identity, label + ': durable request receipt lost claim/evidence identity');
++  assert.strictEqual(result.pr.base, expectedBase, label + ': PR base mismatch');
++  assert.strictEqual(result.pr.head, identity.branch, label + ': PR head mismatch');
++  assertNoClosingContent(result.pr, label);
++  assertNoAutoMerge(result.operations, label);
++  if (result.issueObservation === 'OPEN') {
++    assert.strictEqual(result.receipt.issueDisposition, 'kept_open', label + ': verified OPEN must report kept-open');
++  } else {
++    assert.strictEqual(result.issueObservation, 'UNKNOWN', label + ': only an unavailable probe may be unknown here');
++    assert.strictEqual(result.receipt.issueDisposition, 'unknown', label + ': probe failure must remain unknown');
++    assert.strictEqual(result.outcome, 'unknown', label + ': probe failure was reported as a successful keep-open observation');
++  }
++}
++
++function assertRefusal(fixture, result) {
++  assert.strictEqual(result.outcome, 'refused', fixture.name + ': unsafe or unsupported input must refuse');
++  assertNoUnsafeEffects(result.operations, fixture.name);
++  same(result.identityBefore, fixture.identity, fixture.name + ': refusal input identity changed before evaluation');
++  same(result.identityAfter, fixture.identity, fixture.name + ': refusal mutated the claim identity');
++  assertCustody(result.custody, fixture.name + ': refusal');
++}
++
++function fixtureFor(name) {
++  const fixtureIdentity = JSON.parse(JSON.stringify(identity));
++  if (name === 'missing-repository') fixtureIdentity.repository = null;
++  if (name === 'malformed-repository') fixtureIdentity.repository = 'not-a-repository-url';
++  if (name === 'repository-mismatch') fixtureIdentity.repository = 'https://github.com/other/repo.git';
++  if (name === 'missing-digest') fixtureIdentity.claimDigest = null;
++  if (name === 'malformed-digest') fixtureIdentity.claimDigest = 'abc123';
++  if (name === 'digest-mismatch') fixtureIdentity.claimDigest = 'f'.repeat(64);
++  if (name === 'missing-member') fixtureIdentity.members = [];
++  if (name === 'malformed-member') fixtureIdentity.members = ['143'];
++  if (name === 'member-mismatch' || name === 'unsupported-bundle' || name === 'mixed-disposition') fixtureIdentity.members = [143, 144];
++  if (name === 'missing-branch') fixtureIdentity.branch = null;
++  if (name === 'malformed-branch') fixtureIdentity.branch = '../escape';
++  if (name === 'branch-mismatch') fixtureIdentity.branch = 'workflow/other-run';
++  return {
++    name,
++    identity: fixtureIdentity,
++    expectedBase,
++    routeMode: name === 'legacy-default-close' || name === 'legacy-keep-open-refusal' ? 'legacy-default' : explicitMode,
++    runCwd: identity.linkedWorktree,
++    config: name === 'legacy-default-close' ? { pr_auto_merge: false } : autoMergeConfig,
++    issueAction: name === 'legacy-default-close' || name === 'missing-action' ? null
++      : name === 'malformed-action' ? 'comment_keepopen'
++        : name === 'conflicting-action' ? ['comment_keep_open', 'close'] : 'comment_keep_open',
++    dispositions: name === 'mixed-disposition' ? ['comment_keep_open', 'close'] : ['comment_keep_open'],
++    forge: name === 'unsupported-forge' ? 'gitlab' : 'github',
++    existingPr: name === 'wrong-base-existing-pr' ? { state: 'OPEN', base: 'wrong-base', head: identity.branch }
++      : name === 'wrong-head-existing-pr' ? { state: 'OPEN', base: expectedBase, head: 'workflow/wrong' }
++        : name === 'closed-unmerged-existing-pr' ? { state: 'CLOSED', merged: false, base: expectedBase, head: identity.branch }
++          : null,
++    sourceLocation: name.startsWith('archive-') || name.startsWith('archive-watch-') ? 'archive' : 'live',
++    syntheticEvidenceFixture: true,
++  };
++}
++
++async function run() {
++  const results = {};
++  for (const name of names) {
++    const fixture = fixtureFor(name);
++    const result = await adapter.run(fixture);
++    assert(result && Array.isArray(result.operations), name + ': adapter must return normalized operations');
++    results[name] = result;
++
++    if (name === 'legacy-default-close') {
++      assert.strictEqual(result.outcome, 'success', name + ': existing default close behavior must remain usable');
++      assert.strictEqual(result.pr.body, 'Closes #143', name + ': legacy close-mode body changed');
++      assert(result.pr.closingLinks.includes(143), name + ': close-mode issue link disappeared');
++      continue;
++    }
++    if (name === 'legacy-keep-open-refusal' || /^(missing|malformed|conflicting|repository|digest|member|branch|unsupported|mixed|wrong-|closed-unmerged)/.test(name)) {
++      assertRefusal(fixture, result);
++      continue;
++    }
++    if (name === 'live-create' || name === 'archive-create') {
++      assertKeepOpenPublication(fixture, result, 'created');
++      assert(result.operations.some(op => op.name === 'pr.create'), name + ': create path was not observed');
++      continue;
++    }
++    if (name === 'live-open-reuse' || name === 'archive-open-reuse') {
++      assertKeepOpenPublication(fixture, result, 'reused');
++      assert(!result.operations.some(op => op.name === 'pr.create'), name + ': OPEN reuse created a duplicate request');
++      continue;
++    }
++    if (name === 'open-probe-failure') {
++      assertKeepOpenPublication(fixture, result, 'created');
++      continue;
++    }
++    if (name === 'merged-open-not-republished' || name === 'merged-closed-violation' || name === 'merged-probe-unknown') {
++      assertSameIdentity(result.identityBefore, name);
++      assertSameIdentity(result.identityAfter, name);
++      assertCustody(result.custody, name);
++      assertNoAutoMerge(result.operations, name);
++      assert.strictEqual(result.receipt.keepOpenRequested, true, name + ': merged receipt lost explicit intent');
++      same(result.receipt.identity, identity, name + ': merged receipt lost claim/evidence identity');
++      assert.strictEqual(result.receipt.requestPublication, 'reused', name + ': merged request outcome was lost');
++      assert.strictEqual(result.receipt.mainlinePublication, 'published', name + ': verified merge was not reported as published');
++      assert.strictEqual(result.receipt.keepOpenRequested, true, name + ': watcher receipt lost durable intent');
++      same(result.receipt.identity, identity, name + ': watcher receipt lost claim/evidence identity');
++      assert(!result.operations.some(op => op.name === 'pr.create' || op.name === 'archive.push'), name + ': MERGED request was republished');
++      assert.strictEqual(result.request.number, 206, name + ': merged request identity changed');
++      if (name === 'merged-open-not-republished') {
++        assert.strictEqual(result.pr.state, 'MERGED', name + ': fixture did not exercise MERGED');
++        assert.strictEqual(result.request.mainline, 'published', name + ': verified archive-on-default-branch must report publication');
++        assert.strictEqual(result.issueObservation, 'OPEN', name + ': expected actual issue OPEN');
++        assert.strictEqual(result.receipt.issueDisposition, 'kept_open', name + ': actual OPEN must be kept-open');
++      } else if (name === 'merged-closed-violation') {
++        assert.strictEqual(result.issueObservation, 'CLOSED', name + ': expected actual issue CLOSED');
++        assert.strictEqual(result.receipt.issueDisposition, 'violation', name + ': CLOSED must be a violation');
++      } else {
++        assert.strictEqual(result.issueObservation, 'UNKNOWN', name + ': expected failed probe');
++        assert.strictEqual(result.receipt.issueDisposition, 'unknown', name + ': failed probe must remain unknown');
++      }
++      continue;
++    }
++    if (name.startsWith('retry-')) {
++      assertSameIdentity(result.identityBefore, name);
++      assertSameIdentity(result.identityAfter, name);
++      assertCustody(result.custody, name);
++      assert.strictEqual(result.retry.boundary, name.slice('retry-'.length), name + ': wrong injected crash boundary');
++      assert.strictEqual(result.retry.attempts, 2, name + ': retry fixture must exercise a failed attempt and recovery');
++      assert.strictEqual(result.retry.createCount, 1, name + ': retry duplicated the PR');
++      same(result.retry.urls, ['https://github.com/KaolaBrother/VRPCadCore/pull/206', 'https://github.com/KaolaBrother/VRPCadCore/pull/206'], name + ': retry lost request identity');
++      assert.strictEqual(result.retry.firstAttemptBoundary, name.slice('retry-'.length), name + ': first attempt missed its fault boundary');
++      const boundaryOperation = { archive: 'archive', create: 'pr.create', record: 'request.record', push: 'archive.push' }[result.retry.boundary];
++      assert(result.retry.firstAttemptOperations.includes(boundaryOperation), name + ': first attempt did not reach its injected boundary');
++      if (result.retry.boundary !== 'archive') {
++        assert(!result.retry.recoveryOperations.includes('pr.create'), name + ': recovery must discover and reuse the first request');
++      }
++      assert.strictEqual(result.retry.recoveryRequest, 'https://github.com/KaolaBrother/VRPCadCore/pull/206', name + ': recovery did not reuse the durable request identity');
++      assert.strictEqual(result.archiveRoot, identity.mainRoot, name + ': retry escaped MAIN');
++      assertNoAutoMerge(result.operations, name);
++      continue;
++    }
++    if (name.includes('-watch-') || name === 'unrelated-watch-scope') {
++      const expectedState = name.endsWith('-open') ? 'OPEN' : name.endsWith('-closed') ? 'CLOSED' : 'UNKNOWN';
++      const expectedDisposition = expectedState === 'OPEN' ? 'kept_open' : expectedState === 'CLOSED' ? 'violation' : 'unknown';
++      assert.strictEqual(result.outcome, 'observed', name + ': watcher must return an observation');
++      assertNoAutoMerge(result.operations, name);
++      assert.strictEqual(result.receipt.keepOpenRequested, true, name + ': watcher did not prove an explicit keep-open request');
++      assert.strictEqual(result.watch.lane, fixture.sourceLocation, name + ': wrong live/archive watcher lane');
++      assert.strictEqual(result.issueObservation, expectedState, name + ': actual issue state changed');
++      assert.strictEqual(result.receipt.issueDisposition, expectedDisposition, name + ': watcher disposition is not truthful');
++      same(result.watch.touchedProjects, ['issue-143'], name + ': watcher changed an unrelated issue folder');
++      assert.strictEqual(result.watch.unrelatedProjectUnchanged, true, name + ': unrelated folder fixture was not preserved');
++      assertCustody(result.custody, name);
++      continue;
++    }
++    throw new Error('No acceptance assertion registered for ' + name);
++  }
++  console.log('issue-1113 keep-open acceptance adapter: ' + names.length + ' scenarios passed');
++  console.log('coverage: singleton live/archive; default close/refusal; malformed identity and unsupported set refusals; linkage; request-only; retry identity; truthful live/archive watches');
++  return results;
++}
++
++run().catch(err => {
++  process.stderr.write((err && err.stack) || String(err));
++  process.stderr.write('\n');
++  process.exitCode = 1;
++});
+diff --git a/package.json b/package.json
+index 33a4573a..0bff4bde 100644
+--- a/package.json
++++ b/package.json
+@@ -63,7 +63,8 @@
+     "test:parallel": "node scripts/test-parallel.js",
+     "test:kaola-workflow:editions": "node scripts/run-edition-tests.js scripts/test-opencode-edition.js scripts/test-kimi-edition.js scripts/test-grok-edition.js scripts/test-cursor-edition.js scripts/test-issue-1045-cursor-conformance.js scripts/test-zcode-edition.js scripts/test-zcode-hook-protocol.js scripts/test-zcode-install-trust.js scripts/test-devin-edition.js scripts/test-droid-edition.js scripts/test-dsh-edition.js",
+     "test:kaola-workflow:claude:full": "node scripts/edition-sync.js --materialize-kernel && node scripts/validate-script-sync.js && node scripts/test-validate-script-sync.js && bash -n install.sh uninstall.sh install-all.sh install-devin.sh install-droid.sh install-dsh.sh && node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8'))\" && node scripts/test-codex-session-proof.js && node scripts/test-install-model-rendering.js && node scripts/test-install-upgrade-rewrite.js && node scripts/test-install-manifest-single-source.js && node scripts/test-validation-runner.js && node scripts/test-install-adaptive-config.js && node scripts/test-uninstall-forge-branches.js && node scripts/test-issue-1087-lane-a.js && node scripts/test-issue-1087-lane-b.js && node scripts/test-issue-probe-memo.js && node scripts/test-claim-hardening.js && node scripts/test-oracle-kernel.js && node scripts/test-kernel-conformance.js && node scripts/test-outcome-recorder.js && node scripts/test-finalize-door.js && node scripts/test-suite-registration.js && node scripts/test-bundle-state.js && node scripts/test-bundle-claim.js && node scripts/test-priority-list-open.js && node scripts/test-forge-bundle-lane.js && node scripts/test-bundle-finalize.js && node scripts/test-sink-merge.js && node scripts/test-parallel.js --self-test && node scripts/test-edition-sync.js && node scripts/test-release-surface-drift.js && node scripts/test-release.js && node scripts/test-gap-sweep.js && node scripts/test-validation-allowband.js && node scripts/test-route-reachability.js && node scripts/test-issue-1044-prompt-bundle.js && node scripts/test-issue-1044-runtime-adapters.js && node scripts/test-issue-1045-cursor-conformance.js && node scripts/test-issue-1046-global-contract.js && node scripts/test-issue-1051-global-contract.js && node scripts/test-issue-1052-cursor-cli-startup-prep.js && node scripts/test-issue-1053-next-task-quality.js && node scripts/test-issue-1054-finalize-record-simplification.js && node scripts/test-issue-1055-render-subtraction-oracle.js && node scripts/test-issue-1056-default-branch-env-contract.js && node scripts/test-issue-1067-archive-identity.js && node scripts/test-issue-1089-mission-ledger.js && node scripts/test-zcode-install-trust.js && node scripts/test-runtime-agent-architecture.js && node scripts/test-issue-1101-native-only.js && node scripts/test-issue-1101-claude-agent-migration.js && node scripts/test-issue-1101-codex-agent-migration.js && node scripts/test-issue-1101-grok-cursor-agent-migration.js && node scripts/validate-workflow-contracts.js && node scripts/test-bash-block-guards.js && node scripts/test-spawn-classification.js && node scripts/test-run-chains.js && node scripts/simulate-workflow-walkthrough.js && node scripts/test-relative-tmpdir-escape.js && node scripts/test-forge-finalize-findings.js && node scripts/test-forge-archive-scoping.js && node scripts/test-forge-claim-rollback-scoping.js && node scripts/test-forge-claim-reserved-project.js && node scripts/test-active-folders-field-parity.js && node scripts/generate-routing-surfaces.js --check && node scripts/test-generate-routing-surfaces.js && node scripts/test-install-all.js && node scripts/test-fixture-sandbox.js",
+-    "test:full": "npm run test:kaola-workflow:claude:full && npm run test:kaola-workflow:codex && npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea"
++    "test:full": "npm run test:kaola-workflow:claude:full && npm run test:kaola-workflow:codex && npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea",
++    "test:issue-1113:keepopen-pr": "node scripts/test-issue-1113-keepopen-pr.js"
+   },
+   "license": "MIT"
+ }

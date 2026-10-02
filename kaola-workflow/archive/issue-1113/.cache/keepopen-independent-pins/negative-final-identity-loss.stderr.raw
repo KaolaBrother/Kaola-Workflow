@@ -1,0 +1,20 @@
+AssertionError [ERR_ASSERTION]: live-create: claim, branch, MAIN/worktree, ledger, and evidence identity must match
++ actual - expected
+... Skipped lines
+
+  {
+    branch: 'workflow/issue-143',
+    claimDigest: '013df64014a5a5354b9796879f1574260b6cb346fec9007586779cb2cf69573b',
+    evidenceManifest: [
+      {
+...
+    project: 'issue-143',
++   repository: 'https://github.com/other/repo.git',
+-   repository: 'https://github.com/KaolaBrother/VRPCadCore.git',
+    sourceHead: '02ef0883b5b50fdcdfa8b8ba04a49d4c76756ba5'
+  }
+
+    at same (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:64:10)
+    at assertSameIdentity (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:68:3)
+    at assertKeepOpenPublication (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:104:3)
+    at run (/Users/ylmacstudio/Workspace/kaola-workflow/kaola-workflow/issue-1113/.cache/keepopen-independent-pins/proposed-test/scripts/test-issue-1113-keepopen-pr.js:195:7)

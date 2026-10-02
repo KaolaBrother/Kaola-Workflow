@@ -1,0 +1,113 @@
+{
+  "at": "2026-10-02T20:22:04.563266+08:00",
+  "baseline_rows": 90,
+  "changed_hash_rows": 30,
+  "only_finalize": true,
+  "no_changed_row_nonhash_fields": true,
+  "unchanged_other60": 60,
+  "baseline_policy": "Unchanged test-issue-1055-render-subtraction-oracle.js lines32-40 requires intentional render recapture in same commit; source and all90 assertions unchanged. Captured-at-parent metadata is generator chronology, not claim of pristine parent output. Mechanical fixture change only, no CAD golden/reference/baseline permission.",
+  "chain_receipt_sha256": "eeb5cd8fd6fc8813f8cba9c82a2d6af6f0f6e32792afa46a01f22282fc8670ff",
+  "candidate": "a0f02ea54578107304e065c3358fc208ca879d22",
+  "binding": {
+    "workTreeHash": "clean",
+    "codeTreeHash": "75e5c47dc6d4dbee5725dd6510c891f46732e9bbff34be5bf5dc93598079adec",
+    "startedAt": "2026-10-02T11:19:20.058Z",
+    "completedAt": "2026-10-02T11:31:32.355Z"
+  },
+  "preamble": {
+    "steps": [
+      {
+        "command": "node scripts/edition-sync.js --materialize-kernel",
+        "duration_ms": 28,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/validate-script-sync.js",
+        "duration_ms": 71,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-issue-1056-default-branch-env-contract.js",
+        "duration_ms": 535,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-finalize-findings.js",
+        "duration_ms": 13229,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-archive-scoping.js",
+        "duration_ms": 6743,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-rollback-scoping.js",
+        "duration_ms": 1004,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-reserved-project.js",
+        "duration_ms": 2588,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-active-folders-field-parity.js",
+        "duration_ms": 35,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/generate-routing-surfaces.js --check",
+        "duration_ms": 30,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/edition-sync.js --check",
+        "duration_ms": 50,
+        "exitCode": 0
+      }
+    ]
+  },
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "steps": 55,
+      "all_steps_zero": true,
+      "timed_out": false,
+      "accepted_red": false
+    },
+    {
+      "name": "codex",
+      "exitCode": 0,
+      "steps": 2,
+      "all_steps_zero": true,
+      "timed_out": false,
+      "accepted_red": false
+    },
+    {
+      "name": "gitlab",
+      "exitCode": 0,
+      "steps": 3,
+      "all_steps_zero": true,
+      "timed_out": false,
+      "accepted_red": false
+    },
+    {
+      "name": "gitea",
+      "exitCode": 0,
+      "steps": 3,
+      "all_steps_zero": true,
+      "timed_out": false,
+      "accepted_red": false
+    }
+  ],
+  "watcher_source_witness": {
+    "function": "isExplicitSingletonKeepOpen",
+    "strictness": "first matching field, parseInt/filter",
+    "examples": "80abc parses80; members80,foo filters to80; repeated fields hidden by first match",
+    "reach": "live MERGED archiveProjectDirSafely before closure; archived MERGED advanceCheckedOutDefault/clearAdvisoryClaim/removeWorktree before receipt",
+    "classification": "Source-derived unsafe identity/receipt frontier, not an actual runtime failure observed by Host. In-scope routine defect under memo143 safe refusal and truthful live/archive requirements."
+  },
+  "limits": "Retained complete chain current a0f02ea5 only; not independent test integration, full source execution seal, installation compatibility or lifecycle acceptance."
+}
