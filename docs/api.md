@@ -1450,7 +1450,12 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue whose `issue_number`,
   `branch`, and optional `issue_numbers` / `base_branch` agree with the invocation. A bundle, another
   forge, a partial marker, or a mismatched issue, branch, base, or head is refused before any push
-  or create (`explicit_keep_open_refused`). Explicit mode reads every whole-file line of
+  or create (`explicit_keep_open_refused`). Any `keep_open_pr` line is that intent, including a
+  line whose value is empty, and so is any `--keep-open-pr` token. Intent without the full
+  agreement refuses before push, create, archive publication, or an OFFLINE placeholder
+  (`partial_marker`, `mode_mismatch`, `state_missing`, or `ambiguous_identity` for a duplicate
+  line or token). No such line and no such token leaves close mode and the #336/#1098 refusal
+  unchanged. Explicit mode reads every whole-file line of
   `issue_action`, `keep_open_pr`, `sink`, `issue_number`, `branch`, `issue_numbers`, and
   `base_branch`. A second line for any of those fields is `ambiguous_identity`, including when the
   two values match and including a repeated `--keep-open-pr`, `--branch`, `--issue`, or
@@ -1458,11 +1463,19 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   `072`, or `72.0`); a bad state token or a bad CLI token is `malformed_issue`. A repeated member
   token such as `72,72` is `ambiguous_identity`. Close mode still takes the first matching field
   and still filters `--issue-numbers` with `parseInt`, dropping non-integers and duplicates. The created body is `Keeps #N open.` plus non-closing
-  sentences; the title is `Publish {project} (keeps #N open)`. Commit messages reachable from the
-  head and not from the base are scanned for a closing keyword on the same line as `#N`
-  (`close`/`fix`/`resolve` and their inflections, including `owner/repo#N`). An unsafe body, title,
-  or commit refuses before effects. An OPEN request is reused only when its text names `#N` and does
-  not close it. A MERGED request is not republished: stdout is `pr_request: request_only`,
+  sentences; the title is `Publish {project} (keeps #N open)`. A closing keyword associates only
+  the reference it immediately precedes (`close`/`closes`/`closed`, `fix`/`fixes`/`fixed`,
+  `resolve`/`resolves`/`resolved`, with optional whitespace or punctuation). `owner/repo#N` is not
+  this repository. A bare `#N` without that immediately preceding keyword does not count. Commit
+  messages on `base..head`, a reused body and title, and the generated body use that rule. A
+  full-URL reference is an unverified gap and is not asserted here. An unsafe body, title,
+  or commit refuses before effects. An OPEN request is reused only when its text names `#N`, its
+  text does not close it, `closingIssuesReferences` is a readable set that does not contain `#N`
+  (missing or unparseable refuses `native_closing_unmeasured`; a hit refuses
+  `native_closing_linkage`), and `autoMergeRequest` is `null` (a non-null object refuses
+  `auto_merge_enabled` and is not disabled or edited; a missing or unparseable value refuses
+  `auto_merge_unmeasured`). The sink does not unlink the request and does not describe merge-queue
+  behavior it did not measure. A MERGED request is not republished: stdout is `pr_request: request_only`,
   `publication: already_published`, `mainline_publication: pending_reconciliation`,
   `keep_open_linkage: clean|closing_present`, then `sink_pr: already_merged`. A closing keyword on
   that merged text is noted on stderr and does not open a second PR. CLOSED-unmerged stays

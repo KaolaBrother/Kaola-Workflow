@@ -17,9 +17,15 @@
 //   still refused. #1113 adds one supported exception, GitHub only: --keep-open-pr
 //   explicit_singleton together with durable keep_open_pr: explicit_singleton, a singleton
 //   issue, and sink: pr. That mode writes no closing linkage and never queues or auto-merges.
-//   Explicit mode also requires one declaration of each identity field and canonical positive
-//   issue tokens. A repeated field or a non-canonical issue token refuses before any effect.
-//   Close mode still uses the first matching field and the filtered member parser.
+//   Any keep_open_pr line (including an empty value) or any --keep-open-pr token is explicit
+//   intent. Intent without the full agreement refuses before push, create, archive publication,
+//   or an OFFLINE placeholder. Explicit mode also requires one declaration of each identity
+//   field and canonical positive issue tokens. A repeated field or a non-canonical issue token
+//   refuses before any effect. Close mode still uses the first matching field and the filtered
+//   member parser. An OPEN explicit reuse also refuses when closingIssuesReferences names the
+//   retained issue, when that field cannot be read, or when autoMergeRequest is already set.
+//   The sink does not edit that PR. A closing keyword associates only the reference it
+//   immediately precedes; owner/repo#N is not this repository.
 //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
 //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
 //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
@@ -108,11 +114,13 @@ function parseArgs(argv) {
       continue;
     }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
-    // #1113: explicit singleton GitHub keep-open research/artifact PR. Any other value is
-    // retained and refused; absence leaves the #336/#1098 legacy refusal unchanged.
-    if (argv[i] === '--keep-open-pr' && argv[i + 1]) {
-      (args.keepOpenPrTokens || (args.keepOpenPrTokens = [])).push(String(argv[++i]));
-      args.keepOpenPr = args.keepOpenPrTokens[args.keepOpenPrTokens.length - 1];
+    // #1113: explicit singleton GitHub keep-open research/artifact PR. The token itself is
+    // intent, including an empty or other value. Absence leaves the #336/#1098 legacy refusal
+    // unchanged. A following argument is the value; a bare token is an empty value.
+    if (argv[i] === '--keep-open-pr') {
+      const value = (i + 1 < argv.length) ? String(argv[++i]) : '';
+      (args.keepOpenPrTokens || (args.keepOpenPrTokens = [])).push(value);
+      args.keepOpenPr = value;
       continue;
     }
   }
@@ -144,17 +152,22 @@ function closesBody(members) {
   return members.map(n => 'Closes #' + n).join('\n');
 }
 
-// #1113: a closing keyword and every #N on that same line. Qualified owner/repo#N is included
-// because the digits are still a #N. "closing" does not match: the keyword is a whole word.
-const CLOSING_KEYWORD_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b/i;
+// #1113: a closing keyword associates only the reference it immediately precedes. Optional
+// whitespace or punctuation may sit between them. owner/repo#N is another repository and does
+// not count. A bare #N that the keyword does not immediately precede does not count. "closing"
+// does not match: the keyword is a whole word. The qualified alternative is matched and discarded
+// so its trailing #N is not read as a bare reference.
+const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+\b|#(\d+)\b)/gi;
 
 function closingIssueNumbers(text) {
   const found = new Set();
   for (const line of String(text || '').split(/\r?\n/)) {
-    if (!CLOSING_KEYWORD_RE.test(line)) continue;
-    const re = /#(\d+)\b/g;
+    CLOSING_ASSOC_RE.lastIndex = 0;
     let match;
-    while ((match = re.exec(line)) !== null) found.add(parseInt(match[1], 10));
+    while ((match = CLOSING_ASSOC_RE.exec(line)) !== null) {
+      if (match[1]) found.add(parseInt(match[1], 10));
+      if (match.index === CLOSING_ASSOC_RE.lastIndex) CLOSING_ASSOC_RE.lastIndex++;
+    }
   }
   return found;
 }
@@ -223,24 +236,31 @@ function explicitRefusal(reason) {
 // kind: close | legacy_refuse | explicit | malformed.
 function assessKeepOpenPr(args, texts, members) {
   const present = (Array.isArray(texts) ? texts : []).filter(t => typeof t === 'string');
-  const flag = args && args.keepOpenPr;
+  // Line existence, not the first nonempty value. An empty keep_open_pr line is intent.
+  // A caller that passes keepOpenPr without the token list still counts that one value.
+  const tokens = (args && Array.isArray(args.keepOpenPrTokens))
+    ? args.keepOpenPrTokens
+    : (args && typeof args.keepOpenPr === 'string' ? [args.keepOpenPr] : []);
+  const anyFlagToken = tokens.length > 0;
+  const flag = anyFlagToken ? tokens[tokens.length - 1] : '';
   const flagExact = flag === 'explicit_singleton';
   const anyLegacy = present.some(t => sinkField(t, 'issue_action') === 'comment_keep_open');
-  const anyMarker = present.some(t => sinkField(t, 'keep_open_pr') !== '');
+  const markerLines = present.map(t => sinkFieldValues(t, 'keep_open_pr'));
+  const anyMarkerLine = markerLines.some(lines => lines.length > 0);
   const project = (args && args.project) || '';
-  if (!flag && !anyMarker) {
+  const refuse = (reason) => ({ kind: 'malformed', reason: reason, message: explicitRefusal(reason) });
+  const repeated = (list) => Array.isArray(list) && list.length > 1;
+  // No keep_open_pr line and no --keep-open-pr token: close mode. issue_action alone stays
+  // the #336/#1098 merge-sink-only refusal.
+  if (!anyFlagToken && !anyMarkerLine) {
     if (anyLegacy) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
     return { kind: 'close' };
   }
-  if (!flagExact) {
-    if (anyLegacy && !flag) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
-    return { kind: 'malformed', reason: flag ? 'mode_mismatch' : 'partial_marker', message: explicitRefusal(flag ? 'mode_mismatch' : 'partial_marker') };
-  }
-  if (present.length === 0) return { kind: 'malformed', reason: 'state_missing', message: explicitRefusal('state_missing') };
-  const refuse = (reason) => ({ kind: 'malformed', reason: reason, message: explicitRefusal(reason) });
-  const repeated = (list) => Array.isArray(list) && list.length > 1;
-  if (repeated(args && args.keepOpenPrTokens) || repeated(args && args.branchTokens) ||
-      repeated(args && args.issueTokens) || repeated(args && args.issueNumbersTokens)) {
+  if (repeated(tokens) || markerLines.some(lines => lines.length > 1)) return refuse('ambiguous_identity');
+  if (!flagExact) return refuse(anyFlagToken ? 'mode_mismatch' : 'partial_marker');
+  if (present.length === 0) return refuse('state_missing');
+  if (repeated(args && args.branchTokens) || repeated(args && args.issueTokens) ||
+      repeated(args && args.issueNumbersTokens)) {
     return refuse('ambiguous_identity');
   }
   const once = ['issue_action', 'keep_open_pr', 'sink', 'issue_number', 'branch'];
@@ -325,6 +345,31 @@ function assertNoClosingCommits(root, baseBranch, branch, members) {
   if (hit.length) {
     throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. Commit messages reachable from ' +
       branch + ' and not from ' + baseBranch + ' close issue(s) ' + hit.join(', ') + '. Nothing was pushed or created.');
+  }
+}
+
+// #1113: explicit OPEN reuse/discovery. Refuse before push, create, or archive publication.
+// Do not unlink the PR and do not change its auto-merge setting.
+function assertExplicitOpenNativeSafe(existing, members) {
+  const closing = existing && existing.closingIssues;
+  if (!closing || closing.measured !== true) {
+    throw new Error(explicitRefusal('native_closing_unmeasured') + ' PR ' + existing.url +
+      ' did not return a readable closingIssuesReferences set. The PR was not modified.');
+  }
+  const hit = members.filter(n => closing.numbers.indexOf(n) !== -1);
+  if (hit.length) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: native_closing_linkage. PR ' +
+      existing.url + ' is associated with issue(s) ' + hit.join(', ') +
+      ' through closingIssuesReferences. The PR was not modified.');
+  }
+  const auto = existing.autoMerge;
+  if (!auto || auto.measured !== true) {
+    throw new Error(explicitRefusal('auto_merge_unmeasured') + ' PR ' + existing.url +
+      ' did not return a readable autoMergeRequest. The remote setting was not changed.');
+  }
+  if (auto.enabled) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: auto_merge_enabled. PR ' +
+      existing.url + ' already has auto-merge enabled. The remote setting was not changed.');
   }
 }
 
@@ -441,6 +486,41 @@ function readRecordedPrUrl(projectFolder, stateFile) {
   return '';
 }
 
+// #1113: both gh lookups ask for these. Close mode reads the same payload and ignores the
+// two explicit-mode fields, so a missing value there does not change close-mode reuse.
+const PR_VIEW_JSON = 'url,number,state,headRefName,baseRefName,body,title,closingIssuesReferences,autoMergeRequest';
+
+function hasOwn(obj, key) {
+  return !!obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+// Array of {number} -> measured numbers. Missing, null, or a bad element -> unmeasured.
+function normalizeClosingIssues(data) {
+  if (!hasOwn(data, 'closingIssuesReferences')) return { measured: false, numbers: [] };
+  const raw = data.closingIssuesReferences;
+  if (!Array.isArray(raw)) return { measured: false, numbers: [] };
+  const numbers = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || !hasOwn(item, 'number')) {
+      return { measured: false, numbers: [] };
+    }
+    const n = Number(item.number);
+    if (!Number.isInteger(n) || n <= 0) return { measured: false, numbers: [] };
+    numbers.push(n);
+  }
+  return { measured: true, numbers: numbers };
+}
+
+// null -> disabled. A non-null object -> enabled, with that object's fields kept.
+// Missing or any other shape -> unmeasured. This does not describe a merge queue.
+function normalizeAutoMerge(data) {
+  if (!hasOwn(data, 'autoMergeRequest')) return { measured: false, enabled: false, fields: null };
+  const raw = data.autoMergeRequest;
+  if (raw === null) return { measured: true, enabled: false, fields: null };
+  if (typeof raw === 'object' && !Array.isArray(raw)) return { measured: true, enabled: true, fields: raw };
+  return { measured: false, enabled: false, fields: null };
+}
+
 // #1098 §2.1-2: a PR view normalized to the fields reuse routing needs.
 function normalizePrView(data) {
   if (!data || typeof data !== 'object') return null;
@@ -454,7 +534,9 @@ function normalizePrView(data) {
     head: String(data.headRefName || ''),
     base: String(data.baseRefName || ''),
     body: String(data.body || ''),
-    title: String(data.title || '')
+    title: String(data.title || ''),
+    closingIssues: normalizeClosingIssues(data),
+    autoMerge: normalizeAutoMerge(data)
   };
 }
 
@@ -463,7 +545,7 @@ function normalizePrView(data) {
 // Any probe failure returns null so the caller falls back to the head-based discovery.
 function viewRecordedPr(prUrl) {
   try {
-    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body,title'])));
+    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', PR_VIEW_JSON])));
   } catch (_) { return null; }
 }
 
@@ -476,7 +558,7 @@ function listOpenPrs(branch, baseBranch) {
   let raw = '';
   try {
     raw = ghExec(['pr', 'list', '--head', branch, '--base', baseBranch, '--state', 'open',
-      '--json', 'url,number,state,headRefName,baseRefName,body,title']);
+      '--json', PR_VIEW_JSON]);
   } catch (_) { return []; }
   let list = null;
   try { list = JSON.parse(raw || '[]'); } catch (_) { return []; }
@@ -681,8 +763,9 @@ function main() {
         'The orchestrator decides whether to reopen; nothing was pushed or created.');
     }
     if (explicitMode) {
-      // OPEN explicit reuse: no closing linkage, and the body or title must still name the issue.
-      // Commit messages are scanned before any archive publish. Close mode keeps the Closes check.
+      // OPEN explicit reuse: native closing association and auto-merge first, then text.
+      // Both refuse before archive publication. Close mode keeps the Closes check.
+      assertExplicitOpenNativeSafe(existing, members);
       assertExplicitReuseSafe(existing, members);
       assertNoClosingCommits(root, baseBranch, args.branch, members);
     } else {

@@ -42,6 +42,9 @@ explicit singleton keep-open request (`--keep-open-pr explicit_singleton` with d
 issue). Each identity field is declared once, and each issue token is a canonical positive integer.
 The GitHub watcher requires that same agreement before it archives a merged live run or advances
 an archived merged run, and a malformed explicit marker does not become an ordinary close.
+Any `keep_open_pr` line counts as that intent, including an empty value. Reuse of an open request
+refuses when GitHub already associates the issue as closing, when that association cannot be read,
+or when auto-merge is already enabled, and it does not edit that request.
 It publishes a review request that does not close the issue, and it never queues or
 auto-merges, even when `pr_auto_merge` is true. The default close path and the older keep-open
 refusal stay in place. GitLab and Gitea do not have this mode. The merge

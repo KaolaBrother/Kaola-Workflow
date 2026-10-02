@@ -255,7 +255,8 @@ progress journal or execution plan. Its live blocks are:
   canonical positive integer issue token. A repeated line or a non-canonical token is refused
   before push or create. The GitHub watcher applies that same agreement on its live MERGED lane and
   its archived MERGED lane, and refuses before archive, mainline advance, claim cleanup, or worktree
-  removal. A malformed explicit marker does not fall through to ordinary close. Close mode still reads the first matching line. The sink fields are the durable ownership and
+  removal. Any `keep_open_pr` line is explicit intent, including a line with an empty value.
+  A malformed explicit marker does not fall through to ordinary close. Close mode still reads the first matching line. The sink fields are the durable ownership and
   integration facts; an active run has no executable resume pointer.
 - Claim-time liveness — `main_root`, `session_marker`, and `claim_ts`. `main_root` is the resolved
   main-repository authority; `session_marker` identifies the claiming session; `claim_ts` is the

@@ -361,7 +361,9 @@ One GitHub singleton may opt in with `keep_open_pr: explicit_singleton`. That re
 closing linkage, is not queued, and is not auto-merged. The watcher treats a later CLOSED issue as a
 keep-open violation and does not reopen it. A `keep_open_pr` line that is not one unambiguous
 canonical agreement refuses before the live MERGED archive and before the archived MERGED mainline
-advance, and it does not become an ordinary close. GitLab and Gitea stay on the refusal.
+advance, and it does not become an ordinary close. An empty `keep_open_pr` line is that intent.
+An open request that GitHub already links as closing the issue, or that already has auto-merge
+enabled, is refused and left unchanged. GitLab and Gitea stay on the refusal.
 
 ### Closure
 

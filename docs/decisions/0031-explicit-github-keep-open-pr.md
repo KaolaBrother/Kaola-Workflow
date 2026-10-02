@@ -1,6 +1,6 @@
 # ADR 0031 — Explicit GitHub singleton keep-open PR
 
-Status: Proposed, pending Host acceptance · Date: 2026-10-02 · Issue: #1113
+Status: Accepted · Date: 2026-10-02 · Issue: #1113
 
 ## Context
 
@@ -35,14 +35,39 @@ adoption records cited above remain historical motivation only. #1098 history is
    uses the first matching field and the filtered member parser. A bundle, another forge, a partial
    marker, or a mismatched issue, branch, base, or head is refused before push or create.
 3. The request does not close the issue. The body is `Keeps #N open.` plus non-closing sentences.
-   Commit messages on `base..head` that carry a closing keyword and `#N` on the same line are refused
-   before effects. Reuse requires the open request to name `#N` and not to close it.
+   Commit messages on `base..head`, and an open request's body and title, are refused when the
+   association rule below links the retained issue. Reuse still requires the open request to name
+   `#N`.
 4. The mode is request-only. It does not probe the merge queue and does not call `gh pr merge`, even
    when `pr_auto_merge` is true. It does not edit that config.
 5. The watcher tells the truth. An issue still open is `intentionally_kept_open`. An issue actually
    closed is `keep_open_violation` and is not reopened. An unreadable probe is `unknown`, not
    `skipped_offline` and not a success. Run archive status `closed` still means the run archived.
 6. GitLab and Gitea keep the unconditional keep-open request refusal. No other forge semantics change.
+7. Intent is line existence. Any `keep_open_pr` line counts, including an empty value, and any
+   `--keep-open-pr` token counts. Intent without the full agreement refuses with
+   `explicit_keep_open_refused` before push, create, archive publication, or an OFFLINE
+   placeholder. A duplicate line or token is `ambiguous_identity`. A wrong token is
+   `mode_mismatch`. A marker without the flag is `partial_marker`. A flag with no state file is
+   `state_missing`. No `keep_open_pr` line and no flag leaves close mode unchanged, and
+   `issue_action: comment_keep_open` with neither is still the #336/#1098 refusal.
+8. Explicit OPEN reuse and OPEN discovery read `closingIssuesReferences`. Objects in that array
+   contribute their `number`s. If the set contains the retained issue, refuse
+   `native_closing_linkage`. If the field is missing or unparseable, refuse
+   `native_closing_unmeasured`. An empty array stays reusable. The sink does not unlink or edit
+   the pull request.
+9. The same lookup reads `autoMergeRequest`. `null` is disabled and stays reusable. A non-null
+   object refuses `auto_merge_enabled` before push or archive publication. The sink does not
+   disable that setting and does not describe merge-queue behavior it did not measure. A missing
+   or unparseable value refuses `auto_merge_unmeasured`. MERGED and CLOSED-unmerged lanes stay
+   as they are.
+10. A closing keyword associates only the reference it immediately precedes. The keywords are
+    `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, and `resolve`/`resolves`/`resolved`, with
+    optional whitespace or punctuation before that one reference. `owner/repo#N` is not this
+    repository's issue. A bare `#N` that the keyword does not immediately precede does not count.
+    Commit messages, reused body and title, and the generated body use this rule. A full-URL
+    reference is an unverified compatibility gap: this record does not claim that it closes or
+    does not close an issue.
 
 ## Consequences
 
@@ -67,6 +92,12 @@ not new `CLOSURE_INVARIANTS` entries.
 Active-folder readers expose `issue_action` and `keep_open_pr` as empty strings when absent. They
 are not shared-state fields.
 
-Status remains Proposed. The local commit `a0f02ea54578107304e065c3358fc208ca879d22` is a prior
-frozen candidate and is not Host acceptance. This revision describes the candidate including the
-watcher refusal above. It becomes accepted only when the Host accepts an exact candidate.
+Any `keep_open_pr` line is explicit intent on this sink as well as on `watch-pr`, including an
+empty value. A duplicate marker refuses before close-mode selection. Explicit OPEN reuse refuses
+a native closing association with the retained issue, an unreadable `closingIssuesReferences`
+value, and an already-enabled `autoMergeRequest`, and it leaves the pull request unchanged. The
+closing scan associates a keyword only with the reference it immediately precedes, and it does
+not treat `owner/repo#N` as this repository. Full-URL references stay an unverified gap.
+
+Status is Accepted. This repair round is the final freeze of the semantics in this record.
+Acceptance here is not a merge and not a release.
