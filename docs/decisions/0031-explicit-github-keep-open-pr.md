@@ -65,14 +65,28 @@ adoption records cited above remain historical motivation only. #1098 history is
     `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, and `resolve`/`resolves`/`resolved`, with
     optional whitespace or punctuation before that one reference. A qualified `owner/repo#N`
     counts when that owner/repo is the run's own repository, compared case-insensitively, and
-    does not count for another repository. The identity is `claim_repository_id` when those
-    lines yield one repository. Otherwise the fallback is `git remote get-url origin` on the
-    main checkout, and that URL yields an identity only for `https://github.com/`,
-    `ssh://[user@]github.com/`, `git://github.com/`, and `git@github.com:`. A non-GitHub
-    remote yields no identity, and every keyword-qualified reference counts. A bare `#N` that
-    the keyword does not immediately precede does not count. Commit messages, reused body and
-    title, and the generated body use this rule. A full-URL reference is an unverified
-    compatibility gap: this record does not claim that it closes or does not close an issue.
+    does not count for another repository. A full issue URL
+    `https://github.com/OWNER/REPO/issues/N` after that keyword counts as a closing reference
+    to N exactly when OWNER/REPO matches that same identity. A URL for another repository does
+    not count. When the identity is empty, a URL reference counts, the same fail-closed rule as
+    a qualified reference. Same-repository issue-URL references are recognized per the supplied
+    native observations
+    (`.kaola/outer-review-1113/github-url-reference-observations.json`; nodejs/node pull
+    requests 66406, 66240, 66371, and 66325), including `Fixes: URL`, `Fixes URL`, and
+    `Fixes URL.` with other text on the same line. Foreign-repository URLs are ignored.
+    Unknown identity counts them. A bare `#N` that the keyword does not immediately precede
+    does not count. Commit messages, reused body and title, and the generated body use this
+    rule.
+11. In explicit mode the repository fact is reconciled with the publication target before any
+    closing scan, push, create, or OFFLINE placeholder, and after the marker and OFFLINE gates.
+    The state identity is `claim_repository_id` through the existing parser. The origin identity
+    is `git remote get-url origin` on the main checkout, GitHub URL forms only
+    (`https://github.com/`, `ssh://[user@]github.com/`, `git://github.com/`, and
+    `git@github.com:`), and it is always read in explicit mode. If both yield identities and
+    they disagree case-insensitively, explicit mode refuses `repository_conflict` and the
+    message names both identities. If the state yields an identity and origin does not parse,
+    the state identity stands. If the state yields none, origin decides. If neither yields one,
+    the identity is empty and qualified references and issue URLs count.
 
 ## Consequences
 
@@ -103,9 +117,16 @@ a native closing association with the retained issue, an unreadable `closingIssu
 value, and an already-enabled `autoMergeRequest`, and it leaves the pull request unchanged. The
 closing scan associates a keyword only with the reference it immediately precedes. A qualified
 reference counts when it matches the run's own repository and does not count for another
-repository. When those state lines do not yield one identity, origin is the fallback. A
-non-GitHub remote yields no identity, and qualified references count. Full-URL references stay
-an unverified gap.
+repository. A same-repository issue URL `https://github.com/OWNER/REPO/issues/N` counts the
+same way. A URL for another repository does not. When the identity is empty, qualified
+references and issue URLs count. Same-repository issue-URL references are recognized per the
+supplied native observations
+(`.kaola/outer-review-1113/github-url-reference-observations.json`; nodejs/node pull requests
+66406, 66240, 66371, and 66325). In explicit mode the state identity and the origin identity
+are both read. If both parse and disagree case-insensitively, the sink refuses
+`repository_conflict` before any scan, push, create, or placeholder, and the message names both
+identities. A state identity stands when origin does not parse. When state yields none, origin
+decides.
 
 Status is Accepted. This repair round is the final freeze of the semantics in this record.
 Acceptance here is not a merge and not a release.

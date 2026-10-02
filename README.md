@@ -46,7 +46,9 @@ Any `keep_open_pr` line counts as that intent, including an empty value. Reuse o
 refuses when GitHub already associates the issue as closing, when that association cannot be read,
 or when auto-merge is already enabled, and it does not edit that request.
 It publishes a review request that does not close the issue, and it never queues or
-auto-merges, even when `pr_auto_merge` is true. The default close path and the older keep-open
+auto-merges, even when `pr_auto_merge` is true. A same-repository issue URL after a closing
+keyword is closing linkage. If the recorded repository and the GitHub origin both parse and
+disagree, the request is refused before publication. The default close path and the older keep-open
 refusal stay in place. GitLab and Gitea do not have this mode. The merge
 sink also reports what it found: every envelope names
 whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private

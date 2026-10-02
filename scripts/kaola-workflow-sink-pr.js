@@ -25,9 +25,11 @@
 //   member parser. An OPEN explicit reuse also refuses when closingIssuesReferences names the
 //   retained issue, when that field cannot be read, or when autoMergeRequest is already set.
 //   The sink does not edit that PR. A closing keyword associates only the reference it
-//   immediately precedes. A qualified owner/repo#N counts when it matches the run's own
-//   repository and does not count for another repository. A full-URL reference remains an
-//   unverified gap.
+//   immediately precedes. A qualified owner/repo#N, and a same-repository issue URL
+//   https://github.com/OWNER/REPO/issues/N, count when they match the run's own repository
+//   and do not count for another repository. An empty identity counts both. In explicit mode
+//   the state identity and the origin identity are both read; if both parse and disagree, the
+//   sink refuses repository_conflict before any scan, push, create, or placeholder.
 //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
 //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
 //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
@@ -155,21 +157,22 @@ function closesBody(members) {
 }
 
 // #1113: a closing keyword associates only the reference it immediately precedes. Optional
-// whitespace or punctuation may sit between them. A qualified owner/repo#N counts when its
-// owner/repo matches the run's own repository, compared case-insensitively, and is discarded
-// for any other repository. The identity is claim_repository_id from the workflow-state texts
-// already loaded, normalized from https://github.com/OWNER/REPO(.git) and from ssh/git forms
-// (git@github.com:OWNER/REPO, ssh://git@github.com/OWNER/REPO, git://github.com/OWNER/REPO,
-// optional .git) to OWNER/REPO, and from an already-normalized OWNER/REPO. If those lines do
-// not yield one identity, the fallback is `git remote get-url origin` on the main checkout
-// root. That remote yields an identity only for those GitHub URL forms. A non-GitHub remote
-// yields no identity, and every keyword-qualified reference counts, including other
-// repositories: over-refusal is the fail-closed direction. A bare #N after the keyword still
-// counts. A bare #N that the keyword does not immediately precede does not count. "closing"
-// does not match: the keyword is a whole word. The qualified alternative is always consumed
-// so its trailing #N is not read as a bare reference. A full-URL reference remains an
-// unverified gap and is not counted.
-const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b|#(\d+)\b)/gi;
+// whitespace or punctuation may sit between them. The reference is one of three forms: a
+// full issue URL https://github.com/OWNER/REPO/issues/N, a qualified owner/repo#N, or a bare
+// #N. OWNER/REPO is compared case-insensitively with the run repository identity. A URL or
+// qualified reference for another repository is consumed and does not count. An empty
+// identity counts every keyword-URL and keyword-qualified reference: over-refusal is the
+// fail-closed direction. Same-repository issue URLs are recognized from the supplied native
+// observations (nodejs/node pull requests 66406, 66240, 66371, and 66325): "Fixes: URL",
+// "Fixes URL", and "Fixes URL." with other text on the same line. The scheme and host are
+// https://github.com; the keyword match is case-insensitive. A URL for another repository
+// does not count. A bare #N after the keyword still counts. A bare #N that the keyword does
+// not immediately precede does not count. "closing" does not match: the keyword is a whole
+// word. The URL and qualified alternatives are consumed so a trailing #N is not read as a
+// bare reference.
+// Groups: 1-3 issue-URL owner/repo/number; 4-6 qualified owner/repo/number; 7 bare number.
+// Only one alternative captures.
+const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues\/(\d+)\b|([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b|#(\d+)\b)/gi;
 
 // GitHub URL forms only. The origin fallback uses this and nothing else, so an absolute
 // local path, a relative path, or another host yields '' and the scanner counts every
@@ -215,7 +218,8 @@ function sameRepository(owner, repo, identity) {
 }
 
 // repositoryIdentity is OWNER/REPO, a claim_repository_id / origin URL that normalizes to one,
-// or empty when the repository is unknown. Empty counts every qualified reference.
+// or empty when the repository is unknown. Empty counts every qualified reference and every
+// keyword-preceded issue URL.
 function closingIssueNumbers(text, repositoryIdentity) {
   const identity = asOwnerRepo(repositoryIdentity);
   const found = new Set();
@@ -223,8 +227,9 @@ function closingIssueNumbers(text, repositoryIdentity) {
     CLOSING_ASSOC_RE.lastIndex = 0;
     let match;
     while ((match = CLOSING_ASSOC_RE.exec(line)) !== null) {
-      if (match[4]) found.add(parseInt(match[4], 10));
+      if (match[7]) found.add(parseInt(match[7], 10));
       else if (match[3] && sameRepository(match[1], match[2], identity)) found.add(parseInt(match[3], 10));
+      else if (match[6] && sameRepository(match[4], match[5], identity)) found.add(parseInt(match[6], 10));
       if (match.index === CLOSING_ASSOC_RE.lastIndex) CLOSING_ASSOC_RE.lastIndex++;
     }
   }
@@ -258,10 +263,21 @@ function originOwnerRepo(root) {
   }
 }
 
+// Explicit mode only. The state parser is unchanged. Origin is always read, and it still
+// accepts only a GitHub remote URL. Both identities present and disagreeing (case-insensitive)
+// refuses repository_conflict before any scan, push, create, or placeholder. A state identity
+// stands when origin does not parse, including a local or non-GitHub remote. When state yields
+// none, origin decides. When neither yields one, the identity is empty and qualified references
+// and issue URLs count.
 function resolveClaimRepositoryIdentity(texts, root) {
   const fromState = claimRepositoryFromTexts(texts);
+  const fromOrigin = originOwnerRepo(root);
+  if (fromState && fromOrigin && fromState.toLowerCase() !== fromOrigin.toLowerCase()) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: repository_conflict. State repository is ' +
+      fromState + ', origin repository is ' + fromOrigin + '. Nothing was pushed or created.');
+  }
   if (fromState) return fromState;
-  return originOwnerRepo(root);
+  return fromOrigin;
 }
 
 function sinkField(text, name) {
@@ -772,9 +788,11 @@ function main() {
     return { pr_url: prUrl, pr_number: prNumber, offline: true };
   }
 
-  // #1113: one identity for every closing scan in this run. State wins. Origin is the
-  // fallback and accepts only a GitHub remote URL; a non-GitHub remote yields no identity.
-  // Empty means the repository is unknown and qualified references count.
+  // #1113: one identity for every closing scan in this run. Explicit mode reads state and
+  // origin here, after the marker and OFFLINE gates and before any scan, push, create, or
+  // placeholder. Disagreement throws repository_conflict and names both identities. A state
+  // identity stands when origin is not a GitHub URL. An empty state lets origin decide.
+  // Neither leaves the identity empty, and qualified references and issue URLs then count.
   const repositoryIdentity = explicitMode
     ? resolveClaimRepositoryIdentity(keepOpenTexts, root)
     : '';

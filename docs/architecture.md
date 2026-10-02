@@ -358,7 +358,9 @@ close the issue the run deliberately kept open.
 
 #1113 does not remove that rule. The default keep-open path is still merge-sink-only (#1098 D4=(a)).
 One GitHub singleton may opt in with `keep_open_pr: explicit_singleton`. That request carries no
-closing linkage, is not queued, and is not auto-merged. The watcher treats a later CLOSED issue as a
+closing linkage, is not queued, and is not auto-merged. A same-repository issue URL counts as
+that linkage. A recorded repository that disagrees with the GitHub origin is refused before
+publication. The watcher treats a later CLOSED issue as a
 keep-open violation and does not reopen it. A `keep_open_pr` line that is not one unambiguous
 canonical agreement refuses before the live MERGED archive and before the archived MERGED mainline
 advance, and it does not become an ordinary close. An empty `keep_open_pr` line is that intent.

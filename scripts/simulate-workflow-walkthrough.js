@@ -7953,8 +7953,9 @@ function testSinkPrKeepOpenRefusal() {
 // #1113: partial explicit intent must refuse before close-mode effects; OPEN reuse must refuse a
 // native closing association or an already-enabled auto-merge; a closing keyword associates only
 // the reference it immediately precedes. A qualified owner/repo#N counts when it matches the
-// repository this scenario records and does not count for another repository. Full-URL
-// references are not asserted here.
+// repository this scenario records and does not count for another repository. A same-repository
+// issue URL counts the same way. A foreign URL does not. An unknown identity counts both. State
+// and a GitHub origin that disagree refuse repository_conflict before any effect.
 function testExplicitKeepOpenPrP1Repairs() {
   const sinkPr = require(sinkPrScript);
   const claimRepo = 'fixture-owner/fixture-repo';
@@ -7988,6 +7989,26 @@ function testExplicitKeepOpenPrP1Repairs() {
     '#1113 scanner: a git:// claim_repository_id is this repository');
   assert(listed('Fixes other/repo#143') === '[143]',
     '#1113 scanner: an unknown repository counts a qualified reference, got ' + listed('Fixes other/repo#143'));
+  const ownIssueUrl = 'https://github.com/Fixture-Owner/Fixture-Repo/issues/143';
+  const foreignIssueUrl = 'https://github.com/other/repo/issues/143';
+  assert(listed('Fixes: ' + ownIssueUrl, claimRepo) === '[143]',
+    '#1113 scanner: Fixes: URL associates 143, got ' + listed('Fixes: ' + ownIssueUrl, claimRepo));
+  assert(listed('Fixes ' + ownIssueUrl, claimRepo) === '[143]',
+    '#1113 scanner: Fixes URL associates 143, got ' + listed('Fixes ' + ownIssueUrl, claimRepo));
+  assert(listed('Fixes ' + ownIssueUrl + '.', claimRepo) === '[143]',
+    '#1113 scanner: Fixes URL. associates 143, got ' + listed('Fixes ' + ownIssueUrl + '.', claimRepo));
+  assert(listed('context Fixes: ' + ownIssueUrl + ' remains.', claimRepo) === '[143]',
+    '#1113 scanner: surrounding text on the same line still associates the URL, got ' +
+    listed('context Fixes: ' + ownIssueUrl + ' remains.', claimRepo));
+  assert(listed('Fixes ' + foreignIssueUrl, claimRepo) === '[]',
+    '#1113 scanner: a foreign issue URL does not count, got ' + listed('Fixes ' + foreignIssueUrl, claimRepo));
+  assert(listed('See ' + ownIssueUrl, claimRepo) === '[]',
+    '#1113 scanner: an issue URL without a closing keyword does not count, got ' +
+    listed('See ' + ownIssueUrl, claimRepo));
+  assert(listed('Fixes https://github.com/fixture-owner/fixture-repo/issues/143', claimRepositoryId) === '[143]',
+    '#1113 scanner: issue URL owner/repo comparison is case-insensitive');
+  assert(listed('Fixes ' + foreignIssueUrl) === '[143]',
+    '#1113 scanner: an unknown repository counts an issue URL, got ' + listed('Fixes ' + foreignIssueUrl));
 
   const originOf = (url) => sinkPr.githubUrlOwnerRepo(url);
   const originParses = [
@@ -8073,6 +8094,21 @@ function testExplicitKeepOpenPrP1Repairs() {
         assert(shown === opts.originUrl,
           '#1113 origin URL must stay ' + opts.originUrl + ', got ' + shown);
       }
+      if (opts.githubOriginUrl) {
+        const setFetch = G.git(tmp, ['remote', 'set-url', 'origin', opts.githubOriginUrl], { env });
+        assert(setFetch.status === 0, '#1113 github origin set-url failed: ' + setFetch.stderr);
+        const setPush = G.git(tmp, ['remote', 'set-url', '--push', 'origin', remotePath], { env });
+        assert(setPush.status === 0, '#1113 github origin pushurl failed: ' + setPush.stderr);
+        const sym = G.git(tmp, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { env });
+        assert(sym.status === 0, '#1113 github origin symbolic-ref failed: ' + sym.stderr);
+        assert(G.git(tmp, ['config', 'protocol.allow', 'never'], { env }).status === 0,
+          '#1113 github origin protocol.allow failed');
+        assert(G.git(tmp, ['config', 'protocol.file.allow', 'always'], { env }).status === 0,
+          '#1113 github origin protocol.file.allow failed');
+        const shown = G.git(tmp, ['remote', 'get-url', 'origin'], { env }).stdout.toString().trim();
+        assert(shown === opts.githubOriginUrl,
+          '#1113 github origin URL must stay ' + opts.githubOriginUrl + ', got ' + shown);
+      }
       G.git(tmp, ['checkout', '-q', 'main'], { env });
       G.git(tmp, ['checkout', '-b', branch], { env });
       const projectDir = path.join(tmp, 'kaola-workflow', project);
@@ -8083,7 +8119,10 @@ function testExplicitKeepOpenPrP1Repairs() {
       G.git(tmp, ['commit', '-m', opts.commitMessage || 'publish the run archive'], { env });
       if (opts.pushBranch) G.git(tmp, ['push', 'origin', branch], { env });
       const localBefore = G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim();
-      const remoteBefore = G.git(tmp, ['ls-remote', '--heads', 'origin', branch], { env }).stdout.toString();
+      const publicationTip = () => opts.githubOriginUrl
+        ? G.git(remotePath, ['rev-parse', '--verify', '-q', 'refs/heads/' + branch], { env }).stdout.toString()
+        : G.git(tmp, ['ls-remote', '--heads', 'origin', branch], { env }).stdout.toString();
+      const remoteBefore = publicationTip();
       writeSinkPrConfigHome(homeDir, { pr_auto_merge: true });
       const binDir = path.join(tmp, '.bin');
       const argvLog = writeSinkPrStubGh(binDir, opts.gh || { list: '[]' });
@@ -8105,7 +8144,7 @@ function testExplicitKeepOpenPrP1Repairs() {
         localBefore,
         localAfter: G.git(tmp, ['rev-parse', branch], { env }).stdout.toString().trim(),
         remoteBefore,
-        remoteAfter: G.git(tmp, ['ls-remote', '--heads', 'origin', branch], { env }).stdout.toString(),
+        remoteAfter: publicationTip(),
         state: fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8')
       };
     } finally {
@@ -8272,6 +8311,88 @@ function testExplicitKeepOpenPrP1Repairs() {
     /explicit_keep_open_refused: native_closing_unmeasured/.test(unmeasured.result.stderr),
     '#1113: an unmeasured closingIssuesReferences field must refuse\nstderr: ' + unmeasured.result.stderr);
   assertNoEffects(unmeasured, '#1113 unmeasured');
+
+  const urlForms = [
+    ['url-colon', 'Fixes: ' + ownIssueUrl],
+    ['url-plain', 'Fixes ' + ownIssueUrl],
+    ['url-period', 'Fixes ' + ownIssueUrl + '.']
+  ];
+  for (const pair of urlForms) {
+    const refused = runCase(pair[0], {
+      issue: 143,
+      state: explicitState(143, 'workflow/issue-143'),
+      commitMessage: pair[1]
+    });
+    assert(refused.result.status !== 0 &&
+      /explicit_keep_open_refused: closing_linkage/.test(refused.result.stderr),
+      '#1113 scanner: ' + JSON.stringify(pair[1]) + ' must refuse before push\nstderr: ' +
+      refused.result.stderr);
+    assertNoEffects(refused, '#1113 scanner ' + pair[0]);
+  }
+
+  for (const pair of [
+    ['url-foreign', 'Fixes ' + foreignIssueUrl],
+    ['url-nokey', 'See ' + ownIssueUrl]
+  ]) {
+    const createdUrl = runCase(pair[0], {
+      issue: 143,
+      state: explicitState(143, 'workflow/issue-143'),
+      commitMessage: pair[1],
+      gh: { list: '[]', create: 'https://github.com/test/repo/pull/143' }
+    });
+    assert(createdUrl.result.status === 0 && /sink_pr: created/.test(createdUrl.result.stdout),
+      '#1113 scanner: ' + JSON.stringify(pair[1]) + ' must create\nstdout: ' + createdUrl.result.stdout +
+      '\nstderr: ' + createdUrl.result.stderr);
+    const urlCreate = createdUrl.calls.find(c => c[0] === 'pr' && c[1] === 'create');
+    const urlBody = urlCreate && urlCreate[urlCreate.indexOf('--body') + 1];
+    assert(urlCreate && String(urlBody).startsWith('Keeps #143 open.'),
+      '#1113 scanner: ' + pair[0] + ' body got ' + urlBody);
+  }
+
+  const conflict = runCase('repo-conflict', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    commitMessage: 'Fixes ' + claimRepo + '#143',
+    githubOriginUrl: 'https://github.com/other/repo.git'
+  });
+  assert(conflict.result.status !== 0 &&
+    /explicit_keep_open_refused: repository_conflict/.test(conflict.result.stderr),
+    '#1113 repository_conflict must refuse\nstderr: ' + conflict.result.stderr);
+  assert(/State repository is Fixture-Owner\/Fixture-Repo/.test(conflict.result.stderr) &&
+    /origin repository is other\/repo/.test(conflict.result.stderr),
+    '#1113 repository_conflict must name both identities, got: ' + conflict.result.stderr);
+  assert(conflict.calls.length === 0,
+    '#1113 repository_conflict must refuse before any gh call, got ' + JSON.stringify(conflict.calls));
+  assertNoEffects(conflict, '#1113 repository_conflict');
+
+  const matched = runCase('repo-match', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    commitMessage: 'Fix #999; related #143\n\nFixes other/repo#143\n',
+    githubOriginUrl: 'https://github.com/fixture-owner/fixture-repo.git',
+    gh: { list: '[]', create: 'https://github.com/test/repo/pull/143' }
+  });
+  assert(matched.result.status === 0 && /sink_pr: created/.test(matched.result.stdout),
+    '#1113 matching state and origin must create\nstdout: ' + matched.result.stdout +
+    '\nstderr: ' + matched.result.stderr);
+  assert(matched.remoteAfter.trim() === matched.localAfter,
+    '#1113 matching origin must publish on the local push target\nremote: ' + matched.remoteAfter +
+    '\nlocal: ' + matched.localAfter);
+
+  const reuseUrl = runCase('reuse-url', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    pushBranch: true,
+    gh: { list: openPr({
+      closingIssuesReferences: [],
+      autoMergeRequest: null,
+      title: 'Fixes: ' + ownIssueUrl + '.'
+    }) }
+  });
+  assert(reuseUrl.result.status !== 0 &&
+    /explicit_keep_open_refused: closing_linkage/.test(reuseUrl.result.stderr),
+    '#1113 reuse: an issue URL in the title must refuse\nstderr: ' + reuseUrl.result.stderr);
+  assertNoEffects(reuseUrl, '#1113 reuse issue URL');
   console.log('testExplicitKeepOpenPrP1Repairs: PASSED');
 }
 

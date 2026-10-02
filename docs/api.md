@@ -1467,9 +1467,18 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   the reference it immediately precedes (`close`/`closes`/`closed`, `fix`/`fixes`/`fixed`,
   `resolve`/`resolves`/`resolved`, with optional whitespace or punctuation). A qualified
   `owner/repo#N` counts when it matches the run's own repository and does not count for another
-  repository. A bare `#N` without that immediately preceding keyword does not count. Commit
-  messages on `base..head`, a reused body and title, and the generated body use that rule. A
-  full-URL reference is an unverified gap and is not asserted here. An unsafe body, title,
+  repository. A full issue URL `https://github.com/OWNER/REPO/issues/N` after that keyword counts
+  as N when OWNER/REPO matches the same identity, case-insensitively, and does not count for
+  another repository. When the identity is empty, the URL counts. Recognized forms include
+  `Fixes: URL`, `Fixes URL`, and `Fixes URL.` with other text on the same line, per the supplied
+  native observations (nodejs/node pull requests 66406, 66240, 66371, and 66325). A bare `#N`
+  without that immediately preceding keyword does not count. Commit messages on `base..head`, a
+  reused body and title, and the generated body use that rule. In explicit mode the state
+  `claim_repository_id` and `git remote get-url origin` are both read. If both yield identities
+  and they disagree case-insensitively, the sink refuses `repository_conflict` before any scan,
+  push, create, or placeholder and names both identities. A state identity stands when origin is
+  not a GitHub URL. When state yields none, origin decides. When neither yields one, the identity
+  is empty. An unsafe body, title,
   or commit refuses before effects. An OPEN request is reused only when its text names `#N`, its
   text does not close it, `closingIssuesReferences` is a readable set that does not contain `#N`
   (missing or unparseable refuses `native_closing_unmeasured`; a hit refuses
