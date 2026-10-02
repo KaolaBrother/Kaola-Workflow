@@ -7989,6 +7989,39 @@ function testExplicitKeepOpenPrP1Repairs() {
   assert(listed('Fixes other/repo#143') === '[143]',
     '#1113 scanner: an unknown repository counts a qualified reference, got ' + listed('Fixes other/repo#143'));
 
+  const originOf = (url) => sinkPr.githubUrlOwnerRepo(url);
+  const originParses = [
+    ['https://github.com/Fixture-Owner/Fixture-Repo.git', 'Fixture-Owner/Fixture-Repo'],
+    ['https://github.com/Fixture-Owner/Fixture-Repo', 'Fixture-Owner/Fixture-Repo'],
+    ['git@github.com:Fixture-Owner/Fixture-Repo.git', 'Fixture-Owner/Fixture-Repo'],
+    ['ssh://git@github.com/Fixture-Owner/Fixture-Repo.git', 'Fixture-Owner/Fixture-Repo'],
+    ['ssh://github.com/Fixture-Owner/Fixture-Repo.git', 'Fixture-Owner/Fixture-Repo'],
+    ['git://github.com/Fixture-Owner/Fixture-Repo.git', 'Fixture-Owner/Fixture-Repo']
+  ];
+  for (const pair of originParses) {
+    assert(originOf(pair[0]) === pair[1],
+      '#1113 origin: ' + pair[0] + ' must parse, got ' + JSON.stringify(originOf(pair[0])));
+  }
+  for (const shape of [
+    '../origin.git', 'repo/origin.git', '/tmp/fixture/repo/origin.git',
+    'https://gitlab.com/Fixture-Owner/Fixture-Repo.git'
+  ]) {
+    assert(originOf(shape) === '',
+      '#1113 origin: ' + shape + ' yields no identity, got ' + JSON.stringify(originOf(shape)));
+  }
+  assert(sinkPr.asOwnerRepo('KaolaBrother/Kaola-Workflow') === 'KaolaBrother/Kaola-Workflow',
+    '#1113 state: a normalized slug still parses, got ' +
+    JSON.stringify(sinkPr.asOwnerRepo('KaolaBrother/Kaola-Workflow')));
+  assert(sinkPr.asOwnerRepo('https://github.com/KaolaBrother/Kaola-Workflow.git') ===
+    'KaolaBrother/Kaola-Workflow',
+    '#1113 state: an https claim_repository_id still parses');
+  assert(sinkPr.asOwnerRepo('../origin.git') === '',
+    '#1113 state: ../ must not parse, got ' + JSON.stringify(sinkPr.asOwnerRepo('../origin.git')));
+  assert(sinkPr.asOwnerRepo('./origin.git') === '',
+    '#1113 state: ./ must not parse, got ' + JSON.stringify(sinkPr.asOwnerRepo('./origin.git')));
+  // A slug-shaped corrupted state line such as repo/origin.git is indistinguishable from a
+  // normalized OWNER/REPO. The origin parser above rejects it; asOwnerRepo does not.
+
   const gate = (args, text, members) => sinkPr.assessKeepOpenPr(args, [text], members);
   const closeGate = gate(
     { project: 'issue-7', branch: 'workflow/issue-7', issue: 7 },
@@ -8028,8 +8061,18 @@ function testExplicitKeepOpenPrP1Repairs() {
     const remotePath = tmp + '-remote';
     const homeDir = tmp + '-home';
     const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    let relocatedOrigin = '';
     try {
       initGitRepoWithBareRemote(tmp);
+      if (opts.originUrl) {
+        relocatedOrigin = path.resolve(tmp, opts.originUrl);
+        fs.mkdirSync(path.dirname(relocatedOrigin), { recursive: true });
+        fs.renameSync(remotePath, relocatedOrigin);
+        G.git(tmp, ['remote', 'set-url', 'origin', opts.originUrl], { env });
+        const shown = G.git(tmp, ['remote', 'get-url', 'origin'], { env }).stdout.toString().trim();
+        assert(shown === opts.originUrl,
+          '#1113 origin URL must stay ' + opts.originUrl + ', got ' + shown);
+      }
       G.git(tmp, ['checkout', '-q', 'main'], { env });
       G.git(tmp, ['checkout', '-b', branch], { env });
       const projectDir = path.join(tmp, 'kaola-workflow', project);
@@ -8068,6 +8111,9 @@ function testExplicitKeepOpenPrP1Repairs() {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(remotePath, { recursive: true, force: true });
+      if (relocatedOrigin && relocatedOrigin !== tmp && !relocatedOrigin.startsWith(tmp + path.sep)) {
+        fs.rmSync(relocatedOrigin, { recursive: true, force: true });
+      }
     }
   }
 
@@ -8142,6 +8188,9 @@ function testExplicitKeepOpenPrP1Repairs() {
     '#1113 scanner: same-repository qualified commit must refuse before push\nstderr: ' + ownRepo.result.stderr);
   assertNoEffects(ownRepo, '#1113 scanner same-repository qualified');
 
+  // Absolute local origin (v5-c1): no parseable claim_repository_id, origin is the bare
+  // path from initGitRepoWithBareRemote. That path yields no identity, so the qualified
+  // reference counts and the sink refuses before push.
   const unknownRepo = runCase('scan-unknown', {
     issue: 143,
     state: explicitState(143, 'workflow/issue-143', null),
@@ -8150,6 +8199,21 @@ function testExplicitKeepOpenPrP1Repairs() {
   assert(unknownRepo.result.status !== 0 && /explicit_keep_open_refused: closing_linkage/.test(unknownRepo.result.stderr),
     '#1113 scanner: unknown repository must count a qualified reference\nstderr: ' + unknownRepo.result.stderr);
   assertNoEffects(unknownRepo, '#1113 scanner unknown repository');
+
+  // Relative origin (the measured repo/origin.git shape). State has no parseable
+  // claim_repository_id. The origin URL is not a GitHub remote, so it yields no identity
+  // and the same qualified reference counts.
+  const relativeOrigin = runCase('scan-rel-origin', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143', null),
+    commitMessage: 'Fixes other/repo#143',
+    originUrl: 'repo/origin.git'
+  });
+  assert(relativeOrigin.result.status !== 0 &&
+    /explicit_keep_open_refused: closing_linkage/.test(relativeOrigin.result.stderr),
+    '#1113 scanner: a relative origin must not parse, so a qualified reference counts\nstderr: ' +
+    relativeOrigin.result.stderr);
+  assertNoEffects(relativeOrigin, '#1113 scanner relative origin');
 
   const openPr = (extra) => JSON.stringify([Object.assign({
     url: 'https://github.com/test/repo/pull/143', number: 143, state: 'OPEN',

@@ -160,33 +160,53 @@ function closesBody(members) {
 // for any other repository. The identity is claim_repository_id from the workflow-state texts
 // already loaded, normalized from https://github.com/OWNER/REPO(.git) and from ssh/git forms
 // (git@github.com:OWNER/REPO, ssh://git@github.com/OWNER/REPO, git://github.com/OWNER/REPO,
-// optional .git) to OWNER/REPO. If those lines do not yield one identity, the fallback is
-// `git remote get-url origin` on the main checkout root, parsed the same way. When neither
-// yields an identity, every keyword-qualified reference counts, including other repositories:
-// over-refusal is the fail-closed direction. A bare #N after the keyword still counts. A bare
-// #N that the keyword does not immediately precede does not count. "closing" does not match:
-// the keyword is a whole word. The qualified alternative is always consumed so its trailing
-// #N is not read as a bare reference. A full-URL reference remains an unverified gap and is
-// not counted.
+// optional .git) to OWNER/REPO, and from an already-normalized OWNER/REPO. If those lines do
+// not yield one identity, the fallback is `git remote get-url origin` on the main checkout
+// root. That remote yields an identity only for those GitHub URL forms. A non-GitHub remote
+// yields no identity, and every keyword-qualified reference counts, including other
+// repositories: over-refusal is the fail-closed direction. A bare #N after the keyword still
+// counts. A bare #N that the keyword does not immediately precede does not count. "closing"
+// does not match: the keyword is a whole word. The qualified alternative is always consumed
+// so its trailing #N is not read as a bare reference. A full-URL reference remains an
+// unverified gap and is not counted.
 const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b|#(\d+)\b)/gi;
 
-// OWNER/REPO from a claim_repository_id, an origin URL, or an already-normalized OWNER/REPO.
-// A local path or any other shape yields '' so the caller can fail closed.
-function asOwnerRepo(value) {
-  const text = String(value == null ? '' : value).trim();
-  if (!text) return '';
-  const patterns = [
-    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
-    /^ssh:\/\/(?:[^@/]+@)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
-    /^git:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
-    /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
-    /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/i
-  ];
+// GitHub URL forms only. The origin fallback uses this and nothing else, so an absolute
+// local path, a relative path, or another host yields '' and the scanner counts every
+// qualified reference.
+const GITHUB_URL_OWNER_REPO = [
+  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+  /^ssh:\/\/(?:[^@/]+@)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+  /^git:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+  /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i
+];
+
+// Bare OWNER/REPO for a claim_repository_id or an already-normalized state value.
+// Each segment must start with an alphanumeric, so ../ and ./ shapes do not parse.
+// A slug-shaped corrupted state line such as repo/origin.git is syntactically the same
+// as a legitimate normalized OWNER/REPO (it parses as repo/origin). That limit is
+// inherent to this state form and is not rejected here.
+const BARE_OWNER_REPO = /^([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*?)(?:\.git)?$/;
+
+function firstOwnerRepo(text, patterns) {
   for (const re of patterns) {
     const match = text.match(re);
     if (match) return match[1] + '/' + match[2];
   }
   return '';
+}
+
+function githubUrlOwnerRepo(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  return firstOwnerRepo(text, GITHUB_URL_OWNER_REPO);
+}
+
+// State values only. Origin remotes go through githubUrlOwnerRepo.
+function asOwnerRepo(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  return firstOwnerRepo(text, GITHUB_URL_OWNER_REPO.concat([BARE_OWNER_REPO]));
 }
 
 function sameRepository(owner, repo, identity) {
@@ -232,7 +252,7 @@ function originOwnerRepo(root) {
     const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
     }).trim();
-    return asOwnerRepo(remote);
+    return githubUrlOwnerRepo(remote);
   } catch (_) {
     return '';
   }
@@ -752,7 +772,8 @@ function main() {
     return { pr_url: prUrl, pr_number: prNumber, offline: true };
   }
 
-  // #1113: one identity for every closing scan in this run. State wins; origin is the fallback.
+  // #1113: one identity for every closing scan in this run. State wins. Origin is the
+  // fallback and accepts only a GitHub remote URL; a non-GitHub remote yields no identity.
   // Empty means the repository is unknown and qualified references count.
   const repositoryIdentity = explicitMode
     ? resolveClaimRepositoryIdentity(keepOpenTexts, root)
@@ -994,5 +1015,6 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs, resolveMemberSet, closesBody,
-  keepOpenLinkageBody, closingIssueNumbers, assessKeepOpenPr
+  keepOpenLinkageBody, closingIssueNumbers, assessKeepOpenPr,
+  asOwnerRepo, githubUrlOwnerRepo
 };

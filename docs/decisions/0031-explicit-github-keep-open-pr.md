@@ -65,10 +65,14 @@ adoption records cited above remain historical motivation only. #1098 history is
     `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, and `resolve`/`resolves`/`resolved`, with
     optional whitespace or punctuation before that one reference. A qualified `owner/repo#N`
     counts when that owner/repo is the run's own repository, compared case-insensitively, and
-    does not count for another repository. A bare `#N` that the keyword does not immediately
-    precede does not count. Commit messages, reused body and title, and the generated body use
-    this rule. A full-URL reference is an unverified compatibility gap: this record does not
-    claim that it closes or does not close an issue.
+    does not count for another repository. The identity is `claim_repository_id` when those
+    lines yield one repository. Otherwise the fallback is `git remote get-url origin` on the
+    main checkout, and that URL yields an identity only for `https://github.com/`,
+    `ssh://[user@]github.com/`, `git://github.com/`, and `git@github.com:`. A non-GitHub
+    remote yields no identity, and every keyword-qualified reference counts. A bare `#N` that
+    the keyword does not immediately precede does not count. Commit messages, reused body and
+    title, and the generated body use this rule. A full-URL reference is an unverified
+    compatibility gap: this record does not claim that it closes or does not close an issue.
 
 ## Consequences
 
@@ -99,7 +103,9 @@ a native closing association with the retained issue, an unreadable `closingIssu
 value, and an already-enabled `autoMergeRequest`, and it leaves the pull request unchanged. The
 closing scan associates a keyword only with the reference it immediately precedes. A qualified
 reference counts when it matches the run's own repository and does not count for another
-repository. Full-URL references stay an unverified gap.
+repository. When those state lines do not yield one identity, origin is the fallback. A
+non-GitHub remote yields no identity, and qualified references count. Full-URL references stay
+an unverified gap.
 
 Status is Accepted. This repair round is the final freeze of the semantics in this record.
 Acceptance here is not a merge and not a release.
