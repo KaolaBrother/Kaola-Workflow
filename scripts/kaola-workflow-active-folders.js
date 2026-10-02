@@ -221,7 +221,10 @@ function parseStateFile(stateFile) {
     // Absent in pre-#579 state files → empty string (backward compat).
     main_root: field(content, 'main_root') || '',
     session_marker: field(content, 'session_marker') || '',
-    claim_ts: field(content, 'claim_ts') || ''
+    claim_ts: field(content, 'claim_ts') || '',
+    // #1113: additive readers. Empty when the line is absent. Not part of SHARED_STATE_FIELDS.
+    issue_action: field(content, 'issue_action') || '',
+    keep_open_pr: field(content, 'keep_open_pr') || ''
   };
 }
 
@@ -277,7 +280,10 @@ function readActiveFolders(root, options) {
       // #579: liveness-marker fields (empty string when absent — pre-#579 backward compat).
       main_root: state.main_root || '',
       session_marker: state.session_marker || '',
-      claim_ts: state.claim_ts || ''
+      claim_ts: state.claim_ts || '',
+      // #1113: additive. Empty string when the state file has no such line.
+      issue_action: state.issue_action || '',
+      keep_open_pr: state.keep_open_pr || ''
     };
     if (opts.includeContent) item.content = state.content;
     result.push(item);

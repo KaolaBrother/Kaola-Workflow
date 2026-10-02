@@ -27,7 +27,9 @@ const CLOSURE_RECEIPT_FIELDS = {
   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
   // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
   // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
+  // #1113: `unknown` is the explicit singleton keep-open probe token when the forge state cannot
+  // be read. It is not a success and it is not `skipped_offline`. Only that GitHub watcher emits it.
+  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed', 'unknown'],
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],

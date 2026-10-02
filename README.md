@@ -36,7 +36,13 @@ run's archive with it, and once that request merges `watch-pr`/`watch-mr` reconc
 when auto-merge is opted in, the PR sink honors a base branch that requires a merge queue: it probes
 once and, on a queue branch, hands the PR to the queue with `gh pr merge <url> --auto` (the queue
 picks the merge method, and the branch is not deleted) instead of the direct squash call, which the
-forge rejects there; every other branch, forge, and config keeps the previous behavior. The merge
+forge rejects there; every other branch, forge, and config keeps the previous behavior. GitHub has one
+explicit singleton keep-open request (`--keep-open-pr explicit_singleton` with durable
+`keep_open_pr: explicit_singleton`, `issue_action: comment_keep_open`, and `sink: pr` on exactly one
+issue). Each identity field is declared once, and each issue token is a canonical positive integer.
+It publishes a review request that does not close the issue, and it never queues or
+auto-merges, even when `pr_auto_merge` is true. The default close path and the older keep-open
+refusal stay in place. GitLab and Gitea do not have this mode. The merge
 sink also reports what it found: every envelope names
 whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private
 integration worktree rather than the shared checkout, so it never switches or rebases your working

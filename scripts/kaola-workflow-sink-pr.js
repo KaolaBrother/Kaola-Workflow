@@ -12,12 +12,20 @@
 //   index onto the branch tip, the local branch is advanced (ff-only where checked out, CAS
 //   update-ref otherwise), then pushed — never the default branch, never a force. The main
 //   checkout's index and HEAD are never touched. The final stdout line is machine-readable:
-//   `sink_pr: created | reused | already_merged`. Keep-open stays merge-sink-only (#336, D4=(a)).
+//   `sink_pr: created | reused | already_merged`. Legacy keep-open stays merge-sink-only
+//   (#336, #1098 D4=(a)): issue_action: comment_keep_open without the explicit mode below is
+//   still refused. #1113 adds one supported exception, GitHub only: --keep-open-pr
+//   explicit_singleton together with durable keep_open_pr: explicit_singleton, a singleton
+//   issue, and sink: pr. That mode writes no closing linkage and never queues or auto-merges.
+//   Explicit mode also requires one declaration of each identity field and canonical positive
+//   issue tokens. A repeated field or a non-canonical issue token refuses before any effect.
+//   Close mode still uses the first matching field and the filtered member parser.
 //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
 //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
 //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
 //   original `--auto --squash --delete-branch` call (a false or unreadable probe), `failed` when
-//   the call itself failed (still warning-only, still exit 0).
+//   the call itself failed (still warning-only, still exit 0). #1113 explicit mode emits
+//   `pr_auto_merge: suppressed_request_only` instead and never probes or merges.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -82,11 +90,31 @@ function readConfig() {
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
-    if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    if (argv[i] === '--branch' && argv[i + 1]) {
+      (args.branchTokens || (args.branchTokens = [])).push(argv[++i]);
+      args.branch = args.branchTokens[args.branchTokens.length - 1];
+      continue;
+    }
+    if (argv[i] === '--issue' && argv[i + 1]) {
+      (args.issueTokens || (args.issueTokens = [])).push(argv[++i]);
+      args.issue = parseInt(args.issueTokens[args.issueTokens.length - 1], 10);
+      continue;
+    }
     // #1094: the claimed member set (finalize's `--issue-numbers`) — one `Closes #n` per member.
-    if (argv[i] === '--issue-numbers' && argv[i + 1]) { args.issueNumbers = parseIssueNumbers(argv[++i]); continue; }
+    // The parsed set still drops non-integers and duplicates. Explicit mode reads issueNumbersTokens.
+    if (argv[i] === '--issue-numbers' && argv[i + 1]) {
+      (args.issueNumbersTokens || (args.issueNumbersTokens = [])).push(argv[++i]);
+      args.issueNumbers = parseIssueNumbers(args.issueNumbersTokens[args.issueNumbersTokens.length - 1]);
+      continue;
+    }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
+    // #1113: explicit singleton GitHub keep-open research/artifact PR. Any other value is
+    // retained and refused; absence leaves the #336/#1098 legacy refusal unchanged.
+    if (argv[i] === '--keep-open-pr' && argv[i + 1]) {
+      (args.keepOpenPrTokens || (args.keepOpenPrTokens = [])).push(String(argv[++i]));
+      args.keepOpenPr = args.keepOpenPrTokens[args.keepOpenPrTokens.length - 1];
+      continue;
+    }
   }
   return args;
 }
@@ -114,6 +142,205 @@ function resolveMemberSet(args, stateFile) {
 
 function closesBody(members) {
   return members.map(n => 'Closes #' + n).join('\n');
+}
+
+// #1113: a closing keyword and every #N on that same line. Qualified owner/repo#N is included
+// because the digits are still a #N. "closing" does not match: the keyword is a whole word.
+const CLOSING_KEYWORD_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b/i;
+
+function closingIssueNumbers(text) {
+  const found = new Set();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!CLOSING_KEYWORD_RE.test(line)) continue;
+    const re = /#(\d+)\b/g;
+    let match;
+    while ((match = re.exec(line)) !== null) found.add(parseInt(match[1], 10));
+  }
+  return found;
+}
+
+function sinkField(text, name) {
+  if (typeof text !== 'string') return '';
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = text.match(new RegExp('^' + escaped + ':[ \\t]*(.*)$', 'm'));
+  return match ? match[1].trim() : '';
+}
+
+// Every whole-file line of one field. Explicit mode uses this so a later line cannot hide
+// behind the first match. Close mode keeps sinkField.
+function sinkFieldValues(text, name) {
+  if (typeof text !== 'string') return [];
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^' + escaped + ':[ \\t]*(.*)$', 'gm');
+  const values = [];
+  let match;
+  while ((match = re.exec(text)) !== null) values.push(match[1].trim());
+  return values;
+}
+
+// A canonical positive issue token. parseInt('72abc') and parseInt('072') are not accepted here.
+const CANONICAL_ISSUE = /^[1-9][0-9]*$/;
+
+function strictIssueList(raw) {
+  const tokens = String(raw).split(',');
+  const nums = [];
+  for (const token of tokens) {
+    const trimmed = token.trim();
+    if (!CANONICAL_ISSUE.test(trimmed)) return { ok: false, reason: 'malformed_issue' };
+    const n = Number(trimmed);
+    if (!Number.isSafeInteger(n)) return { ok: false, reason: 'malformed_issue' };
+    if (nums.includes(n)) return { ok: false, reason: 'ambiguous_identity' };
+    nums.push(n);
+  }
+  if (nums.length === 0) return { ok: false, reason: 'malformed_issue' };
+  return { ok: true, nums: nums };
+}
+
+function keepOpenLinkageBody(issue) {
+  const body = 'Keeps #' + issue + ' open.\n\n' +
+    'This request publishes the run archive for review.\n' +
+    'The issue stays open after merge.\n' +
+    'Request-only: this request is not queued and is not automatically merged.\n';
+  if (closingIssueNumbers(body).size !== 0) {
+    throw new Error('sink-pr: internal: keep-open linkage body contains a closing reference');
+  }
+  return body;
+}
+
+const LEGACY_KEEP_OPEN_REFUSAL = (project) =>
+  'sink-pr: refusing: project ' + project + ' carries issue_action: comment_keep_open. ' +
+  'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
+  'Remediate the merge sink and re-run sink-merge instead.';
+
+function explicitRefusal(reason) {
+  return 'sink-pr: refusing: explicit_keep_open_refused: ' + reason +
+    '. Explicit singleton GitHub keep-open PR mode requires --keep-open-pr explicit_singleton ' +
+    'together with issue_action: comment_keep_open, keep_open_pr: explicit_singleton, sink: pr, ' +
+    'and exactly one issue. Nothing was pushed or created.';
+}
+
+// Pure gate. texts are the live and archived workflow-state bodies that exist.
+// kind: close | legacy_refuse | explicit | malformed.
+function assessKeepOpenPr(args, texts, members) {
+  const present = (Array.isArray(texts) ? texts : []).filter(t => typeof t === 'string');
+  const flag = args && args.keepOpenPr;
+  const flagExact = flag === 'explicit_singleton';
+  const anyLegacy = present.some(t => sinkField(t, 'issue_action') === 'comment_keep_open');
+  const anyMarker = present.some(t => sinkField(t, 'keep_open_pr') !== '');
+  const project = (args && args.project) || '';
+  if (!flag && !anyMarker) {
+    if (anyLegacy) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
+    return { kind: 'close' };
+  }
+  if (!flagExact) {
+    if (anyLegacy && !flag) return { kind: 'legacy_refuse', message: LEGACY_KEEP_OPEN_REFUSAL(project) };
+    return { kind: 'malformed', reason: flag ? 'mode_mismatch' : 'partial_marker', message: explicitRefusal(flag ? 'mode_mismatch' : 'partial_marker') };
+  }
+  if (present.length === 0) return { kind: 'malformed', reason: 'state_missing', message: explicitRefusal('state_missing') };
+  const refuse = (reason) => ({ kind: 'malformed', reason: reason, message: explicitRefusal(reason) });
+  const repeated = (list) => Array.isArray(list) && list.length > 1;
+  if (repeated(args && args.keepOpenPrTokens) || repeated(args && args.branchTokens) ||
+      repeated(args && args.issueTokens) || repeated(args && args.issueNumbersTokens)) {
+    return refuse('ambiguous_identity');
+  }
+  const once = ['issue_action', 'keep_open_pr', 'sink', 'issue_number', 'branch'];
+  const optional = ['issue_numbers', 'base_branch'];
+  const parsed = present.map((text) => {
+    const fields = {};
+    for (const name of once.concat(optional)) fields[name] = sinkFieldValues(text, name);
+    return fields;
+  });
+  for (const fields of parsed) {
+    for (const name of once.concat(optional)) {
+      if (fields[name].length > 1) return refuse('ambiguous_identity');
+    }
+  }
+  const one = (fields, name) => (fields[name].length === 1 ? fields[name][0] : '');
+  const signature = (fields) => once.concat(optional).map((name) => one(fields, name)).join('\0');
+  if (new Set(parsed.map(signature)).size > 1) return refuse('state_conflict');
+  const fields = parsed[0];
+  if (one(fields, 'issue_action') !== 'comment_keep_open' || one(fields, 'keep_open_pr') !== 'explicit_singleton') {
+    return refuse('mode_mismatch');
+  }
+  if (one(fields, 'sink') !== 'pr') return refuse('sink_mismatch');
+  if (args && Array.isArray(args.issueTokens) && args.issueTokens.length === 1 &&
+      !CANONICAL_ISSUE.test(args.issueTokens[0])) {
+    return refuse('malformed_issue');
+  }
+  if (args && Array.isArray(args.issueNumbersTokens) && args.issueNumbersTokens.length === 1) {
+    const listed = strictIssueList(args.issueNumbersTokens[0]);
+    if (!listed.ok) return refuse(listed.reason);
+    if (listed.nums.length !== 1) return refuse('bundle_refused');
+    if (!(args && Number.isInteger(args.issue) && args.issue > 0) || listed.nums[0] !== args.issue) {
+      return refuse('issue_mismatch');
+    }
+  }
+  const set = Array.isArray(members) ? members : [];
+  if (set.length !== 1) return refuse('bundle_refused');
+  if (!(args && Number.isInteger(args.issue) && args.issue > 0) || args.issue !== set[0]) {
+    return refuse('issue_mismatch');
+  }
+  if (fields.issue_number.length === 0) return refuse('issue_mismatch');
+  if (!CANONICAL_ISSUE.test(fields.issue_number[0])) return refuse('malformed_issue');
+  if (Number(fields.issue_number[0]) !== args.issue) return refuse('issue_mismatch');
+  if (fields.issue_numbers.length === 1) {
+    const listed = strictIssueList(fields.issue_numbers[0]);
+    if (!listed.ok) return refuse(listed.reason);
+    if (listed.nums.length !== 1) return refuse('bundle_refused');
+    if (listed.nums[0] !== args.issue) return refuse('issue_mismatch');
+  }
+  if (one(fields, 'branch') !== args.branch) return refuse('branch_mismatch');
+  return { kind: 'explicit', base_branch: one(fields, 'base_branch') };
+}
+
+function gitRefExists(root, ref) {
+  try {
+    execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', ref], { stdio: 'ignore' });
+    return true;
+  } catch (_) { return false; }
+}
+
+function commitMessagesNotOnBase(root, baseBranch, branch) {
+  if (!gitRefExists(root, branch) && !gitRefExists(root, 'refs/heads/' + branch)) {
+    return { ok: false, reason: 'head_missing' };
+  }
+  const headRef = gitRefExists(root, branch) ? branch : ('refs/heads/' + branch);
+  const baseCandidates = [baseBranch, 'origin/' + baseBranch, 'refs/heads/' + baseBranch, 'refs/remotes/origin/' + baseBranch];
+  const baseRef = baseCandidates.find(candidate => gitRefExists(root, candidate));
+  if (!baseRef) return { ok: false, reason: 'base_unavailable' };
+  try {
+    const text = execFileSync('git', ['-C', root, 'log', '--format=%B%x1e', baseRef + '..' + headRef], {
+      encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    return { ok: true, text: text };
+  } catch (_) {
+    return { ok: false, reason: 'commit_scan_failed' };
+  }
+}
+
+function assertNoClosingCommits(root, baseBranch, branch, members) {
+  const scanned = commitMessagesNotOnBase(root, baseBranch, branch);
+  if (!scanned.ok) throw new Error(explicitRefusal(scanned.reason));
+  const hit = members.filter(n => closingIssueNumbers(scanned.text).has(n));
+  if (hit.length) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. Commit messages reachable from ' +
+      branch + ' and not from ' + baseBranch + ' close issue(s) ' + hit.join(', ') + '. Nothing was pushed or created.');
+  }
+}
+
+function assertExplicitReuseSafe(existing, members) {
+  const text = String(existing.body || '') + '\n' + String(existing.title || '');
+  const hit = members.filter(n => closingIssueNumbers(text).has(n));
+  if (hit.length) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. PR ' + existing.url +
+      ' carries a closing reference to issue(s) ' + hit.join(', ') + '. The PR was not modified.');
+  }
+  for (const n of members) {
+    if (!new RegExp('#' + n + '\\b').test(text)) {
+      throw new Error('sink-pr: refusing: explicit_keep_open_refused: linkage_missing. PR ' + existing.url +
+        ' does not identify issue #' + n + '. The PR was not modified.');
+    }
+  }
 }
 
 // #1098: write pr_url/pr_number into the state file's `## Sink` block — in place when the line
@@ -175,17 +402,22 @@ function resolveProjectDir(root, project) {
 // watch-pr. Written into the resolved project's .cache (archive folder in the standard exit-3 lane).
 // #1098: idempotent — when {project, branch, pr_url, pr_number} are unchanged the file is NOT
 // rewritten; a fresh timestamp would mint a new archive commit on every re-entry.
-function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
+// #1113: explicit mode passes keep_open_pr / pr_request / mainline_publication. Absent keys
+// compare as '' so a close-mode record stays the same shape and stays idempotent.
+function recordPrResult(projectDir, project, prUrl, prNumber, branch, extra) {
   try {
     const cacheDir = path.join(projectDir, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     const recordPath = path.join(cacheDir, 'sink-pr-result.json');
     const next = { project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() };
+    if (extra && typeof extra === 'object') Object.assign(next, extra);
+    const same = (prevRec, key) => (prevRec[key] || '') === (next[key] || '');
     try {
       const prev = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
       if (prev && typeof prev === 'object' &&
           prev.project === next.project && prev.branch === next.branch &&
-          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number) return;
+          prev.pr_url === next.pr_url && prev.pr_number === next.pr_number &&
+          same(prev, 'keep_open_pr') && same(prev, 'pr_request') && same(prev, 'mainline_publication')) return;
     } catch (_) {}
     // Atomic (tmp + fsync + rename): the whole point of this record is to be DURABLE before any step
     // that can throw after PR creation. A bare write is neither fsynced nor all-or-nothing, so the
@@ -221,7 +453,8 @@ function normalizePrView(data) {
     state: String(data.state || '').toUpperCase(),
     head: String(data.headRefName || ''),
     base: String(data.baseRefName || ''),
-    body: String(data.body || '')
+    body: String(data.body || ''),
+    title: String(data.title || '')
   };
 }
 
@@ -230,7 +463,7 @@ function normalizePrView(data) {
 // Any probe failure returns null so the caller falls back to the head-based discovery.
 function viewRecordedPr(prUrl) {
   try {
-    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body'])));
+    return normalizePrView(JSON.parse(ghExec(['pr', 'view', prUrl, '--json', 'url,number,state,headRefName,baseRefName,body,title'])));
   } catch (_) { return null; }
 }
 
@@ -243,7 +476,7 @@ function listOpenPrs(branch, baseBranch) {
   let raw = '';
   try {
     raw = ghExec(['pr', 'list', '--head', branch, '--base', baseBranch, '--state', 'open',
-      '--json', 'url,number,state,headRefName,baseRefName,body']);
+      '--json', 'url,number,state,headRefName,baseRefName,body,title']);
   } catch (_) { return []; }
   let list = null;
   try { list = JSON.parse(raw || '[]'); } catch (_) { return []; }
@@ -309,19 +542,30 @@ function main() {
   const summaryFile = path.join(projectFolder, 'finalization-summary.md');
   const members = resolveMemberSet(args, stateFile);
 
-  // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
-  // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
-  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the finalize
-  // transaction archives the project BEFORE the sink runs, so the live state file is already gone);
-  // the LIVE path covers a sink: pr project that gained issue_action by mistake. Guard sits
-  // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
-  const keepOpenRe = /^issue_action:\s*comment_keep_open\s*$/m;
+  // #336 / #1098 D4=(a): keep-open without the explicit #1113 agreement stays merge-sink-only.
+  // The PR body 'Closes #N' would auto-close the kept-open issue. The ARCHIVED path is the one
+  // that fires in the real exit-3 fallback flow (the finalize transaction archives the project
+  // BEFORE the sink runs); the LIVE path covers a sink: pr project that gained issue_action by
+  // mistake. The gate sits BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
+  // #1113: the same gate is the only way into explicit singleton mode. A partial marker or a
+  // mismatched flag refuses before any placeholder, push, or create.
+  const keepOpenTexts = [];
+  const keepOpenSeen = new Set();
   for (const f of [stateFile, path.join(root, 'kaola-workflow', 'archive', args.project, 'workflow-state.md')]) {
-    let s = ''; try { s = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
-    assert(!keepOpenRe.test(s),
-      'sink-pr: refusing: project ' + args.project + ' carries issue_action: comment_keep_open. ' +
-      'Keep-open is merge-sink-only (a PR would auto-close the issue on merge). ' +
-      'Remediate the merge sink and re-run sink-merge instead.');
+    let resolved = f;
+    try { resolved = fs.realpathSync(f); } catch (_) { continue; }
+    if (keepOpenSeen.has(resolved)) continue;
+    keepOpenSeen.add(resolved);
+    try { keepOpenTexts.push(fs.readFileSync(resolved, 'utf8')); } catch (_) {}
+  }
+  const keepOpenDecision = assessKeepOpenPr(args, keepOpenTexts, members);
+  if (keepOpenDecision.kind === 'legacy_refuse' || keepOpenDecision.kind === 'malformed') {
+    throw new Error(keepOpenDecision.message);
+  }
+  const explicitMode = keepOpenDecision.kind === 'explicit';
+  if (explicitMode && OFFLINE) {
+    throw new Error(explicitRefusal('offline') +
+      ' Explicit mode does not write an OFFLINE placeholder.');
   }
 
   if (OFFLINE) {
@@ -370,6 +614,10 @@ function main() {
   if (baseBranch === 'main') {
     try { baseBranch = defaultBranch(root) || 'main'; } catch (_) { baseBranch = 'main'; }
   }
+  if (explicitMode && keepOpenDecision.base_branch && keepOpenDecision.base_branch !== baseBranch) {
+    throw new Error('sink-pr: refusing: explicit_keep_open_refused: base_mismatch. State base_branch is ' +
+      keepOpenDecision.base_branch + ', resolved base is ' + baseBranch + '. Nothing was pushed or created.');
+  }
 
   // #1098 §2.1-2: find the existing PR BEFORE any push. Identity comes from the durable record
   // first; record-less discovery queries open PRs for this head/base.
@@ -395,9 +643,33 @@ function main() {
   }
 
   if (existing) {
+    // #1113: explicit mode checks head/base before the merged early-return. Close mode does not:
+    // an already-merged close-mode PR still reports already_merged without a head comparison.
+    if (explicitMode) {
+      if (existing.head !== args.branch) {
+        throw new Error(explicitRefusal('head_mismatch') + ' PR ' + existing.url + ' head is ' +
+          (existing.head || '(empty)') + ', expected ' + args.branch + '.');
+      }
+      if (existing.base !== baseBranch) {
+        throw new Error(explicitRefusal('base_mismatch') + ' PR ' + existing.url + ' base is ' +
+          (existing.base || '(empty)') + ', expected ' + baseBranch + '.');
+      }
+    }
     if (existing.state === 'MERGED') {
       // Merged: no push, no create, no merge — the remote branch (even deleted) stays exactly as
       // the forge left it, and §2.2's reconciliation owns the disposition.
+      if (explicitMode) {
+        const mergedText = String(existing.body || '') + '\n' + String(existing.title || '');
+        const closingPresent = members.some(n => closingIssueNumbers(mergedText).has(n));
+        if (closingPresent) {
+          process.stderr.write('sink-pr: note: explicit keep-open PR ' + existing.url +
+            ' is merged and its text carries a closing reference. No second PR was created.\n');
+        }
+        process.stdout.write('pr_request: request_only\n');
+        process.stdout.write('publication: already_published\n');
+        process.stdout.write('mainline_publication: pending_reconciliation\n');
+        process.stdout.write('keep_open_linkage: ' + (closingPresent ? 'closing_present' : 'clean') + '\n');
+      }
       process.stdout.write('sink_pr: already_merged\n');
       return;
     }
@@ -408,36 +680,51 @@ function main() {
         'sink-pr: refusing: PR ' + existing.url + ' is closed without merging (pr_closed_unmerged). ' +
         'The orchestrator decides whether to reopen; nothing was pushed or created.');
     }
-    // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
-    assert(existing.head === args.branch,
-      'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
-      (existing.head || '(empty)') + ', expected ' + args.branch);
-    assert(existing.base === baseBranch,
-      'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
-      (existing.base || '(empty)') + ', expected ' + baseBranch);
-    const missingCloses = members.filter(n =>
-      !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
-    assert(missingCloses.length === 0,
-      'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
-      missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
-      '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
+    if (explicitMode) {
+      // OPEN explicit reuse: no closing linkage, and the body or title must still name the issue.
+      // Commit messages are scanned before any archive publish. Close mode keeps the Closes check.
+      assertExplicitReuseSafe(existing, members);
+      assertNoClosingCommits(root, baseBranch, args.branch, members);
+    } else {
+      // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
+      assert(existing.head === args.branch,
+        'sink-pr: refusing to reuse PR ' + existing.url + ': head is ' +
+        (existing.head || '(empty)') + ', expected ' + args.branch);
+      assert(existing.base === baseBranch,
+        'sink-pr: refusing to reuse PR ' + existing.url + ': base is ' +
+        (existing.base || '(empty)') + ', expected ' + baseBranch);
+      const missingCloses = members.filter(n =>
+        !new RegExp('^Closes\\s+#' + n + '\\s*$', 'm').test(existing.body));
+      assert(missingCloses.length === 0,
+        'sink-pr: refusing to reuse PR ' + existing.url + ': body is missing "Closes #' +
+        missingCloses[0] + '" for issue(s): ' + missingCloses.join(', ') +
+        '. A bundle closes every member or none (#592/#1094); the PR was not modified.');
+    }
   }
 
   const reused = !!existing;
   let prUrl;
   let prNumber;
+  let explicitTitle = '';
+  let explicitBody = '';
   if (!reused) {
+    if (explicitMode) {
+      assertNoClosingCommits(root, baseBranch, args.branch, members);
+      explicitBody = keepOpenLinkageBody(members[0]);
+      explicitTitle = 'Publish ' + args.project + ' (keeps #' + members[0] + ' open)';
+      if (closingIssueNumbers(explicitTitle).size !== 0) {
+        throw new Error(explicitRefusal('closing_linkage') + ' The generated title was not used.');
+      }
+    }
     // Step 3 — push branch (the lookup above already ruled out an existing PR on this head)
     execFileSync('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
 
-    // Step 4 — create PR
-    const prCreateArgs = [
-      'pr', 'create',
-      '--head', args.branch,
-      '--base', baseBranch,
-      '--fill',
-    ];
-    if (members.length > 0) {
+    // Step 4 — create PR. Close mode stays --fill plus one Closes line per member.
+    // Explicit mode names the issue without a closing keyword and never uses --fill.
+    const prCreateArgs = explicitMode
+      ? ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--title', explicitTitle, '--body', explicitBody]
+      : ['pr', 'create', '--head', args.branch, '--base', baseBranch, '--fill'];
+    if (!explicitMode && members.length > 0) {
       prCreateArgs.push('--body', closesBody(members));
     }
 
@@ -459,7 +746,12 @@ function main() {
   // identified, BEFORE updateStateSinkBlock / appendSummary / the archive publish (any of which
   // can throw). Without this, a crash after PR creation left an orphaned open PR with no durable
   // pr_url — watch-pr never saw it. The record lives in the resolved project's .cache.
-  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch);
+  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch,
+    explicitMode ? {
+      keep_open_pr: 'explicit_singleton',
+      pr_request: 'request_only',
+      mainline_publication: 'pending'
+    } : undefined);
 
   // Step 7 — update workflow-state.md Sink block
   updateStateSinkBlock(stateFile, prUrl, prNumber);
@@ -488,7 +780,11 @@ function main() {
   // branches" setting). Probe false OR probe failure/unparseable → the ORIGINAL argv, verbatim, so
   // a forge we cannot probe behaves exactly as before. The probe never throws: any gh error, JSON
   // error, or unexpected envelope is a `false`.
-  if (config.pr_auto_merge === true) {
+  // #1113: explicit request-only mode never probes the merge queue and never calls gh pr merge,
+  // even when the operator config has pr_auto_merge true. The config file is not modified.
+  if (explicitMode) {
+    process.stdout.write('pr_auto_merge: suppressed_request_only\n');
+  } else if (config.pr_auto_merge === true) {
     let queueEnabled = false;
     try {
       const probe = JSON.parse(ghExec([
@@ -521,6 +817,12 @@ function main() {
     process.stdout.write('pr_auto_merge: ' + lane + '\n');
   }
 
+  // #1113: request-only receipt lines precede the final sink_pr line, which stays last.
+  if (explicitMode) {
+    process.stdout.write('pr_request: request_only\n');
+    process.stdout.write('publication: request_published\n');
+    process.stdout.write('mainline_publication: pending\n');
+  }
   // #1098 §2.1-6: the machine-readable result line — additive; this sink had no stdout contract.
   process.stdout.write('sink_pr: ' + (reused ? 'reused' : 'created') + '\n');
 }
@@ -529,4 +831,7 @@ if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = { parseArgs, resolveMemberSet, closesBody };
+module.exports = {
+  parseArgs, resolveMemberSet, closesBody,
+  keepOpenLinkageBody, closingIssueNumbers, assessKeepOpenPr
+};

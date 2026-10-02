@@ -1,0 +1,57 @@
+# ADR 0031 — Explicit GitHub singleton keep-open PR
+
+Status: Proposed, pending Host acceptance · Date: 2026-10-02 · Issue: #1113
+
+## Context
+
+#1098 D4=(a) made keep-open merge-sink-only. A PR body of `Closes #N` would close the issue the run
+had decided to keep open, so `sink-pr` refuses `issue_action: comment_keep_open` before any effect.
+That refusal, and the tests that pin the `merge-sink-only` sentence, stay accurate as history and as
+the default.
+
+VRPCadCore #143 needs a GitHub review request for a research/artifact publication while the issue
+stays open. Astra's standing closeout memo (SHA-256
+`3eedcc40d7568d4a9bfa95a5890e1e5b28e687abf54ad812cc1cf0a28213747a`) and the Host adoption record
+(SHA-256 `4aeedbcf2d0e8cbba4eefcaa3a82355cb91c1220a7ea038efd1d82417fcdad50`) authorize that narrow
+capability under Yanlei's standing authority, relayed 2026-10-02. This ADR records the delegated
+decision. It does not rewrite #1098.
+
+## Decision
+
+1. Default close mode is unchanged. A keep-open state that does not carry the explicit agreement is
+   still refused with the historical merge-sink-only sentence.
+2. The only new mode is GitHub, singleton, and explicit. All of these must agree: CLI
+   `--keep-open-pr explicit_singleton`, `issue_action: comment_keep_open`,
+   `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue. The branch, and a
+   `base_branch` when one is recorded, must match. Each of those identity fields is declared once.
+   A repeated field, a repeated CLI identity flag, or a repeated member token is
+   `ambiguous_identity`. An issue token that is not a canonical positive integer is
+   `malformed_issue`. Both refuse before push, create, or an OFFLINE placeholder. Close mode still
+   uses the first matching field and the filtered member parser. A bundle, another forge, a partial
+   marker, or a mismatched issue, branch, base, or head is refused before push or create.
+3. The request does not close the issue. The body is `Keeps #N open.` plus non-closing sentences.
+   Commit messages on `base..head` that carry a closing keyword and `#N` on the same line are refused
+   before effects. Reuse requires the open request to name `#N` and not to close it.
+4. The mode is request-only. It does not probe the merge queue and does not call `gh pr merge`, even
+   when `pr_auto_merge` is true. It does not edit that config.
+5. The watcher tells the truth. An issue still open is `intentionally_kept_open`. An issue actually
+   closed is `keep_open_violation` and is not reopened. An unreadable probe is `unknown`, not
+   `skipped_offline` and not a success. Run archive status `closed` still means the run archived.
+6. GitLab and Gitea keep the unconditional keep-open request refusal. No other forge semantics change.
+
+## Consequences
+
+Finalize captures `keep_open_pr` and passes the flag only when the value is `explicit_singleton`.
+The script re-checks the full agreement, so a rendered flag without the durable lines still refuses.
+The explicit gate rejects a second identity line instead of keeping the first. The close-mode parser
+is unchanged. The watcher still reads the first matching field; it is not a second publisher.
+`remote_issue_closed` gains the token `unknown` in the shared closure schema. Only this GitHub
+watcher emits it. `checkClosureInvariants` skips `remote-members-closed` for an intentionally open
+explicit receipt and adds `keep-open-pr-violated` or `keep-open-pr-unknown` otherwise. Those ids are
+not new `CLOSURE_INVARIANTS` entries.
+
+Active-folder readers expose `issue_action` and `keep_open_pr` as empty strings when absent. They
+are not shared-state fields.
+
+This record is the design for the uncommitted #1113 candidate. It becomes accepted only when the
+Host accepts that candidate.

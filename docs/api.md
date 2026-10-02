@@ -1390,7 +1390,8 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
 - **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` /
   `kaola-gitea-workflow-sink-pr.js`.
 - **Usage**: `--branch B --project P [--issue N] [--issue-numbers A,B]`. Finalize passes the
-  claimed member set as `--issue-numbers`, the same set the merge sink takes.
+  claimed member set as `--issue-numbers`, the same set the merge sink takes. GitHub only, and only
+  for the explicit singleton below: `--keep-open-pr explicit_singleton`. Any other value is refused.
 - **Main checkout**: every project-directory read and write targets the MAIN checkout
   (`resolveMainRoot`), not the linked worktree's own toplevel. A folder that is neither live
   (`kaola-workflow/{project}/`) nor archived (`kaola-workflow/archive/{project}/`) is refused before
@@ -1436,12 +1437,40 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   false and when the probe itself failed or could not be parsed; `failed` means the merge call threw
   (still warning-only on stderr, still exit 0). Before #1099 the direct argv ran unconditionally, and
   on a queue-required branch gh ≥2.64.0 rejects `--delete-branch` outright, so the sink warned and
-  exited 0 while the PR stayed open and never entered the queue.
+  exited 0 while the PR stayed open and never entered the queue. Explicit singleton keep-open mode
+  never enters this block: it writes `pr_auto_merge: suppressed_request_only` and does not probe or
+  call `gh pr merge`, even when `pr_auto_merge` is true. It does not edit the config file.
 - **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
   the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
   is always a member. A singleton claim writes exactly `Closes #N`, as before. Keep-open stays
   merge-sink-only: the sink refuses a project carrying `issue_action: comment_keep_open`.
+- **Explicit singleton GitHub keep-open (#1113)**: the one supported exception. It requires the flag
+  value `explicit_singleton` together with durable `issue_action: comment_keep_open`,
+  `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue whose `issue_number`,
+  `branch`, and optional `issue_numbers` / `base_branch` agree with the invocation. A bundle, another
+  forge, a partial marker, or a mismatched issue, branch, base, or head is refused before any push
+  or create (`explicit_keep_open_refused`). Explicit mode reads every whole-file line of
+  `issue_action`, `keep_open_pr`, `sink`, `issue_number`, `branch`, `issue_numbers`, and
+  `base_branch`. A second line for any of those fields is `ambiguous_identity`, including when the
+  two values match and including a repeated `--keep-open-pr`, `--branch`, `--issue`, or
+  `--issue-numbers`. An issue token must be a canonical positive integer (`72`, not `72abc`,
+  `072`, or `72.0`); a bad state token or a bad CLI token is `malformed_issue`. A repeated member
+  token such as `72,72` is `ambiguous_identity`. Close mode still takes the first matching field
+  and still filters `--issue-numbers` with `parseInt`, dropping non-integers and duplicates. The created body is `Keeps #N open.` plus non-closing
+  sentences; the title is `Publish {project} (keeps #N open)`. Commit messages reachable from the
+  head and not from the base are scanned for a closing keyword on the same line as `#N`
+  (`close`/`fix`/`resolve` and their inflections, including `owner/repo#N`). An unsafe body, title,
+  or commit refuses before effects. An OPEN request is reused only when its text names `#N` and does
+  not close it. A MERGED request is not republished: stdout is `pr_request: request_only`,
+  `publication: already_published`, `mainline_publication: pending_reconciliation`,
+  `keep_open_linkage: clean|closing_present`, then `sink_pr: already_merged`. A closing keyword on
+  that merged text is noted on stderr and does not open a second PR. CLOSED-unmerged stays
+  `pr_closed_unmerged` with no mutation. Created or reused success prints
+  `pr_auto_merge: suppressed_request_only`, `pr_request: request_only`,
+  `publication: request_published`, `mainline_publication: pending`, then `sink_pr: created|reused`.
+  The durable record adds `keep_open_pr`, `pr_request`, and `mainline_publication` only in this mode.
+  OFFLINE refuses this mode before writing a placeholder. Close mode's OFFLINE placeholder is unchanged.
 - **Exit codes**: `0` created/reused/already-merged and recorded · `1` push, creation, probe failure
   (`pr_probe_failed` / `mr_probe_failed` on a durable record), or a reuse/closed-unmerged refusal.
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` record instead of real
@@ -1506,7 +1535,12 @@ For a completed linked issue N:
 - `branch-worktree-resolved` — neither `worktree_removed` nor `branch_removed` is `failed`.
 - `remote-members-closed` — for a bundle, every member of `issue_numbers` is closed. A member left
   in `failed_issue_closures` or `open_issues` while online is a violation. Never fires for
-  single-issue receipts.
+  single-issue receipts that do not carry those arrays. It also does not fire when
+  `keep_open_pr` is `explicit_singleton` and `keep_open_observation` is `intentionally_kept_open`.
+  A CLOSED explicit observation adds `keep-open-pr-violated`. An unreadable explicit probe records
+  the issue in `failed_issue_closures` and adds `keep-open-pr-unknown`; that same array also trips
+  `remote-members-closed`, because the skip applies only to `intentionally_kept_open`. Those two
+  new ids are not entries in `CLOSURE_INVARIANTS`.
 
 `ok` is `true` only when `violations` is empty.
 
@@ -1535,7 +1569,7 @@ success.
   "issue_number": "N",
   "archive": "closed|abandoned|skipped|failed",
   "anchored_root": "/absolute/path/to/main/root",
-  "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed",
+  "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed|unknown",
   "closure": { "attempted": [], "closed": [], "failed": [], "skipped_offline": [], "kept_open": [] },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
@@ -1580,7 +1614,17 @@ comment_keep_open` (written at the closure decision; default `close` when absent
 sink under keep-open; a `sink-merge` exit-3 is a blocked refusal requiring manual remediation rather
 than an auto-pivot to a `Closes #N` PR; and `sink-pr.js` / `sink-mr.js` themselves refuse when the
 live or archived state carries `issue_action: comment_keep_open`. `sink-merge` also re-reads the
-archived state and honors the field even if the flag was not passed.
+archived state and honors the field even if the flag was not passed. That refusal is still the
+default, including #1098 D4=(a). #1113 adds one GitHub exception, not a replacement: durable
+`keep_open_pr: explicit_singleton` plus `--keep-open-pr explicit_singleton` on a singleton `sink: pr`
+run. The watcher then records `keep_open_pr` and `keep_open_observation` after
+`buildClosureReceipt()`. An issue observed open is `remote_issue_closed: kept_open`,
+`keep_open_observation: intentionally_kept_open`, and closeout `intentionally_kept_open`, with the
+issue still listed in `open_issues`. An issue observed closed is `remote_issue_closed: failed`,
+`keep_open_observation: keep_open_violation`, and closeout `keep_open_violation`. The disposition is
+`keep-open-violation`. Nothing reopens the issue and nothing closes it by hand. An unavailable probe
+is `remote_issue_closed: unknown` and `keep_open_observation: unknown`, not `skipped_offline` and not
+a success. GitLab and Gitea do not emit this mode.
 
 **Bundle projects — additive receipt fields.** Attached after `buildClosureReceipt()` returns;
 absent on single-issue receipts.
@@ -1640,7 +1684,11 @@ emitted.
 `cleanups[]` and `warnings[]` are preserved for backward compatibility; `receipt` and
 `closure_invariants` are additive. On the MERGED lane the disposition is OBSERVATION-derived via
 `probeIssueState`: `closed` when observed closed, `kept-open` when observed open (a merged PR with
-no close keyword), `unknown` when the probe is unavailable.
+no close keyword), `unknown` when the probe is unavailable. Default close-mode vocabulary stays,
+including `skipped_offline` for a singleton open close-mode PR. Explicit singleton keep-open
+overrides that token after the same probe: open stays `kept-open` with `remote_issue_closed:
+kept_open`; closed becomes disposition `keep-open-violation` with `remote_issue_closed: failed`;
+an unavailable probe stays disposition `unknown` with `remote_issue_closed: unknown`.
 
 **`reconciled[]` (archived `sink: pr` / `sink: mr` runs).** The live-folder loop above never sees a
 standard PR-path run again, because finalize archives it before the sink runs. `reconciled[]` is the
@@ -1676,7 +1724,10 @@ last carries `reason: 'pr_closed_unmerged'` / `'mr_closed_unmerged'`. On the pub
 is `published` when the archive reached `origin/<default>`, else `local_only` (the pre-#1098 legacy
 shape, reported and not repaired); `closeout` is `closed` when every member's issue is observed
 closed, else `incomplete`; `main_checkout` is `advanced` or a `behind: ...` string naming the exact
-refusal. GitLab entries carry `mr_url` where GitHub and Gitea carry `pr_url`. The key is emitted only
+refusal. An explicit singleton keep-open archive does not report closeout `closed` for an
+intentionally open issue: closeout is `intentionally_kept_open`, `keep_open_violation`, or `unknown`.
+Run archive status `closed` still means the run archived. A violation or unknown observation adds
+`warnings` on that reconciled item. GitLab entries carry `mr_url` where GitHub and Gitea carry `pr_url`. The key is emitted only
 when at least one run reconciles.
 
 ### Closure history

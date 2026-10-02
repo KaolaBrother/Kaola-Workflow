@@ -131,6 +131,10 @@ and only after acceptance, the closure decision, and a verified merge. The merge
 itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
 into the default branch. Never close an issue by hand before the merge is verified. Keep-open
 applies to the entire claimed set, releases all claims, and is merge-sink-only.
+One explicit singleton request mode is accepted only when this forge's sink passes
+`--keep-open-pr explicit_singleton` together with `issue_action: comment_keep_open`,
+`keep_open_pr: explicit_singleton`, and `sink: pr` on exactly one issue. That mode is request-only.
+Any other keep-open request sink still stops.
 
 ## Card: close, archive, sink, and reconcile
 
@@ -153,6 +157,7 @@ SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != unset ] && SINK_I
 SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
 SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^issue_action:/{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
 SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
+SINK_KEEP_OPEN_PR=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | awk '/^keep_open_pr:/{print $2}')
 ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
 ```
 
@@ -176,10 +181,13 @@ The archive still fails loudly if it would lose a file. Every run file must land
 
 ```bash
 # keep-open is merge-sink-only â€” a PR sink would close the kept-open issue.
-if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
+# Explicit singleton is the one supported request-only PR. Any other keep-open request sink still stops here.
+if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ] && [ "$SINK_KEEP_OPEN_PR" != explicit_singleton ]; then exit 1; fi
 case "$SINK_KIND" in
   pr)
-    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}
+    SINK_KEEP_OPEN_PR_FLAG=""
+    if [ "$SINK_KEEP_OPEN_PR" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG="--keep-open-pr explicit_singleton"; fi
+    node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}
     ;;
   merge|*)
     node "$KAOLA_SCRIPTS/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json
@@ -202,6 +210,9 @@ A request sink (`sink: pr` / `sink: mr`) publishes the request and stops there â
 rides that request, and nothing is merged on its behalf. After the request merges, `watch-pr` /
 `watch-mr` reconcile it, reporting publication and closeout separately, never re-merging or pushing
 the mainline, and leaving manual closure of any remaining members to you only once verified.
+Where the sink case passes it, explicit singleton keep-open (`keep_open_pr: explicit_singleton`)
+passes `--keep-open-pr explicit_singleton`, writes no closing linkage, and does not queue or auto-merge.
+A keep-open guard that does not accept that value still exits before the request sink.
 <!-- /PIN -->
 
 <!-- PIN: closure-audit -->

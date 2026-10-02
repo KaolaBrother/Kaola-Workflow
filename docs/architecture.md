@@ -356,6 +356,11 @@ on GitLab), rewriting the other forge's noun. A merge sink that exits 3 (merge-i
 permission denied) can pivot to a PR, except under keep-open, where a PR body's `Closes #N` would
 close the issue the run deliberately kept open.
 
+#1113 does not remove that rule. The default keep-open path is still merge-sink-only (#1098 D4=(a)).
+One GitHub singleton may opt in with `keep_open_pr: explicit_singleton`. That request carries no
+closing linkage, is not queued, and is not auto-merged. The watcher treats a later CLOSED issue as a
+keep-open violation and does not reopen it. GitLab and Gitea stay on the refusal.
+
 ### Closure
 
 `kaola-workflow-closure-contract.js` holds the machine-readable receipt schema; every closure path

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **GitHub explicit singleton keep-open research/artifact PR (#1113).** `kaola-workflow-sink-pr.js` accepts `--keep-open-pr explicit_singleton` only together with durable `issue_action: comment_keep_open`, `keep_open_pr: explicit_singleton`, `sink: pr`, and exactly one issue. The request body does not use a closing keyword, commit messages that would close the issue are refused before push, and the mode never queues or auto-merges even when `pr_auto_merge` is true. Explicit mode refuses a repeated identity field or CLI flag (`ambiguous_identity`) and a non-canonical issue token (`malformed_issue`) before push, create, or a placeholder. Close mode still uses the first matching field and the filtered member parser. `watch-pr` records an intentionally open issue as `kept_open`, a later CLOSED issue as `keep_open_violation` (no reopen), and an unreadable probe as `unknown`. Default close mode and the #336/#1098 merge-sink-only keep-open refusal are unchanged. GitLab and Gitea do not gain the mode. See ADR 0031.
+
 ## [12.4.0] - 2026-09-28
 
 ### Fixed

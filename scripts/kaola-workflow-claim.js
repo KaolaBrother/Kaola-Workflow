@@ -3308,7 +3308,12 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
   // invariant in that case (the members WILL close at sink). sink-merge / watch-pr (post-sink) leave
   // close_disposition unset, so the invariant fires there truthfully on a real partial close.
   const closePending = receipt.close_disposition === 'close_pending';
-  if (!abandoned && !closePending && unclosedMembers.length > 0) {
+  // #1113: an explicit singleton keep-open PR records the issue in open_issues while it is
+  // intentionally still open. That is not a partial close. A CLOSED issue or an unknown probe
+  // is a dedicated violation below, not a successful close.
+  const explicitKeptOpen = receipt && receipt.keep_open_pr === 'explicit_singleton' &&
+    receipt.keep_open_observation === 'intentionally_kept_open';
+  if (!abandoned && !closePending && !explicitKeptOpen && unclosedMembers.length > 0) {
     const invMc = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-members-closed'; });
     violations.push({
       id: 'remote-members-closed',
@@ -3333,6 +3338,22 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
           ' (commit ' + opts.implRef + ' is not an ancestor of ' + opts.sinkTarget + ')'
       });
     }
+  }
+  // #1113: explicit singleton keep-open observations that are not a successful open issue.
+  // Additive ids; they are not new entries in CLOSURE_INVARIANTS. No reopen and no manual close.
+  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
+      receipt.keep_open_observation === 'keep_open_violation') {
+    violations.push({
+      id: 'keep-open-pr-violated',
+      description: 'explicit singleton keep-open PR observed the issue CLOSED. No reopen was attempted.'
+    });
+  }
+  if (receipt && receipt.keep_open_pr === 'explicit_singleton' &&
+      receipt.keep_open_observation === 'unknown') {
+    violations.push({
+      id: 'keep-open-pr-unknown',
+      description: 'explicit singleton keep-open PR probe is unknown. This is not a successful observation.'
+    });
   }
   return { ok: violations.length === 0, violations };
 }
@@ -6795,6 +6816,54 @@ function cmdVerifySink() {
   output({ project: args.project, ok, checks, reasons }, ok ? 0 : 1);
 }
 
+// #1113: true only for the explicit singleton GitHub keep-open agreement. An absent sink is the
+// historical merge default and is not this mode. A bundle, or a one-entry issue_numbers list that
+// disagrees with issue_number, is not this mode.
+function isExplicitSingletonKeepOpen(content) {
+  if (!content) return false;
+  if (field(content, 'issue_action') !== 'comment_keep_open') return false;
+  if (field(content, 'keep_open_pr') !== 'explicit_singleton') return false;
+  if (field(content, 'sink') !== 'pr') return false;
+  const issue = parseInt(field(content, 'issue_number'), 10);
+  const raw = field(content, 'issue_numbers');
+  const members = raw
+    ? raw.split(',').map(function (s) { return parseInt(s.trim(), 10); }).filter(function (n) { return Number.isFinite(n) && n > 0; })
+    : [];
+  if (members.length > 1) return false;
+  if (members.length === 1 && Number.isFinite(issue) && members[0] !== issue) return false;
+  if (!(Number.isFinite(issue) && issue > 0) && members.length !== 1) return false;
+  return true;
+}
+
+function explicitKeepOpenObservation(probeState) {
+  if (probeState === 'open') {
+    return { remote: 'kept_open', observation: 'intentionally_kept_open', closeout: 'intentionally_kept_open' };
+  }
+  if (probeState === 'closed') {
+    return { remote: 'failed', observation: 'keep_open_violation', closeout: 'keep_open_violation' };
+  }
+  return { remote: 'unknown', observation: 'unknown', closeout: 'unknown' };
+}
+
+function attachExplicitKeepOpenReceipt(receipt, issueNumber, probeState, observation) {
+  receipt.keep_open_pr = 'explicit_singleton';
+  receipt.keep_open_observation = observation;
+  const n = issueNumber;
+  if (probeState === 'open') {
+    receipt.open_issues = [n];
+    receipt.closed_issues = [];
+    receipt.failed_issue_closures = [];
+  } else if (probeState === 'closed') {
+    receipt.closed_issues = [n];
+    receipt.open_issues = [];
+    receipt.failed_issue_closures = [];
+  } else {
+    receipt.failed_issue_closures = [n];
+    receipt.open_issues = [];
+    receipt.closed_issues = [];
+  }
+}
+
 // #1098 §2.2 — post-merge reconciliation of ARCHIVED `sink: pr` runs. The standard PR path
 // archives BEFORE the sink runs, so the live-folder loop above never sees it; this face scans the
 // MAIN checkout's archive band instead. Bounded and stateless by construction: a run leaves the
@@ -6928,7 +6997,20 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
       else if (p.state === 'unavailable') mFailed.push(n);
       else mOpen.push(n);
     }
-    const closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
+    let closeout = (mClosed.length === members.length) ? 'closed' : 'incomplete';
+    let remoteToken = closeout === 'closed' ? 'already_closed' : 'partial';
+    // #1113: an explicit singleton that is still OPEN is not closeout closed. A CLOSED issue is a
+    // keep-open violation. A mixed or unavailable probe is unknown. Nothing is reopened or closed.
+    let explicitObs = null;
+    let explicitProbe = null;
+    if (isExplicitSingletonKeepOpen(content)) {
+      if (mClosed.length === members.length) explicitProbe = 'closed';
+      else if (mOpen.length === members.length && mFailed.length === 0) explicitProbe = 'open';
+      else explicitProbe = 'unavailable';
+      explicitObs = explicitKeepOpenObservation(explicitProbe);
+      closeout = explicitObs.closeout;
+      remoteToken = explicitObs.remote;
+    }
     // 4. Idempotent cleanup: the advisory claim per member, the run's worktree.
     let claimLabelStatus;
     for (const n of members) {
@@ -6951,7 +7033,7 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
     //    archiveProjectDirSafely, no merge, no mainline push.
     const receipt = buildClosureReceipt(name, issueNumber, {
       archive: 'closed',
-      remote_issue_closed: closeout === 'closed' ? 'already_closed' : 'partial',
+      remote_issue_closed: remoteToken,
       claim_label_removed: claimLabelStatus,
       worktree_removed: worktreeRemoved,
       branch_removed: 'kept'
@@ -6960,9 +7042,10 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
     receipt.closed_issues = mClosed.slice().sort((a, b) => a - b);
     receipt.failed_issue_closures = mFailed.slice().sort((a, b) => a - b);
     receipt.open_issues = mOpen.slice().sort((a, b) => a - b);
+    if (explicitObs) attachExplicitKeepOpenReceipt(receipt, issueNumber, explicitProbe, explicitObs.observation);
     const archiveDir = path.join(root, archiveRel);
     const folderInvariants = checkClosureInvariants(root, receipt, fs.existsSync(archiveDir) ? archiveDir : undefined);
-    out.push({
+    const reconciledItem = {
       folder: name,
       pr_url: prUrl,
       publication: 'published',
@@ -6971,7 +7054,13 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
       main_checkout: mainCheckout,
       receipt: receipt,
       closure_invariants: folderInvariants
-    });
+    };
+    if (explicitObs && explicitObs.observation === 'keep_open_violation') {
+      reconciledItem.warnings = ['issue CLOSED while explicit keep-open was requested; no reopen was attempted'];
+    } else if (explicitObs && explicitObs.observation === 'unknown') {
+      reconciledItem.warnings = ['issue probe unknown; not a successful keep-open observation'];
+    }
+    out.push(reconciledItem);
   }
   return out;
 }
@@ -7006,6 +7095,11 @@ function cmdWatchPr() {
     watched++;
     liveProcessed.add(folder.project); // #1098 §2.2: exclude from this run's reconciliation face
     if (state === 'MERGED') {
+      // #1113: read explicit-mode state BEFORE archive moves the file. The archive call itself
+      // stays unchanged (keepOpen is still unused inside archiveProjectDir).
+      let explicitStateText = '';
+      try { explicitStateText = fs.readFileSync(folder.state_file, 'utf8'); } catch (_) {}
+      const explicitKeep = isExplicitSingletonKeepOpen(explicitStateText);
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
       if (!closureContract.archiveSucceeded(archiveResult)) {
         // #906: both halves — see cmdRelease. An entry that could not be compared refuses with an
@@ -7038,7 +7132,7 @@ function cmdWatchPr() {
       // closed issue — no close keyword keeps the issue open, the keep-open PR-sink case). watch-pr
       // is online by construction (OFFLINE early-returns above); probeIssueState catches/degrades.
       const dispProbe = probeIssueState(folder.issue_number);
-      const issueDisposition = dispProbe.state === 'closed' ? 'closed'
+      let issueDisposition = dispProbe.state === 'closed' ? 'closed'
         : (dispProbe.state === 'open' ? 'kept-open' : 'unknown');
       // #369: bundle-aware truthful receipt. watch-pr is online by construction, so for a bundle we
       // probe EVERY member, bucket each (closed/unavailable/open — never silent-neither), and derive
@@ -7055,6 +7149,21 @@ function cmdWatchPr() {
         }
         mergedRemoteToken = (mClosed.length === folder.issue_numbers.length) ? 'already_closed' : 'partial';
       }
+      // #1113: override AFTER the bundle computation so a one-member list cannot leave `partial`
+      // or `skipped_offline` on an explicit singleton. Non-explicit tokens stay as computed.
+      let explicitObs = null;
+      if (explicitKeep) {
+        explicitObs = explicitKeepOpenObservation(dispProbe.state);
+        mergedRemoteToken = explicitObs.remote;
+        if (explicitObs.observation === 'intentionally_kept_open') issueDisposition = 'kept-open';
+        else if (explicitObs.observation === 'keep_open_violation') issueDisposition = 'keep-open-violation';
+        else issueDisposition = 'unknown';
+        if (explicitObs.observation === 'keep_open_violation') {
+          warnings.push('keep-open PR for ' + folder.project + ' observed issue #' + folder.issue_number + ' CLOSED; no reopen was attempted');
+        } else if (explicitObs.observation === 'unknown') {
+          warnings.push('keep-open PR for ' + folder.project + ' issue #' + folder.issue_number + ' probe is unknown; not a successful observation');
+        }
+      }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         remote_issue_closed: mergedRemoteToken,
@@ -7068,6 +7177,9 @@ function cmdWatchPr() {
         folderReceipt.closed_issues = mClosed.sort(function(a, b){ return a - b; });
         folderReceipt.failed_issue_closures = mFailed.sort(function(a, b){ return a - b; });
         folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
+      }
+      if (explicitObs) {
+        attachExplicitKeepOpenReceipt(folderReceipt, folder.issue_number, dispProbe.state, explicitObs.observation);
       }
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       // #333: append the terminal receipt to the archived state. watch-pr archives into the MAIN

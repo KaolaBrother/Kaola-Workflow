@@ -49,6 +49,9 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 
 ## Decisions
 
+- **[0031 — Explicit GitHub singleton keep-open PR](decisions/0031-explicit-github-keep-open-pr.md)**
+  — #1113. #1098 D4=(a) stays the historical default. One explicit GitHub singleton may publish a
+  request-only PR that does not close the issue.
 - **[0030 — Forge and engineering lifecycle, no runtime bias](decisions/0030-forge-and-engineering-lifecycle.md)**
   — #1111. Supersedes ADR 0029's retained dispatch-or-inline judgment. Active prompts follow the
   host. Per-issue QA and documentation docking are not a second ceremony.
