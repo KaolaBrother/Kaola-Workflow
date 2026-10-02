@@ -7952,16 +7952,42 @@ function testSinkPrKeepOpenRefusal() {
 
 // #1113: partial explicit intent must refuse before close-mode effects; OPEN reuse must refuse a
 // native closing association or an already-enabled auto-merge; a closing keyword associates only
-// the reference it immediately precedes. Full-URL references are not asserted here.
+// the reference it immediately precedes. A qualified owner/repo#N counts when it matches the
+// repository this scenario records and does not count for another repository. Full-URL
+// references are not asserted here.
 function testExplicitKeepOpenPrP1Repairs() {
   const sinkPr = require(sinkPrScript);
-  const nums = (text) => JSON.stringify([...sinkPr.closingIssueNumbers(text)].sort((a, b) => a - b));
-  assert(nums('Fixes #143') === '[143]', '#1113 scanner: Fixes #143 associates 143, got ' + nums('Fixes #143'));
-  assert(nums('closes #143') === '[143]', '#1113 scanner: closes #143 associates 143, got ' + nums('closes #143'));
-  assert(nums('Fixes other/repo#143') === '[]',
-    '#1113 scanner: a qualified reference is not this repository, got ' + nums('Fixes other/repo#143'));
-  assert(nums('Fix #999; related #143') === '[999]',
-    '#1113 scanner: the keyword associates only #999, got ' + nums('Fix #999; related #143'));
+  const claimRepo = 'fixture-owner/fixture-repo';
+  const claimRepositoryId = 'https://github.com/Fixture-Owner/Fixture-Repo.git';
+  const listed = (text, identity) => JSON.stringify(
+    [...sinkPr.closingIssueNumbers(text, identity)].sort((a, b) => a - b));
+  assert(listed('Fixes #143', claimRepo) === '[143]',
+    '#1113 scanner: Fixes #143 associates 143, got ' + listed('Fixes #143', claimRepo));
+  assert(listed('closes #143', claimRepo) === '[143]',
+    '#1113 scanner: closes #143 associates 143, got ' + listed('closes #143', claimRepo));
+  assert(listed('Fixes ' + claimRepo + '#143', claimRepo) === '[143]',
+    '#1113 scanner: a same-repository qualified reference associates 143, got ' +
+    listed('Fixes ' + claimRepo + '#143', claimRepo));
+  assert(listed('Fixes other/repo#143', claimRepo) === '[]',
+    '#1113 scanner: another repository qualified reference does not count, got ' +
+    listed('Fixes other/repo#143', claimRepo));
+  assert(listed('Fix #999; related #143', claimRepo) === '[999]',
+    '#1113 scanner: the keyword associates only #999, got ' + listed('Fix #999; related #143', claimRepo));
+  assert(listed('Fixes Fixture-Owner/Fixture-Repo#143', claimRepo) === '[143]',
+    '#1113 scanner: repository comparison is case-insensitive, got ' +
+    listed('Fixes Fixture-Owner/Fixture-Repo#143', claimRepo));
+  assert(listed('Fixes ' + claimRepo + '#143', claimRepositoryId) === '[143]',
+    '#1113 scanner: an https claim_repository_id is this repository, got ' +
+    listed('Fixes ' + claimRepo + '#143', claimRepositoryId));
+  assert(listed('Fixes ' + claimRepo + '#143', 'git@github.com:Fixture-Owner/Fixture-Repo.git') === '[143]',
+    '#1113 scanner: a git@ claim_repository_id is this repository, got ' +
+    listed('Fixes ' + claimRepo + '#143', 'git@github.com:Fixture-Owner/Fixture-Repo.git'));
+  assert(listed('Fixes ' + claimRepo + '#143', 'ssh://git@github.com/Fixture-Owner/Fixture-Repo.git') === '[143]',
+    '#1113 scanner: an ssh:// claim_repository_id is this repository');
+  assert(listed('Fixes ' + claimRepo + '#143', 'git://github.com/Fixture-Owner/Fixture-Repo.git') === '[143]',
+    '#1113 scanner: a git:// claim_repository_id is this repository');
+  assert(listed('Fixes other/repo#143') === '[143]',
+    '#1113 scanner: an unknown repository counts a qualified reference, got ' + listed('Fixes other/repo#143'));
 
   const gate = (args, text, members) => sinkPr.assessKeepOpenPr(args, [text], members);
   const closeGate = gate(
@@ -7984,10 +8010,15 @@ function testExplicitKeepOpenPrP1Repairs() {
   assert(emptyGate.kind === 'malformed' && emptyGate.reason === 'partial_marker',
     '#1113: a lone empty keep_open_pr line is partial_marker, got ' + emptyGate.reason);
 
-  const explicitState = (issue, branch) =>
-    '## Project\nname: issue-' + issue + '\nstatus: active\n\n## Sink\nbranch: ' + branch +
-    '\nissue_number: ' + issue + '\nsink: pr\nissue_action: comment_keep_open\n' +
-    'keep_open_pr: explicit_singleton\n';
+  const explicitState = (issue, branch, repositoryId) => {
+    const claim = repositoryId === null
+      ? ''
+      : '## Claim Identity\nclaim_repository_id: ' + (repositoryId || claimRepositoryId) + '\n\n';
+    return claim +
+      '## Project\nname: issue-' + issue + '\nstatus: active\n\n## Sink\nbranch: ' + branch +
+      '\nissue_number: ' + issue + '\nsink: pr\nissue_action: comment_keep_open\n' +
+      'keep_open_pr: explicit_singleton\n';
+  };
 
   function runCase(tag, opts) {
     const issue = opts.issue;
@@ -8068,6 +8099,7 @@ function testExplicitKeepOpenPrP1Repairs() {
   const created = runCase('create', {
     issue: 143,
     state: explicitState(143, 'workflow/issue-143'),
+    // Another repository, and a bare number the keyword does not precede, still publish.
     commitMessage: 'Fix #999; related #143\n\nFixes other/repo#143\n',
     gh: { list: '[]', create: 'https://github.com/test/repo/pull/143' }
   });
@@ -8100,6 +8132,24 @@ function testExplicitKeepOpenPrP1Repairs() {
       '#1113 scanner: ' + JSON.stringify(message) + ' must refuse\nstderr: ' + refused.result.stderr);
     assertNoEffects(refused, '#1113 scanner ' + message);
   }
+
+  const ownRepo = runCase('scan-own', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143'),
+    commitMessage: 'Fixes ' + claimRepo + '#143'
+  });
+  assert(ownRepo.result.status !== 0 && /explicit_keep_open_refused: closing_linkage/.test(ownRepo.result.stderr),
+    '#1113 scanner: same-repository qualified commit must refuse before push\nstderr: ' + ownRepo.result.stderr);
+  assertNoEffects(ownRepo, '#1113 scanner same-repository qualified');
+
+  const unknownRepo = runCase('scan-unknown', {
+    issue: 143,
+    state: explicitState(143, 'workflow/issue-143', null),
+    commitMessage: 'Fixes other/repo#143'
+  });
+  assert(unknownRepo.result.status !== 0 && /explicit_keep_open_refused: closing_linkage/.test(unknownRepo.result.stderr),
+    '#1113 scanner: unknown repository must count a qualified reference\nstderr: ' + unknownRepo.result.stderr);
+  assertNoEffects(unknownRepo, '#1113 scanner unknown repository');
 
   const openPr = (extra) => JSON.stringify([Object.assign({
     url: 'https://github.com/test/repo/pull/143', number: 143, state: 'OPEN',

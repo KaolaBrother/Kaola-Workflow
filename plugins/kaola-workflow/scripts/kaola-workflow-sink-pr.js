@@ -25,7 +25,9 @@
 //   member parser. An OPEN explicit reuse also refuses when closingIssuesReferences names the
 //   retained issue, when that field cannot be read, or when autoMergeRequest is already set.
 //   The sink does not edit that PR. A closing keyword associates only the reference it
-//   immediately precedes; owner/repo#N is not this repository.
+//   immediately precedes. A qualified owner/repo#N counts when it matches the run's own
+//   repository and does not count for another repository. A full-URL reference remains an
+//   unverified gap.
 //   #1099: when `pr_auto_merge` is true, one `pr_auto_merge: merge_queue | direct | failed` line is
 //   emitted BEFORE that final line (and only then): `merge_queue` when the base branch requires a
 //   GitHub merge queue and the PR was queued with `gh pr merge <url> --auto`, `direct` for the
@@ -153,23 +155,93 @@ function closesBody(members) {
 }
 
 // #1113: a closing keyword associates only the reference it immediately precedes. Optional
-// whitespace or punctuation may sit between them. owner/repo#N is another repository and does
-// not count. A bare #N that the keyword does not immediately precede does not count. "closing"
-// does not match: the keyword is a whole word. The qualified alternative is matched and discarded
-// so its trailing #N is not read as a bare reference.
-const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+\b|#(\d+)\b)/gi;
+// whitespace or punctuation may sit between them. A qualified owner/repo#N counts when its
+// owner/repo matches the run's own repository, compared case-insensitively, and is discarded
+// for any other repository. The identity is claim_repository_id from the workflow-state texts
+// already loaded, normalized from https://github.com/OWNER/REPO(.git) and from ssh/git forms
+// (git@github.com:OWNER/REPO, ssh://git@github.com/OWNER/REPO, git://github.com/OWNER/REPO,
+// optional .git) to OWNER/REPO. If those lines do not yield one identity, the fallback is
+// `git remote get-url origin` on the main checkout root, parsed the same way. When neither
+// yields an identity, every keyword-qualified reference counts, including other repositories:
+// over-refusal is the fail-closed direction. A bare #N after the keyword still counts. A bare
+// #N that the keyword does not immediately precede does not count. "closing" does not match:
+// the keyword is a whole word. The qualified alternative is always consumed so its trailing
+// #N is not read as a bare reference. A full-URL reference remains an unverified gap and is
+// not counted.
+const CLOSING_ASSOC_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[ \t:.,;!?'"()[\]{}*_~+\-]*(?:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b|#(\d+)\b)/gi;
 
-function closingIssueNumbers(text) {
+// OWNER/REPO from a claim_repository_id, an origin URL, or an already-normalized OWNER/REPO.
+// A local path or any other shape yields '' so the caller can fail closed.
+function asOwnerRepo(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  const patterns = [
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+    /^ssh:\/\/(?:[^@/]+@)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+    /^git:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+    /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i,
+    /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/i
+  ];
+  for (const re of patterns) {
+    const match = text.match(re);
+    if (match) return match[1] + '/' + match[2];
+  }
+  return '';
+}
+
+function sameRepository(owner, repo, identity) {
+  if (!identity) return true;
+  return (owner + '/' + repo).toLowerCase() === identity.toLowerCase();
+}
+
+// repositoryIdentity is OWNER/REPO, a claim_repository_id / origin URL that normalizes to one,
+// or empty when the repository is unknown. Empty counts every qualified reference.
+function closingIssueNumbers(text, repositoryIdentity) {
+  const identity = asOwnerRepo(repositoryIdentity);
   const found = new Set();
   for (const line of String(text || '').split(/\r?\n/)) {
     CLOSING_ASSOC_RE.lastIndex = 0;
     let match;
     while ((match = CLOSING_ASSOC_RE.exec(line)) !== null) {
-      if (match[1]) found.add(parseInt(match[1], 10));
+      if (match[4]) found.add(parseInt(match[4], 10));
+      else if (match[3] && sameRepository(match[1], match[2], identity)) found.add(parseInt(match[3], 10));
       if (match.index === CLOSING_ASSOC_RE.lastIndex) CLOSING_ASSOC_RE.lastIndex++;
     }
   }
   return found;
+}
+
+function claimRepositoryFromTexts(texts) {
+  const found = [];
+  for (const text of texts || []) {
+    for (const value of sinkFieldValues(text, 'claim_repository_id')) {
+      const id = asOwnerRepo(value);
+      if (id) found.push(id);
+    }
+  }
+  if (found.length === 0) return '';
+  const key = found[0].toLowerCase();
+  // Disagreeing lines are not one repository. Leave this empty so origin, then the
+  // fail-closed scanner, decides.
+  if (!found.every((id) => id.toLowerCase() === key)) return '';
+  return found[0];
+}
+
+function originOwnerRepo(root) {
+  try {
+    const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return asOwnerRepo(remote);
+  } catch (_) {
+    return '';
+  }
+}
+
+function resolveClaimRepositoryIdentity(texts, root) {
+  const fromState = claimRepositoryFromTexts(texts);
+  if (fromState) return fromState;
+  return originOwnerRepo(root);
 }
 
 function sinkField(text, name) {
@@ -209,12 +281,12 @@ function strictIssueList(raw) {
   return { ok: true, nums: nums };
 }
 
-function keepOpenLinkageBody(issue) {
+function keepOpenLinkageBody(issue, repositoryIdentity) {
   const body = 'Keeps #' + issue + ' open.\n\n' +
     'This request publishes the run archive for review.\n' +
     'The issue stays open after merge.\n' +
     'Request-only: this request is not queued and is not automatically merged.\n';
-  if (closingIssueNumbers(body).size !== 0) {
+  if (closingIssueNumbers(body, repositoryIdentity).size !== 0) {
     throw new Error('sink-pr: internal: keep-open linkage body contains a closing reference');
   }
   return body;
@@ -338,10 +410,10 @@ function commitMessagesNotOnBase(root, baseBranch, branch) {
   }
 }
 
-function assertNoClosingCommits(root, baseBranch, branch, members) {
+function assertNoClosingCommits(root, baseBranch, branch, members, repositoryIdentity) {
   const scanned = commitMessagesNotOnBase(root, baseBranch, branch);
   if (!scanned.ok) throw new Error(explicitRefusal(scanned.reason));
-  const hit = members.filter(n => closingIssueNumbers(scanned.text).has(n));
+  const hit = members.filter(n => closingIssueNumbers(scanned.text, repositoryIdentity).has(n));
   if (hit.length) {
     throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. Commit messages reachable from ' +
       branch + ' and not from ' + baseBranch + ' close issue(s) ' + hit.join(', ') + '. Nothing was pushed or created.');
@@ -373,9 +445,9 @@ function assertExplicitOpenNativeSafe(existing, members) {
   }
 }
 
-function assertExplicitReuseSafe(existing, members) {
+function assertExplicitReuseSafe(existing, members, repositoryIdentity) {
   const text = String(existing.body || '') + '\n' + String(existing.title || '');
-  const hit = members.filter(n => closingIssueNumbers(text).has(n));
+  const hit = members.filter(n => closingIssueNumbers(text, repositoryIdentity).has(n));
   if (hit.length) {
     throw new Error('sink-pr: refusing: explicit_keep_open_refused: closing_linkage. PR ' + existing.url +
       ' carries a closing reference to issue(s) ' + hit.join(', ') + '. The PR was not modified.');
@@ -680,6 +752,12 @@ function main() {
     return { pr_url: prUrl, pr_number: prNumber, offline: true };
   }
 
+  // #1113: one identity for every closing scan in this run. State wins; origin is the fallback.
+  // Empty means the repository is unknown and qualified references count.
+  const repositoryIdentity = explicitMode
+    ? resolveClaimRepositoryIdentity(keepOpenTexts, root)
+    : '';
+
   // #394: resolve the PR base from the default branch (origin/HEAD probe chain) — the prior
   // hardcoded `--base main` made the fallback PR sink fail on a master-default repo (the #350
   // resolution never reached this sink). A sink-fallback.json receipt (written by sink-merge) may
@@ -742,7 +820,7 @@ function main() {
       // the forge left it, and §2.2's reconciliation owns the disposition.
       if (explicitMode) {
         const mergedText = String(existing.body || '') + '\n' + String(existing.title || '');
-        const closingPresent = members.some(n => closingIssueNumbers(mergedText).has(n));
+        const closingPresent = members.some(n => closingIssueNumbers(mergedText, repositoryIdentity).has(n));
         if (closingPresent) {
           process.stderr.write('sink-pr: note: explicit keep-open PR ' + existing.url +
             ' is merged and its text carries a closing reference. No second PR was created.\n');
@@ -766,8 +844,8 @@ function main() {
       // OPEN explicit reuse: native closing association and auto-merge first, then text.
       // Both refuse before archive publication. Close mode keeps the Closes check.
       assertExplicitOpenNativeSafe(existing, members);
-      assertExplicitReuseSafe(existing, members);
-      assertNoClosingCommits(root, baseBranch, args.branch, members);
+      assertExplicitReuseSafe(existing, members, repositoryIdentity);
+      assertNoClosingCommits(root, baseBranch, args.branch, members, repositoryIdentity);
     } else {
       // OPEN → reuse. Candidate identity: head==branch, base==resolved default branch.
       assert(existing.head === args.branch,
@@ -792,10 +870,10 @@ function main() {
   let explicitBody = '';
   if (!reused) {
     if (explicitMode) {
-      assertNoClosingCommits(root, baseBranch, args.branch, members);
-      explicitBody = keepOpenLinkageBody(members[0]);
+      assertNoClosingCommits(root, baseBranch, args.branch, members, repositoryIdentity);
+      explicitBody = keepOpenLinkageBody(members[0], repositoryIdentity);
       explicitTitle = 'Publish ' + args.project + ' (keeps #' + members[0] + ' open)';
-      if (closingIssueNumbers(explicitTitle).size !== 0) {
+      if (closingIssueNumbers(explicitTitle, repositoryIdentity).size !== 0) {
         throw new Error(explicitRefusal('closing_linkage') + ' The generated title was not used.');
       }
     }

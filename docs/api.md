@@ -1465,8 +1465,9 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   and still filters `--issue-numbers` with `parseInt`, dropping non-integers and duplicates. The created body is `Keeps #N open.` plus non-closing
   sentences; the title is `Publish {project} (keeps #N open)`. A closing keyword associates only
   the reference it immediately precedes (`close`/`closes`/`closed`, `fix`/`fixes`/`fixed`,
-  `resolve`/`resolves`/`resolved`, with optional whitespace or punctuation). `owner/repo#N` is not
-  this repository. A bare `#N` without that immediately preceding keyword does not count. Commit
+  `resolve`/`resolves`/`resolved`, with optional whitespace or punctuation). A qualified
+  `owner/repo#N` counts when it matches the run's own repository and does not count for another
+  repository. A bare `#N` without that immediately preceding keyword does not count. Commit
   messages on `base..head`, a reused body and title, and the generated body use that rule. A
   full-URL reference is an unverified gap and is not asserted here. An unsafe body, title,
   or commit refuses before effects. An OPEN request is reused only when its text names `#N`, its

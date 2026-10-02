@@ -63,11 +63,12 @@ adoption records cited above remain historical motivation only. #1098 history is
    as they are.
 10. A closing keyword associates only the reference it immediately precedes. The keywords are
     `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, and `resolve`/`resolves`/`resolved`, with
-    optional whitespace or punctuation before that one reference. `owner/repo#N` is not this
-    repository's issue. A bare `#N` that the keyword does not immediately precede does not count.
-    Commit messages, reused body and title, and the generated body use this rule. A full-URL
-    reference is an unverified compatibility gap: this record does not claim that it closes or
-    does not close an issue.
+    optional whitespace or punctuation before that one reference. A qualified `owner/repo#N`
+    counts when that owner/repo is the run's own repository, compared case-insensitively, and
+    does not count for another repository. A bare `#N` that the keyword does not immediately
+    precede does not count. Commit messages, reused body and title, and the generated body use
+    this rule. A full-URL reference is an unverified compatibility gap: this record does not
+    claim that it closes or does not close an issue.
 
 ## Consequences
 
@@ -96,8 +97,9 @@ Any `keep_open_pr` line is explicit intent on this sink as well as on `watch-pr`
 empty value. A duplicate marker refuses before close-mode selection. Explicit OPEN reuse refuses
 a native closing association with the retained issue, an unreadable `closingIssuesReferences`
 value, and an already-enabled `autoMergeRequest`, and it leaves the pull request unchanged. The
-closing scan associates a keyword only with the reference it immediately precedes, and it does
-not treat `owner/repo#N` as this repository. Full-URL references stay an unverified gap.
+closing scan associates a keyword only with the reference it immediately precedes. A qualified
+reference counts when it matches the run's own repository and does not count for another
+repository. Full-URL references stay an unverified gap.
 
 Status is Accepted. This repair round is the final freeze of the semantics in this record.
 Acceptance here is not a merge and not a release.
