@@ -40,6 +40,8 @@ forge rejects there; every other branch, forge, and config keeps the previous be
 explicit singleton keep-open request (`--keep-open-pr explicit_singleton` with durable
 `keep_open_pr: explicit_singleton`, `issue_action: comment_keep_open`, and `sink: pr` on exactly one
 issue). Each identity field is declared once, and each issue token is a canonical positive integer.
+The GitHub watcher requires that same agreement before it archives a merged live run or advances
+an archived merged run, and a malformed explicit marker does not become an ordinary close.
 It publishes a review request that does not close the issue, and it never queues or
 auto-merges, even when `pr_auto_merge` is true. The default close path and the older keep-open
 refusal stay in place. GitLab and Gitea do not have this mode. The merge

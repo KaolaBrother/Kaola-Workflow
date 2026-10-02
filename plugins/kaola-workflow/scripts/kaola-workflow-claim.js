@@ -6816,23 +6816,68 @@ function cmdVerifySink() {
   output({ project: args.project, ok, checks, reasons }, ok ? 0 : 1);
 }
 
-// #1113: true only for the explicit singleton GitHub keep-open agreement. An absent sink is the
-// historical merge default and is not this mode. A bundle, or a one-entry issue_numbers list that
-// disagrees with issue_number, is not this mode.
+// #1113: explicit-singleton identity for the two effectful watch lanes. Close mode keeps field().
+// Any keep_open_pr line is intent. Intent that is not one unambiguous canonical agreement refuses
+// before archive, mainline advance, claim cleanup, or worktree removal. It does not fall through
+// to ordinary close. A canonical positive issue token matches sink-pr: parseInt('80abc') is not one.
+const WATCH_IDENTITY_FIELDS = ['issue_action', 'keep_open_pr', 'sink', 'issue_number', 'branch', 'issue_numbers', 'base_branch'];
+const CANONICAL_ISSUE = /^[1-9][0-9]*$/;
+
+function watchFieldValues(text, name) {
+  if (typeof text !== 'string') return [];
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^' + escaped + ':[ \\t]*(.*)$', 'gm');
+  const values = [];
+  let match;
+  while ((match = re.exec(text)) !== null) values.push(match[1].trim());
+  return values;
+}
+
+function strictWatchIssueList(raw) {
+  const tokens = String(raw).split(',');
+  const nums = [];
+  for (const token of tokens) {
+    const trimmed = token.trim();
+    if (!CANONICAL_ISSUE.test(trimmed)) return { ok: false, reason: 'malformed_issue' };
+    const n = Number(trimmed);
+    if (!Number.isSafeInteger(n)) return { ok: false, reason: 'malformed_issue' };
+    if (nums.includes(n)) return { ok: false, reason: 'ambiguous_identity' };
+    nums.push(n);
+  }
+  if (nums.length === 0) return { ok: false, reason: 'malformed_issue' };
+  return { ok: true, nums: nums };
+}
+
+function explicitSingletonWatchDecision(content) {
+  if (typeof content !== 'string' || content.length === 0) return { intent: false };
+  const keep = watchFieldValues(content, 'keep_open_pr');
+  if (keep.length === 0) return { intent: false };
+  const fields = {};
+  for (const name of WATCH_IDENTITY_FIELDS) fields[name] = watchFieldValues(content, name);
+  for (const name of WATCH_IDENTITY_FIELDS) {
+    if (fields[name].length > 1) return { intent: true, ok: false, reason: 'ambiguous_identity' };
+  }
+  const one = (name) => (fields[name].length === 1 ? fields[name][0] : '');
+  if (one('keep_open_pr') !== 'explicit_singleton' || one('issue_action') !== 'comment_keep_open') {
+    return { intent: true, ok: false, reason: 'mode_mismatch' };
+  }
+  if (one('sink') !== 'pr') return { intent: true, ok: false, reason: 'sink_mismatch' };
+  if (fields.issue_number.length === 0) return { intent: true, ok: false, reason: 'issue_mismatch' };
+  if (!CANONICAL_ISSUE.test(fields.issue_number[0])) return { intent: true, ok: false, reason: 'malformed_issue' };
+  const issue = Number(fields.issue_number[0]);
+  if (!Number.isSafeInteger(issue)) return { intent: true, ok: false, reason: 'malformed_issue' };
+  if (fields.issue_numbers.length === 1) {
+    const listed = strictWatchIssueList(fields.issue_numbers[0]);
+    if (!listed.ok) return { intent: true, ok: false, reason: listed.reason };
+    if (listed.nums.length !== 1) return { intent: true, ok: false, reason: 'bundle_refused' };
+    if (listed.nums[0] !== issue) return { intent: true, ok: false, reason: 'issue_mismatch' };
+  }
+  if (!one('branch')) return { intent: true, ok: false, reason: 'branch_mismatch' };
+  return { intent: true, ok: true, issue: issue, branch: one('branch'), base_branch: one('base_branch') };
+}
+
 function isExplicitSingletonKeepOpen(content) {
-  if (!content) return false;
-  if (field(content, 'issue_action') !== 'comment_keep_open') return false;
-  if (field(content, 'keep_open_pr') !== 'explicit_singleton') return false;
-  if (field(content, 'sink') !== 'pr') return false;
-  const issue = parseInt(field(content, 'issue_number'), 10);
-  const raw = field(content, 'issue_numbers');
-  const members = raw
-    ? raw.split(',').map(function (s) { return parseInt(s.trim(), 10); }).filter(function (n) { return Number.isFinite(n) && n > 0; })
-    : [];
-  if (members.length > 1) return false;
-  if (members.length === 1 && Number.isFinite(issue) && members[0] !== issue) return false;
-  if (!(Number.isFinite(issue) && issue > 0) && members.length !== 1) return false;
-  return true;
+  return explicitSingletonWatchDecision(content).ok === true;
 }
 
 function explicitKeepOpenObservation(probeState) {
@@ -6873,7 +6918,7 @@ function attachExplicitKeepOpenReceipt(receipt, issueNumber, probeState, observa
 // mainline is never pushed, members are never manually closed (#617 — the orchestrator closes the
 // remainder by hand only after the merge is verified), and the archive is never moved or deleted.
 // OPEN stays pending; CLOSED-unmerged is the orchestrator's decision and nothing is modified.
-function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
+function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors, explicitRefusals) {
   // #1098 F7: at most ONE fetch per reconciliation, however many MERGED runs are scanned.
   let fetched = false;
   const fetchedOnce = () => {
@@ -6955,6 +7000,21 @@ function reconcileArchivedPrRuns(cwdRoot, args, liveProcessed, probeErrors) {
       continue;
     }
     if (state !== 'MERGED') continue;
+
+    // #1113: explicit intent is decided from every identity line, before mainline advance,
+    // claim cleanup, worktree removal, or a successful receipt. A malformed or conflicting
+    // marker does not fall through to ordinary close.
+    const explicitDecision = explicitSingletonWatchDecision(content);
+    if (explicitDecision.intent && !explicitDecision.ok) {
+      if (Array.isArray(explicitRefusals)) {
+        explicitRefusals.push({
+          folder: name,
+          reason: 'explicit_keep_open_refused',
+          detail: explicitDecision.reason
+        });
+      }
+      continue;
+    }
 
     // MERGED — reconcile against actual forge state.
     // 1. Publication evidence: the archive on origin's default branch (a merged PR whose archive
@@ -7099,6 +7159,17 @@ function cmdWatchPr() {
       // stays unchanged (keepOpen is still unused inside archiveProjectDir).
       let explicitStateText = '';
       try { explicitStateText = fs.readFileSync(folder.state_file, 'utf8'); } catch (_) {}
+      const explicitDecision = explicitSingletonWatchDecision(explicitStateText);
+      if (explicitDecision.intent && !explicitDecision.ok) {
+        archiveRefusals.push({
+          folder: folder.project,
+          reason: 'explicit_keep_open_refused',
+          detail: explicitDecision.reason
+        });
+        warnings.push('watch-pr: explicit_keep_open_refused: ' + explicitDecision.reason +
+          ' for ' + folder.project + '. Nothing was archived.');
+        continue;
+      }
       const explicitKeep = isExplicitSingletonKeepOpen(explicitStateText);
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
       if (!closureContract.archiveSucceeded(archiveResult)) {
@@ -7274,7 +7345,7 @@ function cmdWatchPr() {
   }
   // #1098 §2.2: reconcile ARCHIVED `sink: pr` runs against actual forge state, outside the live
   // loop. Publication and closeout are reported separately; nothing is re-merged or re-created.
-  const reconciled = reconcileArchivedPrRuns(root, args, liveProcessed, probeErrors);
+  const reconciled = reconcileArchivedPrRuns(root, args, liveProcessed, probeErrors, archiveRefusals);
   const emit = { watched };
   if (warnings.length > 0) emit.warnings = warnings;
   if (cleanups.length > 0) emit.cleanups = cleanups;

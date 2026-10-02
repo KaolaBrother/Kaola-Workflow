@@ -44,7 +44,16 @@ decision. It does not rewrite #1098.
 Finalize captures `keep_open_pr` and passes the flag only when the value is `explicit_singleton`.
 The script re-checks the full agreement, so a rendered flag without the durable lines still refuses.
 The explicit gate rejects a second identity line instead of keeping the first. The close-mode parser
-is unchanged. The watcher still reads the first matching field; it is not a second publisher.
+is unchanged. On `watch-pr`, any `keep_open_pr` line is explicit intent. The live MERGED lane and the
+archived MERGED lane require one unambiguous canonical agreement of `issue_action`, `keep_open_pr`,
+`sink`, `issue_number`, `branch`, and optional `issue_numbers` / `base_branch` before archive,
+mainline advance, claim cleanup, worktree removal, or a successful receipt. A repeated field or a
+repeated member is `ambiguous_identity`. A non-canonical issue token is `malformed_issue`. A partial
+or conflicting marker refuses with `explicit_keep_open_refused` and does not fall through to ordinary
+close. A valid explicit singleton still records an open issue as `intentionally_kept_open`, a CLOSED
+issue as `keep_open_violation` with no reopen, and an unreadable probe as `unknown`, and its existing
+cleanup stays. Ordinary close, which has no `keep_open_pr` line, is unchanged. The watcher is not a
+second publisher. Active-folder `field()` remains first-match for close mode.
 `remote_issue_closed` gains the token `unknown` in the shared closure schema. Only this GitHub
 watcher emits it. `checkClosureInvariants` skips `remote-members-closed` for an intentionally open
 explicit receipt and adds `keep-open-pr-violated` or `keep-open-pr-unknown` otherwise. Those ids are
@@ -53,5 +62,6 @@ not new `CLOSURE_INVARIANTS` entries.
 Active-folder readers expose `issue_action` and `keep_open_pr` as empty strings when absent. They
 are not shared-state fields.
 
-This record is the design for the uncommitted #1113 candidate. It becomes accepted only when the
-Host accepts that candidate.
+Status remains Proposed. The local commit `a0f02ea54578107304e065c3358fc208ca879d22` is a prior
+frozen candidate and is not Host acceptance. This revision describes the candidate including the
+watcher refusal above. It becomes accepted only when the Host accepts an exact candidate.

@@ -1688,7 +1688,7 @@ no close keyword), `unknown` when the probe is unavailable. Default close-mode v
 including `skipped_offline` for a singleton open close-mode PR. Explicit singleton keep-open
 overrides that token after the same probe: open stays `kept-open` with `remote_issue_closed:
 kept_open`; closed becomes disposition `keep-open-violation` with `remote_issue_closed: failed`;
-an unavailable probe stays disposition `unknown` with `remote_issue_closed: unknown`.
+an unavailable probe stays disposition `unknown` with `remote_issue_closed: unknown`. Before either MERGED lane archives, advances the main checkout, clears a claim, or removes a worktree, a state with any `keep_open_pr` line must be one unambiguous canonical agreement. A repeated identity field or member is `ambiguous_identity`. A non-canonical issue token (`80abc`, `80,foo`) is `malformed_issue`. A partial marker is `mode_mismatch`. The refusal is `archive_refusals[]` with `reason: explicit_keep_open_refused` and a non-zero exit, and no successful cleanup receipt is written. Ordinary close, which has no `keep_open_pr` line, is unchanged. The live CLOSED-unmerged sweep is not this gate.
 
 **`reconciled[]` (archived `sink: pr` / `sink: mr` runs).** The live-folder loop above never sees a
 standard PR-path run again, because finalize archives it before the sink runs. `reconciled[]` is the
