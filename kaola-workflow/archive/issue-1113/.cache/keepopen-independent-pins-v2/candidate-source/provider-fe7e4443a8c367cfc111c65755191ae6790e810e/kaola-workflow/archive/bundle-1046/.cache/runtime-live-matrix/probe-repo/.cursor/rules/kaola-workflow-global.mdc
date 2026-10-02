@@ -1,0 +1,125 @@
+---
+description: Global workflow contract and compact-safe operation recovery
+globs:
+alwaysApply: true
+---
+
+<!-- KW-COMPACT-RECOVERY-START -->
+# Kaola-Workflow compact recovery
+
+Recovery marker: `KW-COMPACT-RECOVERY-V2`.
+
+# Global Workflow Contract
+
+Universal contract. Project instructions add only verified local facts and stricter constraints.
+
+## First Principles
+
+1. Correct first; never trade correctness for speed or cost.
+2. Then save human time without weakening correctness.
+3. Then spend as little as possible.
+4. Machines decide facts; humans decide values. Escalate irreversible or value-laden choices.
+5. Own your own verdicts. Local evidence, not an external system, decides done.
+
+## Premise and evidence
+
+- Measure current truth before an earlier claim shapes work; carry corrections forward.
+- Read the target before writing. Verify behavior from documentation, source, or a real run; name
+  unknowns honestly.
+- Keep changes surgical. Add only what an observed failure demands; build no speculative gates.
+
+## Backlog and durable state
+
+- The forge's open issue list is backlog truth; later comments override earlier issue text.
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives. Nothing
+  else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.
+- Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.
+- `workflow-state.md` records the claim; `kaola-workflow/{project}/mission-list.md` records the run.
+
+## Mission List
+
+- One run has one Mission List with `item`, `status`, `dispatched`, and `result`.
+- Use three write moments: create; write `dispatched` before the work goes out, including where the
+  output will land; then write `result`. A completed item and its result are immutable. One dispatch
+  has one result, including `FAIL` or `BLOCKED`.
+- A mission is a recoverable outcome, not a specification, selector, assertion, command, review
+  round, role, model, dependency edge, or write set. A failed command, intermediate finding, repair
+  attempt, or review round does not create another mission.
+- Append a mission only for a new recoverable outcome with new custody or a newly discovered
+  independent causal class. `BLOCKED` means the current owner cannot safely or legitimately continue.
+- Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the
+  list minus done minus in-flight.
+
+## Custody, carrier, and failure frontier
+
+- Custody decides who may judge meaning; carrier decides where work runs. Re-evaluate per mission.
+- Dispatch to save context, add independent judgment, or open an independent frontier; keep one
+  owner when cohesive production and integration cost require it.
+- Establish focused acceptance, inventory the causal class, repair under shared custody, freeze,
+  then review and validate those exact bytes. Mutation invalidates affected PASS evidence.
+
+## Test custody and completion
+
+- Independent test custody owns acceptance meaning; production custody may maintain only mechanical
+  fixtures or harness plumbing that preserves it.
+- Define verifiable success, run focused proof then required integration, and record outcomes.
+- Never claim an unexecuted environment, device, service, or user acceptance check passed.
+- Finalization, issue closure, archive, and sink are not Mission List items. The last mission only
+  establishes readiness; lifecycle records own the transaction's final truth.
+
+## Resume the active operation
+
+Read project `AGENTS.md`, active `workflow-state.md`, and `mission-list.md`. With open work,
+completely reload the installed Workflow Next prompt and resume its frontier without intake or
+claim. When all missions are done,
+completely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.
+
+<!-- KW-RUNTIME-DISPATCH-START -->
+## Delegation
+
+**Runtime dispatch contract (always loaded).**
+
+Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+
+Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
+and precedence, live call schema and verified fields, standard/reasoning/heavy defaults,
+model/effort/thought carrier or inheritance, tool and custody boundaries, and native background,
+parallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.
+
+Use named, built-in, and generic routes only under their real identities. A default tier guides
+selection but never disables a task-sensitive override the host actually exposes. If an exact role
+is absent, inspect adequate native routes; use one only when it satisfies custody, evidence, and
+stop boundaries. Otherwise work inline, record the specific `capability_gap`, and re-evaluate the
+next item. Never let a generic route impersonate a custody-bearing named role.
+
+Before dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief
+naming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the
+promised output, not the worker.
+
+<!-- KW-RUNTIME-DELEGATION-START -->
+## Runtime adapter facts
+
+Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.
+Inspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: "<role>"` field and MUST omit the per-call `model`; an exact-tier requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify an exact tier from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.
+
+**Tier defaults:** standard — standard → profile `grok-4.6[effort=medium]`; reasoning — reasoning → profile `grok-4.6[effort=high]`; heavy — heavy → profile `grok-4.6[effort=xhigh]`.
+**Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.
+
+The named profile's native `readonly` flag carries its write boundary.
+Inspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.
+The live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`, but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown.
+
+If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a custody-bearing miss inlines only that item and records the specific `capability_gap`.
+<!-- KW-RUNTIME-DELEGATION-END -->
+<!-- KW-RUNTIME-DISPATCH-END -->
+<!-- KW-COMPACT-RECOVERY-END -->
+
+Contract schema: 1
+Contract nonce: KW1046_GLOBAL_LIVE_bd766e8f

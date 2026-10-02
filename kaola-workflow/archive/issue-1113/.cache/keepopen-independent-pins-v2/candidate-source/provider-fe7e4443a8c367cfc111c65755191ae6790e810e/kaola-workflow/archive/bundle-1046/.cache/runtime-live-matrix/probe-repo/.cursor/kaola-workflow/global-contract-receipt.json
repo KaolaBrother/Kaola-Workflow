@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "contract_schema_version": 1,
+  "kind": "cursor_cloud",
+  "status": "CURRENT",
+  "source_sha256": "f4c3cc736fafa606ba34b84ebf0ac5ecfb1b6b7ac696c49bb551849fe418e841",
+  "registry_sha256": "ae71dc1d80c9e7c414bf53b8cd5190b8be1d40ca2524798f299e811679c45aac",
+  "nonce": "KW1046_GLOBAL_LIVE_bd766e8f",
+  "candidate_sha": "bd766e8f47ca04ae716870d441bc9f4d8ea17d50",
+  "installed_at": "2026-08-30T20:23:12.832Z",
+  "targets": [
+    {
+      "id": "cursor-cloud",
+      "runtime": "cursor",
+      "host": "cloud",
+      "status": "INSTALLED",
+      "path": "/Users/ylpromax5/Workspace/Kaola-Workflow/kaola-workflow/bundle-1046/.cache/runtime-live-matrix/probe-repo/.cursor/rules/kaola-workflow-global.mdc",
+      "root": "/Users/ylpromax5/Workspace/Kaola-Workflow/kaola-workflow/bundle-1046/.cache/runtime-live-matrix/probe-repo",
+      "carrier": "cloud_project_rule",
+      "carrier_group": "cursor-cloud-project-rule",
+      "precedence": "The selected repository Rule is merged as project context and takes precedence over user rules.",
+      "reload": "Save the Environment Build, then start a new top-level Agent in the same repository.",
+      "source_sha256": "f4c3cc736fafa606ba34b84ebf0ac5ecfb1b6b7ac696c49bb551849fe418e841",
+      "render_sha256": "69a5756e05d3b187f0d63d17e827e6faaae28f4fbb809e23e3566095ae1ab333",
+      "install_sha256": "69a5756e05d3b187f0d63d17e827e6faaae28f4fbb809e23e3566095ae1ab333",
+      "before_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
