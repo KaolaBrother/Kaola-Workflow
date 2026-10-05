@@ -13,7 +13,10 @@ Finalization mirrors a main-only live claim into its recorded worktree when exis
 belong to earlier runs; a matching archived claim still takes the crash-resume path. A doc-only
 archive without workflow state cannot displace the single state-bearing archive. Multiple
 state-bearing archives remain ambiguous rather than selecting the newest timestamp, unless a
-unique receipt names the current collision archive (#1114).
+unique receipt names the current collision archive (#1114). Repeating finalization when
+`archive/<project>/` already exists stores the new run at `archive/<project>.archived-<timestamp>/`
+and writes that receipt. A sink journal already in the folder is not rewritten; it authorizes
+retiring the previous anchor only when its `project` and `claim_ts` match the new archive.
 
 Sink uses the matching claim or an existing receipt's exact `archive_dest` for collision-suffixed
 archives, journal placement, and durable findings. Unrelated or divergent files remain protected.

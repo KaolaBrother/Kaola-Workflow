@@ -2755,34 +2755,36 @@ function receiptAnchorsDir(root, project, dir) {
 
 // #1114 repair: a sibling anchor is retired only when the NEW dest itself supplies the
 // identity that resolves the pair — its own self-anchor (receiptAnchorsDir, what
-// placeCollisionAnchor writes), or a PARSEABLE steps-bearing sink journal whose
-// archive_dest transition will name it next. A dest whose receipt is absent or
-// corrupt/unparseable supplies neither, so the earlier anchor must keep resolving.
+// placeCollisionAnchor writes), or a parseable steps-bearing sink journal whose
+// project and claim_ts match this dest (the same match receiptAnchorsDir and the
+// sink's makeFresh use). The sink records archive_dest on that journal next. A dest
+// whose receipt is absent, corrupt, or a journal for another project or claim supplies
+// no identity, so the earlier anchor must keep resolving and those bytes stay untouched.
 function archiveDestSuppliesIdentity(archiveRoot, project, dest) {
   if (receiptAnchorsDir(archiveRoot, project, dest)) return true;
-  let raw;
-  try { raw = fs.readFileSync(path.join(dest, '.cache', 'sink-receipt.json'), 'utf8'); }
-  catch (_) { return false; }
   try {
-    const receipt = JSON.parse(raw);
-    return !!(receipt && receipt.steps && typeof receipt.steps === 'object');
+    const receipt = JSON.parse(fs.readFileSync(path.join(dest, '.cache', 'sink-receipt.json'), 'utf8'));
+    if (!(receipt && receipt.steps && typeof receipt.steps === 'object')) return false;
+    const ts = field(fs.readFileSync(path.join(dest, 'workflow-state.md'), 'utf8'), 'claim_ts');
+    return !!(receipt.project === project && ts && receipt.claim_ts === ts);
   } catch (_) { return false; }
 }
 
 // A later collision would otherwise leave two no-steps self-anchors, and the existing
 // tie-break refuses that (timestamps do not choose). Only a dest whose state carries a
 // claim_ts can tie, so an unstamped dest leaves the previous anchor resolving. A stamped
-// dest may hold the sink's steps-bearing journal instead of a self-anchor; the sink
-// records archive_dest in it next, so the sibling still retires. Drop only a sibling
-// anchor that has no steps. A steps-bearing receipt stays; it is the sink's.
+// dest may hold the sink's steps-bearing journal instead of a self-anchor; when that
+// journal's project and claim_ts match this dest, the sink records archive_dest in it
+// next and the sibling still retires. A foreign or stale journal does not. Drop only a
+// sibling anchor that has no steps. A steps-bearing receipt stays; it is the sink's.
 function retireSupersededArchiveAnchors(archiveRoot, project, dest) {
   if (!dest || !path.basename(dest).startsWith(project + '.archived-')) return;
   let destClaim = null;
   try { destClaim = field(fs.readFileSync(path.join(dest, 'workflow-state.md'), 'utf8'), 'claim_ts'); } catch (_) {}
   if (!destClaim) return;
   // #1114 repair: retiring a sibling is only safe when the NEW dest can itself resolve
-  // the pair. A corrupt or absent receipt supplies no identity, so the earlier anchor
-  // must keep resolving — retire nothing.
+  // the pair. A corrupt, absent, foreign, or claim-mismatched receipt supplies no
+  // identity, so the earlier anchor must keep resolving — retire nothing.
   if (!archiveDestSuppliesIdentity(archiveRoot, project, dest)) return;
   const archiveBase = path.join(archiveRoot, 'kaola-workflow', 'archive');
   let names = [];

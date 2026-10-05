@@ -7,6 +7,8 @@
 // collision dest must carry the self-anchor currentArchiveDir already understands
 // (project, claim_ts, archive_dest). A plain archive, a live directory, and the
 // #1067 linked double-seen case stay as they were. Two anchors, or none, still refuse.
+// A steps-bearing journal supplies that identity only when its project and claim_ts
+// match the dest state. A foreign project or a mismatched claim_ts retires nothing.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -377,6 +379,70 @@ function runEdition(edition) {
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   });
 
+  // A parseable steps-bearing journal supplies identity only when receipt.project
+  // and receipt.claim_ts match this dest. Otherwise the previous anchor stays.
+  function mismatchedJournalKeepsPrior(label, journalRaw) {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-' + label + '-')));
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const oldTs = '2026-10-04T01:00:00.000Z';
+    const newTs = '2026-10-05T02:00:00.000Z';
+    const thirdTs = '2026-10-05T03:00:00.000Z';
+    try {
+      G.init(tmp, { branch: 'main' });
+      write(tmp, 'kaola-workflow/archive/' + project + '/workflow-state.md', state(project, oldTs, 'closed', branch));
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, newTs, 'active', branch));
+      const first = archiveProjectDir(tmp, project, 'closed');
+      const A = first && first.dest;
+      check(A && path.basename(A).startsWith(project + '.archived-'),
+        label + ': the second archive must land collision-suffixed, got ' + A);
+      const aAnchor = path.join(A, '.cache', 'sink-receipt.json');
+      const aAnchorRaw = fs.existsSync(aAnchor) ? fs.readFileSync(aAnchor, 'utf8') : '';
+      check(aAnchorRaw.length > 0, label + ': the second archive must carry its anchor');
+      const prior = resolveFinalizeAuthority(tmp, project);
+      check(prior.authorityDir === A && prior.innerReason !== 'archive_authority_ambiguous',
+        label + ': the prior anchor must resolve before the third archive, got '
+        + JSON.stringify({ dir: prior.authorityDir, expected: A, innerReason: prior.innerReason }));
+
+      waitNextMillis();
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, thirdTs, 'active', branch));
+      write(tmp, 'kaola-workflow/' + project + '/.cache/sink-receipt.json', journalRaw);
+      const second = archiveProjectDir(tmp, project, 'closed');
+      const B = second && second.dest;
+      check(second && second.archived === true && B && B !== A && path.basename(B).startsWith(project + '.archived-'),
+        label + ': the third archive must land at a fresh suffixed dir, got '
+        + JSON.stringify(second && { archived: second.archived, dest: B }));
+      const bReceipt = B && path.join(B, '.cache', 'sink-receipt.json');
+      check(bReceipt && fs.existsSync(bReceipt) && fs.readFileSync(bReceipt, 'utf8') === journalRaw,
+        label + ': the journal must be preserved byte-identical');
+      check(fs.existsSync(aAnchor) && fs.readFileSync(aAnchor, 'utf8') === aAnchorRaw,
+        label + ': the previous valid anchor must be retained byte-identical');
+      const authority = resolveFinalizeAuthority(tmp, project);
+      check(authority.authorityDir === A && authority.innerReason !== 'archive_authority_ambiguous',
+        label + ': authority must still resolve to the previously anchored archive, got '
+        + JSON.stringify({ dir: authority.authorityDir, expected: A, innerReason: authority.innerReason }));
+      check(resolveSinkReceiptPath(tmp, project, branch) === aAnchor,
+        label + ': resolveSinkReceiptPath must still name the retained anchor');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  section('foreign-project journal keeps the previous anchor', () => {
+    const foreign = '{"project":"foreign","claim_ts":"2026-09-01T00:00:00.000Z","branch":"workflow/other","steps":{"merge":"done","finalize":"pending"}}\n';
+    mismatchedJournalKeepsPrior('foreign-project', foreign);
+  });
+
+  section('claim_ts-mismatched journal keeps the previous anchor', () => {
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const mismatched = JSON.stringify({
+      project: project,
+      claim_ts: '2026-09-01T00:00:00.000Z',
+      branch: branch,
+      steps: { merge: 'done', finalize: 'pending' }
+    }) + '\n';
+    mismatchedJournalKeepsPrior('claim-ts-mismatch', mismatched);
+  });
+
   section('steps-bearing newer journal still retires the previous anchor', () => {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-steps-')));
     const project = 'i260t2';
@@ -396,6 +462,7 @@ function runEdition(edition) {
       check(fs.existsSync(aAnchor), 'the second archive must carry its anchor');
 
       waitNextMillis();
+      // Valid-journal control: matching project and claim_ts still authorizes retirement.
       const journalRaw = JSON.stringify({
         project: project, branch: branch, claim_ts: thirdTs,
         steps: { merge: 'done', finalize: 'pending' }
@@ -409,8 +476,14 @@ function runEdition(edition) {
       const bReceipt = path.join(B, '.cache', 'sink-receipt.json');
       check(fs.existsSync(bReceipt) && fs.readFileSync(bReceipt, 'utf8') === journalRaw,
         'the steps-bearing journal must move byte-identical — a self-anchor is never written over the sink\'s own receipt');
+      const landed = JSON.parse(fs.readFileSync(bReceipt, 'utf8'));
+      const landedState = fs.readFileSync(path.join(B, 'workflow-state.md'), 'utf8');
+      check(landed.project === project && landed.claim_ts === thirdTs
+        && landedState.indexOf('claim_ts: ' + thirdTs) !== -1,
+        'valid-journal control: the preserved journal must match this project and the dest claim_ts, got '
+        + JSON.stringify({ project: landed.project, claim_ts: landed.claim_ts }));
       check(!fs.existsSync(aAnchor),
-        'the stamped dest still retires the previous no-steps anchor — keeping it would tie with B once the sink records archive_dest');
+        'valid-journal control: the matching journal still retires the previous no-steps anchor');
       // The sink's next move: stamp archive_dest into the journal and advance the step.
       const journal = JSON.parse(fs.readFileSync(bReceipt, 'utf8'));
       journal.archive_dest = relDest(tmp, B);

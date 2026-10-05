@@ -189,6 +189,12 @@ kaola-workflow/
 └── archive/                # completed runs; <run>/mission-ledger.jsonl
 ```
 
+Finalizing the same run name again, once `archive/<run>/` already exists, keeps that folder and
+stores the new run at `archive/<run>.archived-<timestamp>/`, with an identity receipt that still
+names the current archive. A sink journal already in the folder is left unchanged, and it supplies
+that identity only when its project and claim match the archived run. See
+[Same-name archive resolution](docs/api.md#same-name-archive-resolution).
+
 The mission ledger has one JSON line per mission, keys exactly `n`, `name`, `details`, `status`
 (`todo` | `in-flight` | `done` | `failed` | `blocked`). It lives only in the main checkout, never in
 a worktree; archive moves it to `archive/<run>/mission-ledger.jsonl`. A Runner Host reads it
