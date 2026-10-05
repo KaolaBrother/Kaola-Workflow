@@ -31,6 +31,12 @@ function state(project, ts, status, branch) {
     + 'issue_number: 900260\n'
     + 'branch: ' + branch + '\n';
 }
+function stateNoTs(project, status, branch) {
+  return 'name: ' + project + '\n'
+    + 'status: ' + status + '\n'
+    + 'issue_number: 900260\n'
+    + 'branch: ' + branch + '\n';
+}
 function waitNextMillis() {
   const start = Date.now();
   while (Date.now() === start) {}
@@ -285,6 +291,160 @@ function runEdition(edition) {
       const receipt = readReceipt(archived.dest);
       check(receipt.archive_dest === relDest(fs.realpathSync(main), archived.dest) && !('steps' in receipt),
         'the linked anchor is main-relative and has no steps, got ' + JSON.stringify(receipt));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+
+  section('unstamped newer archive keeps the previous anchor', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-unst-')));
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const oldTs = '2026-10-04T01:00:00.000Z';
+    const newTs = '2026-10-05T02:00:00.000Z';
+    try {
+      G.init(tmp, { branch: 'main' });
+      write(tmp, 'kaola-workflow/archive/' + project + '/workflow-state.md', state(project, oldTs, 'closed', branch));
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, newTs, 'active', branch));
+      const first = archiveProjectDir(tmp, project, 'closed');
+      const A = first && first.dest;
+      check(A && path.basename(A).startsWith(project + '.archived-'),
+        'the second archive must land collision-suffixed, got ' + A);
+      const anchorPath = path.join(A, '.cache', 'sink-receipt.json');
+      const anchorRaw = fs.readFileSync(anchorPath, 'utf8');
+
+      waitNextMillis();
+      // The third live state carries NO claim_ts: placeCollisionAnchor refuses to
+      // stamp it, so the new dest can never tie with A — and A's anchor must stay.
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', stateNoTs(project, 'active', branch));
+      const second = archiveProjectDir(tmp, project, 'closed');
+      const B = second && second.dest;
+      check(B && B !== A && path.basename(B).startsWith(project + '.archived-'),
+        'the third archive must land at a fresh suffixed dir, got ' + B);
+      check(fs.existsSync(anchorPath) && fs.readFileSync(anchorPath, 'utf8') === anchorRaw,
+        'an unstamped newer archive must not retire the previous anchor — the receipt must be byte-identical');
+      check(!fs.existsSync(path.join(B, '.cache', 'sink-receipt.json')),
+        'the unstamped dest must not gain an anchor of its own');
+      const authority = resolveFinalizeAuthority(tmp, project);
+      check(authority.authorityDir === A && authority.innerReason !== 'archive_authority_ambiguous',
+        'the previous archive must still resolve, got ' + JSON.stringify({ dir: authority.authorityDir, innerReason: authority.innerReason }));
+      check(resolveSinkReceiptPath(tmp, project, branch) === anchorPath,
+        'resolveSinkReceiptPath must still name the previous anchored receipt');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+
+  section('steps-bearing newer journal still retires the previous anchor', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-steps-')));
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const oldTs = '2026-10-04T01:00:00.000Z';
+    const newTs = '2026-10-05T02:00:00.000Z';
+    const thirdTs = '2026-10-05T03:00:00.000Z';
+    try {
+      G.init(tmp, { branch: 'main' });
+      write(tmp, 'kaola-workflow/archive/' + project + '/workflow-state.md', state(project, oldTs, 'closed', branch));
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, newTs, 'active', branch));
+      const first = archiveProjectDir(tmp, project, 'closed');
+      const A = first && first.dest;
+      check(A && path.basename(A).startsWith(project + '.archived-'),
+        'the second archive must land collision-suffixed, got ' + A);
+      const aAnchor = path.join(A, '.cache', 'sink-receipt.json');
+      check(fs.existsSync(aAnchor), 'the second archive must carry its anchor');
+
+      waitNextMillis();
+      const journalRaw = JSON.stringify({
+        project: project, branch: branch, claim_ts: thirdTs,
+        steps: { merge: 'done', finalize: 'pending' }
+      }, null, 2) + '\n';
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, thirdTs, 'active', branch));
+      write(tmp, 'kaola-workflow/' + project + '/.cache/sink-receipt.json', journalRaw);
+      const second = archiveProjectDir(tmp, project, 'closed');
+      const B = second && second.dest;
+      check(B && B !== A && path.basename(B).startsWith(project + '.archived-'),
+        'the third archive must land at a fresh suffixed dir, got ' + B);
+      const bReceipt = path.join(B, '.cache', 'sink-receipt.json');
+      check(fs.existsSync(bReceipt) && fs.readFileSync(bReceipt, 'utf8') === journalRaw,
+        'the steps-bearing journal must move byte-identical — a self-anchor is never written over the sink\'s own receipt');
+      check(!fs.existsSync(aAnchor),
+        'the stamped dest still retires the previous no-steps anchor — keeping it would tie with B once the sink records archive_dest');
+      // The sink's next move: stamp archive_dest into the journal and advance the step.
+      const journal = JSON.parse(fs.readFileSync(bReceipt, 'utf8'));
+      journal.archive_dest = relDest(tmp, B);
+      journal.steps.finalize = 'done';
+      fs.writeFileSync(bReceipt, JSON.stringify(journal, null, 2) + '\n');
+      const authority = resolveFinalizeAuthority(tmp, project);
+      check(authority.authorityDir === B && authority.innerReason !== 'archive_authority_ambiguous',
+        'once the journal names B, B must resolve cleanly, got ' + JSON.stringify({ dir: authority.authorityDir, innerReason: authority.innerReason }));
+      check(resolveSinkReceiptPath(tmp, project, branch) === bReceipt,
+        'resolveSinkReceiptPath must follow the stamped journal to B');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+
+  section('retirement removes only a no-steps self-anchor', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-ret-')));
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const ts1 = '2026-01-01T00:00:00.000Z';
+    const ts2 = '2026-01-02T00:00:00.000Z';
+    const ts3 = '2026-01-03T00:00:00.000Z';
+    const ts4 = '2026-02-01T00:00:00.000Z';
+    const d1 = 'kaola-workflow/archive/' + project + '.archived-2026-01-01T00-00-00-000Z';
+    const d2 = 'kaola-workflow/archive/' + project + '.archived-2026-01-02T00-00-00-000Z';
+    const d3 = 'kaola-workflow/archive/' + project + '.archived-2026-01-03T00-00-00-000Z';
+    try {
+      G.init(tmp, { branch: 'main' });
+      // The sink's own skeleton shape (#931 n5): a steps-bearing receipt and no
+      // workflow-state.md at all.
+      write(tmp, 'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json', JSON.stringify({
+        project: project, branch: branch, claim_ts: ts1, steps: { merge: 'done' }
+      }) + '\n');
+      // A steps-bearing receipt that otherwise matches the anchor fields: it is
+      // the sink's journal, never a no-steps self-anchor, so it stays.
+      write(tmp, d1 + '/workflow-state.md', state(project, ts1, 'closed', branch));
+      write(tmp, d1 + '/.cache/sink-receipt.json', JSON.stringify({
+        project: project, claim_ts: ts1, archive_dest: d1, branch: branch, steps: { merge: 'done' }
+      }, null, 2) + '\n');
+      write(tmp, d1 + '/notes.md', 'notes\n');
+      // An unparseable receipt is never provably a self-anchor: it stays.
+      write(tmp, d2 + '/workflow-state.md', state(project, ts2, 'closed', branch));
+      write(tmp, d2 + '/.cache/sink-receipt.json', '{not json');
+      write(tmp, d2 + '/.cache/other.json', '{}\n');
+      // The one true no-steps self-anchor — the only file retirement may remove.
+      write(tmp, d3 + '/workflow-state.md', state(project, ts3, 'closed', branch));
+      write(tmp, d3 + '/.cache/sink-receipt.json', JSON.stringify({
+        project: project, claim_ts: ts3, archive_dest: d3, branch: branch
+      }) + '\n');
+      write(tmp, d3 + '/finalization-summary.md', '# Finalization Summary\n');
+      write(tmp, d3 + '/.cache/extra.txt', 'extra\n');
+
+      const snapshot = {};
+      const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+      (function walk(d) {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else snapshot[path.relative(tmp, p).split(path.sep).join('/')] = fs.readFileSync(p);
+        }
+      })(archiveRoot);
+      const preExisting = new Set(Object.keys(snapshot));
+
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, ts4, 'active', branch));
+      const archived = archiveProjectDir(tmp, project, 'closed');
+      const D = archived && archived.dest;
+      check(D && path.basename(D).startsWith(project + '.archived-'),
+        'the archive must land collision-suffixed, got ' + D);
+
+      const removed = [...preExisting].filter(rel => !fs.existsSync(path.join(tmp, rel)));
+      check(JSON.stringify(removed) === JSON.stringify([d3 + '/.cache/sink-receipt.json']),
+        'retirement must remove exactly the one no-steps self-anchor, got ' + JSON.stringify(removed));
+      for (const rel of preExisting) {
+        if (removed.indexOf(rel) !== -1) continue;
+        check(fs.readFileSync(path.join(tmp, rel)).equals(snapshot[rel]),
+          'pre-existing file ' + rel + ' must be byte-identical');
+      }
+      check(fs.existsSync(path.join(tmp, d3)) && fs.existsSync(path.join(tmp, d3, '.cache')),
+        'the retired anchor\'s directory and .cache must survive — only the receipt file goes');
+      const dReceipt = D && readReceipt(D);
+      check(dReceipt && dReceipt.claim_ts === ts4 && dReceipt.archive_dest === relDest(tmp, D) && !('steps' in dReceipt),
+        'the new dest must carry a plain no-steps self-anchor, got ' + JSON.stringify(dReceipt));
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   });
 

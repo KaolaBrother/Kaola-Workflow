@@ -2754,10 +2754,16 @@ function receiptAnchorsDir(root, project, dir) {
 }
 
 // A later collision would otherwise leave two no-steps self-anchors, and the existing
-// tie-break refuses that (timestamps do not choose). Drop only a sibling anchor that
-// has no steps. A steps-bearing receipt stays; it is the sink's.
+// tie-break refuses that (timestamps do not choose). Only a dest whose state carries a
+// claim_ts can tie, so an unstamped dest leaves the previous anchor resolving. A stamped
+// dest may hold the sink's steps-bearing journal instead of a self-anchor; the sink
+// records archive_dest in it next, so the sibling still retires. Drop only a sibling
+// anchor that has no steps. A steps-bearing receipt stays; it is the sink's.
 function retireSupersededArchiveAnchors(archiveRoot, project, dest) {
   if (!dest || !path.basename(dest).startsWith(project + '.archived-')) return;
+  let destClaim = null;
+  try { destClaim = field(fs.readFileSync(path.join(dest, 'workflow-state.md'), 'utf8'), 'claim_ts'); } catch (_) {}
+  if (!destClaim) return;
   const archiveBase = path.join(archiveRoot, 'kaola-workflow', 'archive');
   let names = [];
   try { names = fs.readdirSync(archiveBase); } catch (_) { return; }
@@ -3009,7 +3015,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     placeCollisionAnchor(root, src, dest, project);
     fs.renameSync(src, dest);
   }
-  // #1114: once the collision archive holds its anchor, a previous no-steps self-anchor
+  // #1114: once the collision archive carries a claim, a previous no-steps self-anchor
   // would tie with it. Retire those siblings only. Fail-soft: the archive has already
   // landed, and a missed unlink stays fail-closed at the next resolve.
   try { retireSupersededArchiveAnchors(isLinkedRun ? mainRoot : root, project, dest); } catch (_) {}
