@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow-gitlab",
-  "version": "12.5.1",
+  "version": "12.5.2",
   "description": "GitLab edition of the adaptive Kaola-Workflow Claude Code plugin: the orchestrator claims an issue, writes a mission ledger, and runs the engineering lifecycle, closing items as their results land, using GitLab issues, merge requests, and glab.",
   "author": {
     "name": "KaolaBrother",
