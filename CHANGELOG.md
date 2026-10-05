@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **The upgrade-rewrite fixture no longer copies repo-local `.kaola` (#1115).** Private runner state stays out of the throwaway source, so a main-checkout run does not copy permission-restricted retained evidence into the fixture and then fail cleanup with `ENOTEMPTY`.
+
 ## [12.5.1] - 2026-10-05
 
 ### Fixed

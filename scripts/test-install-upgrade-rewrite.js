@@ -155,8 +155,11 @@ function runInstallFrom(srcRoot, home, forge) {
 {
   // ONE throwaway copy of this checkout, with every forge's command source emptied. The state
   // under test is a state of the SOURCE tree, and mutating this one is not on offer. `.git` is
-  // deliberately absent so nothing in the copy can resolve back to this repository.
-  const COPY_SKIP = new Set(['.git', 'kaola-workflow', 'node_modules']);
+  // deliberately absent so nothing in the copy can resolve back to this repository. `.kaola` is
+  // private runner state, not install surface: the 12.5.1 gate measured a main-checkout `cp -R`
+  // dragging 1.3 GB of permission-restricted retained evidence into this fixture, after which the
+  // `rmSync` in the finally below failed ENOTEMPTY (#1115). Skipping it keeps that state out.
+  const COPY_SKIP = new Set(['.git', 'kaola-workflow', 'node_modules', '.kaola']);
   const src = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-973-src-')));
   const homes = [];
   try {
@@ -165,6 +168,12 @@ function runInstallFrom(srcRoot, home, forge) {
       // spawn-class: environment
       const cp = spawnSync('cp', ['-R', path.join(root, entry), path.join(src, entry)], { encoding: 'utf8' });
       assert.strictEqual(cp.status, 0, `#973 fixture: cp -R ${entry} failed — ${cp.stderr}`);
+    }
+    // #1115 isolation only. Vacuous in a checkout with no `.kaola` (a linked worktree); binding
+    // where the repo root holds private runner state. The upgrade pins below are unchanged.
+    if (fs.existsSync(path.join(root, '.kaola'))) {
+      assert.strictEqual(fs.existsSync(path.join(src, '.kaola')), false,
+        '#1115: private runner state under .kaola must not enter the fixture source');
     }
     const sourceCommandDir = forge => (forge === 'github'
       ? path.join(src, 'commands')
