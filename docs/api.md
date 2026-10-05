@@ -716,8 +716,10 @@ make the exit code reflect the invariant verdict: **exit 4** when `closure_invar
 - `finalize_gate_unverified` with `gate: 'workflow_state'` — the selected authority has no readable
   regular state file. A source-missing archive is a narrow crash-resume exemption: the archive must
   already be terminal-stamped. The `inner_reason` names which sub-case, and
-  `archive_authority_ambiguous` means several exact/suffixed archives match, so no transaction
-  authority can be proven. No closure side effect is made.
+  `archive_authority_ambiguous` means several exact/suffixed archives match and no single
+  receipt identifies the current one (`project`, `claim_ts`, and `archive_dest` naming exactly
+  one of those folders), so no transaction authority can be proven. A later timestamp does not
+  choose. A live directory still resolves. No closure side effect is made.
 - **The archive refuses to lose a file.** See `workflow-state-contract.md` § Archive completeness.
   That is an operation refusing to destroy data, not a workflow judging work.
 

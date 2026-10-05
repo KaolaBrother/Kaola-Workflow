@@ -2694,6 +2694,104 @@ function isReservedWorkflowDirName(name) {
   return n.toLowerCase() === 'archive' || n.startsWith('.');
 }
 
+// #1114: identity anchor for a collision archive (`archive/<project>.archived-<ts>/`).
+// currentArchiveDir, and the sink's copy of it, already treat exactly one receipt of this
+// shape as the current archive: `project`, `claim_ts` equal to that folder's claim_ts,
+// `archive_dest` equal to that folder. A plain `archive/<project>/` with no sibling does
+// not need one. There is no `steps` key. loadOrInitReceipt resumes a receipt that has
+// steps, and sinkReceiptResumable pins a worktree from steps that are not all done; this
+// file is not a sink transaction, so neither may see one. `branch` is recorded when the
+// state has one because the sink's currentArchiveDir requires it when the caller passes
+// a branch. A receipt that already has a steps object is the sink's journal: it is never
+// rewritten and never removed.
+function collisionArchiveAnchor(archiveRoot, stateDir, dest, project) {
+  if (!dest || !path.basename(dest).startsWith(project + '.archived-')) return null;
+  let raw = '';
+  try { raw = fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8'); } catch (_) { return null; }
+  const claimTs = field(raw, 'claim_ts');
+  if (!claimTs) return null;
+  const anchor = {
+    project: project,
+    claim_ts: claimTs,
+    archive_dest: path.relative(archiveRoot, dest).split(path.sep).join('/')
+  };
+  const branch = field(raw, 'branch');
+  if (branch) anchor.branch = branch;
+  return anchor;
+}
+
+// Absent is not sink-owned. Unreadable or unparseable is: a journal this pass cannot
+// prove is its own anchor is left byte-for-byte alone.
+function sinkReceiptHasSteps(receiptPath) {
+  let raw;
+  try { raw = fs.readFileSync(receiptPath, 'utf8'); }
+  catch (error) { return !(error && error.code === 'ENOENT'); }
+  try {
+    const receipt = JSON.parse(raw);
+    return !!(receipt && receipt.steps && typeof receipt.steps === 'object');
+  } catch (_) { return true; }
+}
+
+function placeCollisionAnchor(archiveRoot, writeDir, dest, project) {
+  const anchor = collisionArchiveAnchor(archiveRoot, writeDir, dest, project);
+  if (!anchor) return false;
+  const receiptPath = path.join(writeDir, '.cache', 'sink-receipt.json');
+  if (sinkReceiptHasSteps(receiptPath)) return false;
+  writeFile(receiptPath, JSON.stringify(anchor) + '\n');
+  return true;
+}
+
+// The anchor predicate inside currentArchiveDir. Kept as its own function so
+// resolveFinalizeAuthority's tie-break cannot drift from it; the sink's copy of
+// currentArchiveDir must keep the same comparison.
+function receiptAnchorsDir(root, project, dir) {
+  try {
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8'));
+    const ts = field(fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'), 'claim_ts');
+    return !!(receipt && receipt.project === project && ts && receipt.claim_ts === ts
+      && receipt.archive_dest === path.relative(root, dir).split(path.sep).join('/'));
+  } catch (_) { return false; }
+}
+
+// A later collision would otherwise leave two no-steps self-anchors, and the existing
+// tie-break refuses that (timestamps do not choose). Drop only a sibling anchor that
+// has no steps. A steps-bearing receipt stays; it is the sink's.
+function retireSupersededArchiveAnchors(archiveRoot, project, dest) {
+  if (!dest || !path.basename(dest).startsWith(project + '.archived-')) return;
+  const archiveBase = path.join(archiveRoot, 'kaola-workflow', 'archive');
+  let names = [];
+  try { names = fs.readdirSync(archiveBase); } catch (_) { return; }
+  const keep = path.resolve(dest);
+  for (const name of names) {
+    if (name !== project && !name.startsWith(project + '.archived-')) continue;
+    const dir = path.resolve(archiveBase, name);
+    if (dir === keep) continue;
+    const receiptPath = path.join(dir, '.cache', 'sink-receipt.json');
+    if (sinkReceiptHasSteps(receiptPath)) continue;
+    if (!receiptAnchorsDir(archiveRoot, project, dir)) continue;
+    try { fs.unlinkSync(receiptPath); } catch (_) {}
+  }
+}
+
+// currentArchiveDir's answer, accepted only when that directory is receipt-anchored.
+// The unique-stamp shortcut (one folder has a claim_ts, another does not, neither has
+// a receipt) is not this tie-break. A linked invocation stores archive_dest relative
+// to main, so a worktree root that cannot match asks main.
+function soleAnchoredArchive(root, project, candidates) {
+  const accept = (base) => {
+    const dir = currentArchiveDir(base, project);
+    if (!dir || !candidates.some(candidate => path.resolve(candidate) === path.resolve(dir))) return null;
+    return receiptAnchorsDir(base, project, dir) ? dir : null;
+  };
+  const direct = accept(root);
+  if (direct) return direct;
+  try {
+    const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    if (main && path.resolve(main) !== path.resolve(root)) return accept(main);
+  } catch (_) {}
+  return null;
+}
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   // #930: REFUSE a reserved directory here, before reading or stamping anything. `workflow_project:`
@@ -2889,20 +2987,32 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       return { skipped: undefined, archived: false, archive_incomplete: true,
         missing, mismatched, dest };
     }
+    // #1114: the copy has verified. Anchor a collision dest before either live copy is
+    // deleted, so a crash still has the live folder — which resolves — until the anchor
+    // is on disk with the archive. A sink receipt already in the copy has steps and is
+    // not rewritten.
+    placeCollisionAnchor(mainRoot, dest, dest, project);
     // (d) delete BOTH live copies — only after copy+verify confirmed, for EACH of them.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
     if (mainLiveDisposable) fs.rmSync(mainLive, { recursive: true, force: true }); // main live folder
   } else {
-    // in-place run: existing renameSync path unchanged. #676: no completeness gate needed here —
-    // an atomic rename relocates the WHOLE live folder, so the archive dest is byte-identical to
-    // the former source and no evidence file can be dropped (the source-relative loss the gate
-    // catches only happens on the copy+verify linked-run path above).
+    // in-place run. #676: no completeness gate — an atomic rename relocates the WHOLE live
+    // folder, so the archive dest is the former source and no evidence file can be dropped
+    // (the source-relative loss the gate catches only happens on the copy+verify linked-run
+    // path above). #1114: a collision dest is anchored in that live folder first. The rename
+    // then carries the receipt, so the archive and the anchor land together; a crash before
+    // the rename still has a live folder, which resolves.
     const archiveBase = path.join(root, 'kaola-workflow', 'archive');
     fs.mkdirSync(archiveBase, { recursive: true });
     dest = path.join(archiveBase, project + (suffix || ''));
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
+    placeCollisionAnchor(root, src, dest, project);
     fs.renameSync(src, dest);
   }
+  // #1114: once the collision archive holds its anchor, a previous no-steps self-anchor
+  // would tie with it. Retire those siblings only. Fail-soft: the archive has already
+  // landed, and a missed unlink stays fail-closed at the next resolve.
+  try { retireSupersededArchiveAnchors(isLinkedRun ? mainRoot : root, project, dest); } catch (_) {}
   // #1089: MOVE the run's mission ledger out of `kaola-workflow/.ledger/` into the archive, where
   // it is tracked. After this, presence under `.ledger/` means a live run. Runs after both live
   // copies are gone so the completeness proof above compares folders the ledger never sat in.
@@ -4078,6 +4188,14 @@ function resolveFinalizeAuthority(root, project) {
       catch (error) { return error.code !== 'ENOENT'; }
     });
     if (withState.length === 1) candidates = withState;
+  }
+  // #1114: the same receipt anchor currentArchiveDir uses when several archives carry a
+  // claim_ts. Exactly one self-anchor is the current archive. A unique stamp with no
+  // receipt is not enough — timestamps do not choose. Zero anchors, or more than one,
+  // stay ambiguous. A live directory never reaches this arm.
+  if (!livePresent && candidates.length > 1) {
+    const anchored = soleAnchoredArchive(root, project, candidates);
+    if (anchored) candidates = [anchored];
   }
   const authorityDir = candidates.length === 1 ? candidates[0] : null;
   const statePath = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
@@ -5961,14 +6079,7 @@ function currentArchiveDir(root, projectName) {
   // authorize choosing one simply because it is later.
   if (stamped.length === 1) return stamped[0];
   if (stamped.length > 1) {
-    const anchored = stamped.filter((dir) => {
-      try {
-        const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8'));
-        const ts = field(fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8'), 'claim_ts');
-        return receipt.project === projectName && ts && receipt.claim_ts === ts
-          && receipt.archive_dest === path.relative(root, dir).split(path.sep).join('/');
-      } catch (_) { return false; }
-    });
+    const anchored = stamped.filter((dir) => receiptAnchorsDir(root, projectName, dir));
     return anchored.length === 1 ? anchored[0] : null;
   }
   if (liveClaim) return null;

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A repeat finalize can still name the current archive (#1114).** When `kaola-workflow/archive/<project>/` already exists, `archiveProjectDir` moves the live folder to `archive/<project>.archived-<timestamp>/`. That collision archive now gets an identity receipt (`project`, `claim_ts`, `archive_dest`, and `branch` when the state has one) before the live folder is gone. The receipt has no `steps`, so it is not a sink transaction and is not resumed. A receipt that already has `steps` is left untouched. A later collision drops only the previous no-steps self-anchor, so exactly one remains. `resolveFinalizeAuthority` uses that same anchor. No anchor, or more than one, still refuses, and a later timestamp alone never wins. A live directory still resolves.
+
 ## [12.5.0] - 2026-10-02
 
 ### Fixed
