@@ -12,7 +12,8 @@ for its carrier, and `architecture.md` for how it fits together.
 Finalization mirrors a main-only live claim into its recorded worktree when existing archives
 belong to earlier runs; a matching archived claim still takes the crash-resume path. A doc-only
 archive without workflow state cannot displace the single state-bearing archive. Multiple
-state-bearing archives remain ambiguous rather than selecting the newest timestamp.
+state-bearing archives remain ambiguous rather than selecting the newest timestamp, unless a
+unique receipt names the current collision archive (#1114).
 
 Sink uses the matching claim or an existing receipt's exact `archive_dest` for collision-suffixed
 archives, journal placement, and durable findings. Unrelated or divergent files remain protected.

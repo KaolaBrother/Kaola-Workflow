@@ -2530,6 +2530,22 @@ function receiptAnchorsDir(root, project, dir) {
   } catch (_) { return false; }
 }
 
+// #1114 repair: a sibling anchor is retired only when the NEW dest itself supplies the
+// identity that resolves the pair — its own self-anchor (receiptAnchorsDir, what
+// placeCollisionAnchor writes), or a PARSEABLE steps-bearing sink journal whose
+// archive_dest transition will name it next. A dest whose receipt is absent or
+// corrupt/unparseable supplies neither, so the earlier anchor must keep resolving.
+function archiveDestSuppliesIdentity(archiveRoot, project, dest) {
+  if (receiptAnchorsDir(archiveRoot, project, dest)) return true;
+  let raw;
+  try { raw = fs.readFileSync(path.join(dest, '.cache', 'sink-receipt.json'), 'utf8'); }
+  catch (_) { return false; }
+  try {
+    const receipt = JSON.parse(raw);
+    return !!(receipt && receipt.steps && typeof receipt.steps === 'object');
+  } catch (_) { return false; }
+}
+
 // A later collision would otherwise leave two no-steps self-anchors, and the existing
 // tie-break refuses that (timestamps do not choose). Only a dest whose state carries a
 // claim_ts can tie, so an unstamped dest leaves the previous anchor resolving. A stamped
@@ -2541,6 +2557,10 @@ function retireSupersededArchiveAnchors(archiveRoot, project, dest) {
   let destClaim = null;
   try { destClaim = field(fs.readFileSync(path.join(dest, 'workflow-state.md'), 'utf8'), 'claim_ts'); } catch (_) {}
   if (!destClaim) return;
+  // #1114 repair: retiring a sibling is only safe when the NEW dest can itself resolve
+  // the pair. A corrupt or absent receipt supplies no identity, so the earlier anchor
+  // must keep resolving — retire nothing.
+  if (!archiveDestSuppliesIdentity(archiveRoot, project, dest)) return;
   const archiveBase = path.join(archiveRoot, 'kaola-workflow', 'archive');
   let names = [];
   try { names = fs.readdirSync(archiveBase); } catch (_) { return; }
@@ -2787,9 +2807,10 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     placeCollisionAnchor(root, src, dest, project);
     fs.renameSync(src, dest);
   }
-  // #1114: once the collision archive carries a claim, a previous no-steps self-anchor
-  // would tie with it. Retire those siblings only. Fail-soft: the archive has already
-  // landed, and a missed unlink stays fail-closed at the next resolve.
+  // #1114: once the collision archive supplies its own identity — its self-anchor, or a
+  // steps-bearing sink journal the sink then stamps — a previous no-steps self-anchor
+  // would tie with it. Retire those siblings only, and only then. Fail-soft: the archive
+  // has already landed, and a missed unlink stays fail-closed at the next resolve.
   try { retireSupersededArchiveAnchors(isLinkedRun ? mainRoot : root, project, dest); } catch (_) {}
   // #1089: MOVE the run's mission ledger out of `kaola-workflow/.ledger/` into the archive, where
   // it is tracked. After this, presence under `.ledger/` means a live run. Runs after both live

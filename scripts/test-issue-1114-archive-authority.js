@@ -331,6 +331,52 @@ function runEdition(edition) {
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   });
 
+  section('corrupt dest receipt keeps the previous anchor', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-corrupt-')));
+    const project = 'i260t2';
+    const branch = 'workflow/issue-900260';
+    const oldTs = '2026-10-04T01:00:00.000Z';
+    const newTs = '2026-10-05T02:00:00.000Z';
+    const thirdTs = '2026-10-05T03:00:00.000Z';
+    const corrupt = '{broken-json';
+    try {
+      G.init(tmp, { branch: 'main' });
+      write(tmp, 'kaola-workflow/archive/' + project + '/workflow-state.md', state(project, oldTs, 'closed', branch));
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, newTs, 'active', branch));
+      const first = archiveProjectDir(tmp, project, 'closed');
+      const A = first && first.dest;
+      check(A && path.basename(A).startsWith(project + '.archived-'),
+        'corrupt-dest: the second archive must land collision-suffixed, got ' + A);
+      const aAnchor = path.join(A, '.cache', 'sink-receipt.json');
+      check(fs.existsSync(aAnchor), 'corrupt-dest: the second archive must carry its anchor');
+      const aAnchorRaw = fs.existsSync(aAnchor) ? fs.readFileSync(aAnchor, 'utf8') : '';
+
+      waitNextMillis();
+      // The third live folder already holds a corrupt receipt. placeCollisionAnchor refuses
+      // to write a self-anchor over it (sinkReceiptHasSteps reads unparseable as owned), so
+      // the rename carries the corrupt bytes into the new collision dest. That dest supplies
+      // no identity: retirement must NOT remove A's anchor, or the pair goes ambiguous.
+      write(tmp, 'kaola-workflow/' + project + '/workflow-state.md', state(project, thirdTs, 'active', branch));
+      write(tmp, 'kaola-workflow/' + project + '/.cache/sink-receipt.json', corrupt);
+      const second = archiveProjectDir(tmp, project, 'closed');
+      const B = second && second.dest;
+      check(second && second.archived === true && B && B !== A && path.basename(B).startsWith(project + '.archived-'),
+        'corrupt-dest: the third archive must land at a fresh suffixed dir, got '
+        + JSON.stringify(second && { archived: second.archived, dest: B }));
+      const bReceipt = B && path.join(B, '.cache', 'sink-receipt.json');
+      check(bReceipt && fs.existsSync(bReceipt) && fs.readFileSync(bReceipt, 'utf8') === corrupt,
+        'corrupt-dest: the corrupt receipt must be preserved byte-identical in the new dest');
+      check(fs.existsSync(aAnchor) && fs.readFileSync(aAnchor, 'utf8') === aAnchorRaw,
+        'corrupt-dest: the previous valid anchor must be retained byte-identical');
+      const authority = resolveFinalizeAuthority(tmp, project);
+      check(authority.authorityDir === A && authority.innerReason !== 'archive_authority_ambiguous',
+        'corrupt-dest: authority must still resolve to the previously anchored archive, got '
+        + JSON.stringify({ dir: authority.authorityDir, expected: A, innerReason: authority.innerReason }));
+      check(resolveSinkReceiptPath(tmp, project, branch) === aAnchor,
+        'corrupt-dest: resolveSinkReceiptPath must still name the retained anchor');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+
   section('steps-bearing newer journal still retires the previous anchor', () => {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1114-steps-')));
     const project = 'i260t2';
