@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Every Kaola-Workflow worktree removal asks Kaola Project Runner's `worktree-guard` first (#374, KPR #374).** The shared `removeWorktree()` choke point (finalize, `stale-worktree-cleanup`, `legacy-worktree-cleanup`, release/watch-pr paths) now locates the Runner through `kaola-project-runner-locate receipt` and runs `kaola-dispatch.py worktree-guard --repo <root> --path <worktree>` after the existing dirty/unprobeable gates and before `git worktree remove`. A `clear` receipt removes as before; `occupied` keeps the worktree and reports a typed `worktree_occupied` refusal carrying the occupant list and route; `cwd-unverifiable` keeps it with `worktree_cwd_unverifiable` (fail-closed). The stale and legacy cleanup receipts add `skipped_occupied` entries with the same facts, and sink-merge stops with a typed envelope before its branch checkout. With no locator the behavior is exactly as before (no hard dependency); a locator that is present but cannot answer also keeps the worktree. The same path is carried in the Claude, Codex, GitLab and Gitea editions, and `scripts/test-issue-374-worktree-guard.js` stays in all four `npm test` chains. No release, tag or install is implied.
+
+- **The `test-install-all` dry-run fixture no longer assumes the host node directory has no `droid`.** E4's "no droid on PATH" arm put `path.dirname(process.execPath)` on PATH, and a global npm install of the droid CLI lands beside node, so the row graded FAIL instead of the advisory PLAN on such a host. The fixture now provides `node` through its own stub bin and leaves the node directory off PATH. Test-only; no installer or runtime behavior changed.
+
 ## [12.5.2] - 2026-10-05
 
 ### Fixed
