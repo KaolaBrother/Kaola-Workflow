@@ -1985,20 +1985,38 @@ as `--live`, which is exactly the row set the guard's own `trees_from_rows` woul
 falls back to the unscoped guard. This bounds the guard call (measured ~12 s unscoped vs ~1.3 s
 scoped on a busy machine) without changing the receipt:
 
-- `clear` — remove as before.
-- `occupied` — keep the worktree and report `worktree_occupied` with the occupant list and route.
-- `cwd-unverifiable` — keep the worktree (fail-closed) and report `worktree_cwd_unverifiable`.
-- a located Runner that cannot answer — keep the worktree and report `worktree_guard_unavailable`.
+- `clear` — remove as before; any `warnings[]` on the guard receipt are carried through.
+- `occupied` — the **only** hard block: keep the worktree and report `worktree_occupied` with the
+  occupant list and route.
+- `cwd-unverifiable` — remove the worktree and report a typed `worktree_cwd_unverifiable` warning.
+- a located Runner that cannot answer — remove the worktree and report a typed
+  `worktree_guard_unavailable` warning. `guard_reason` names the exact failure
+  (`locator-failed`, `locator-refused`, `locator-receipt-unreadable`, `guard-script-missing`,
+  `guard-failed`, `guard-receipt-unreadable`, `guard-refused`, `guard-unexpected-answer`), and
+  `recovery` names the repair: run `kaola-project-runner-locate receipt`; from the Kaola Project
+  Runner checkout run `python3 scripts/kaola-locate.py register --target local --expect-revision
+  "$(git rev-parse HEAD)"`, or reinstall its runtime with `./scripts/install-local.sh --bin-links`;
+  or run the direct `kaola-dispatch.py worktree-guard --repo <root> --path <worktree>` to see the
+  guard's own failure. `guard_reasons` carries the locator's or guard's reason tokens when present.
 - no locator on `PATH` — exactly the previous behavior; there is no hard dependency.
 
-`finalize` emits `{ status: "refused", reason, worktree, occupants, route, ... }` and exits `1`
-before its label/close/branch work. `sink-merge` emits a `refuse` / `status: "not_merged"` envelope
-with the same facts and returns before the branch checkout. Its teardown of the development
-worktree has a second, report-only refusal: `cleanup.worktree` is
-`{ result: "refused", reason, path, occupants, route, probe, detail }` and `cleanup.local_branch`
-is `kept: checked out by the dev worktree (<reason>)`, so the sink never deletes a branch a kept
-worktree still holds. Both cleanup commands add `skipped_occupied` entries (path, reason,
-occupants, route) and remove nothing.
+The warning object is `{ code, guard_reason, guard_reasons?, path, detail, recovery }`; a warning
+supplied by KPR's guard receipt keeps its `{ code, path, detail, recovery }` fields. Only
+`occupied` blocks; every other non-clear answer, and every locator/guard infrastructure failure,
+removes and reports.
+
+`finalize` emits a top-level `worktree_warnings` array when the removal carried warnings. An
+explicit `occupied` still emits `{ status: "refused", reason, worktree, occupants, route, ... }` and
+exits `1` before its label/close/branch work. `sink-merge` emits a `refuse` /
+`status: "not_merged"` envelope with the same facts for `occupied` and returns before the branch
+checkout; on the fail-open path it puts the warnings in `cleanup.worktree_warnings` (and the
+pre-checkout lane also surfaces them as top-level `worktree_warnings`). Its teardown of the
+development worktree has a second, report-only refusal for `occupied`: `cleanup.worktree` is
+`{ result: "refused", reason, path, occupants, route, probe, detail, warnings }` and
+`cleanup.local_branch` is `kept: checked out by the dev worktree (<reason>)`, so the sink never
+deletes a branch a kept worktree still holds. Both cleanup commands add a top-level `warnings`
+array for fail-open removals and add `skipped_occupied` entries only for an explicit `occupied`
+answer; neither removes an occupied worktree.
 
 ### `claim.js stale-worktree-cleanup`
 
@@ -2033,7 +2051,7 @@ it means `deleted_branch` does not imply "ancestor-proven into the default branc
   "skipped_unprobeable": [] }
 { "dry_run": false, "removed": [], "deleted_branch": [], "skipped_dirty": [], "stashed": [],
   "exported": [], "failed_preserve": [], "skipped_unmerged": [], "skipped_unprobeable": [],
-  "skipped_occupied": [] }
+  "skipped_occupied": [], "warnings": [] }
 ```
 
 Exit `0` on success (either mode), `1` on an execution error.
