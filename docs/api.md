@@ -1993,8 +1993,12 @@ scoped on a busy machine) without changing the receipt:
 
 `finalize` emits `{ status: "refused", reason, worktree, occupants, route, ... }` and exits `1`
 before its label/close/branch work. `sink-merge` emits a `refuse` / `status: "not_merged"` envelope
-with the same facts and returns before the branch checkout. Both cleanup commands add
-`skipped_occupied` entries (path, reason, occupants, route) and remove nothing.
+with the same facts and returns before the branch checkout. Its teardown of the development
+worktree has a second, report-only refusal: `cleanup.worktree` is
+`{ result: "refused", reason, path, occupants, route, probe, detail }` and `cleanup.local_branch`
+is `kept: checked out by the dev worktree (<reason>)`, so the sink never deletes a branch a kept
+worktree still holds. Both cleanup commands add `skipped_occupied` entries (path, reason,
+occupants, route) and remove nothing.
 
 ### `claim.js stale-worktree-cleanup`
 

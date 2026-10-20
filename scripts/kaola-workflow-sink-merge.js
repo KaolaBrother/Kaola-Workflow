@@ -3609,6 +3609,21 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         cleanupSummary.worktree = 'removed';
       } else if (wtRes && wtRes.reason === 'missing') {
         cleanupSummary.worktree = 'skipped_missing';
+      } else if (wtRes && wtRes.removed === false
+        && (wtRes.reason === 'worktree_occupied'
+          || wtRes.reason === 'worktree_cwd_unverifiable'
+          || wtRes.reason === 'worktree_guard_unavailable')) {
+        // #374/K1: the guard kept the dev worktree. Report the typed refusal here, before the
+        // dirty re-probe, and keep the branch (it is still checked out there).
+        cleanupSummary.worktree = {
+          result: 'refused',
+          reason: wtRes.reason,
+          path: wtRes.path || devWt || null,
+          occupants: Array.isArray(wtRes.occupants) ? wtRes.occupants : [],
+          route: wtRes.route || '',
+          probe: wtRes.probe,
+          detail: wtRes.detail,
+        };
       } else if (devWt && fs.existsSync(devWt)) {
         // The removal refused and the worktree still stands: re-probe dirt. A dirty verdict is
         // the honest kept_dirty (git's own refusal said exactly this); a clean-but-unremovable
@@ -3647,9 +3662,14 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // so a plain ancestry test against <def> would now be false; the identity test is the safe one.
   // A KEPT dev worktree still has the branch checked out — git refuses the delete and the refusal
   // is the design working, not a fault — so the delete is not attempted and the keep is reported.
-  const devWorktreeKept = String(cleanupSummary.worktree || '').indexOf('kept') === 0;
+  const worktreeCleanup = cleanupSummary.worktree;
+  const worktreeRefused = !!(worktreeCleanup && typeof worktreeCleanup === 'object'
+    && !Array.isArray(worktreeCleanup) && worktreeCleanup.result === 'refused');
+  const devWorktreeKept = worktreeRefused
+    || (typeof worktreeCleanup === 'string' && worktreeCleanup.indexOf('kept') === 0);
   if (devWorktreeKept) {
-    cleanupSummary.local_branch = 'kept: checked out by the dev worktree (' + cleanupSummary.worktree + ')';
+    cleanupSummary.local_branch = 'kept: checked out by the dev worktree ('
+      + (worktreeRefused ? worktreeCleanup.reason : worktreeCleanup) + ')';
   } else {
     try {
       const tip = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', args.branch],

@@ -392,6 +392,21 @@ for (const edition of EDITIONS) {
   assert(checkout > typed, edition.name + ': sink refusal precedes the branch checkout');
   assert(sinkSrc.includes('occupants: wtResult.occupants || []'),
     edition.name + ': sink carries occupants');
+  // #374/K1: the dev-worktree teardown has its own typed refusal, separate from the main
+  // removal's pre-checkout envelope. It must carry occupants and route, precede the dirty
+  // re-probe, and keep the branch because the worktree still checks it out.
+  const k1 = sinkSrc.indexOf('// #374/K1: the guard kept the dev worktree');
+  const k1Tail = sinkSrc.slice(k1);
+  assert(k1 > 0, edition.name + ': sink dev cleanup carries the K1 typed refusal');
+  assert(k1Tail.includes("result: 'refused'")
+    && k1Tail.includes('reason: wtRes.reason')
+    && k1Tail.includes('occupants: Array.isArray(wtRes.occupants)')
+    && k1Tail.includes("route: wtRes.route || ''"),
+    edition.name + ': sink dev cleanup names reason/occupants/route');
+  assert(sinkSrc.indexOf('const worktreeRefused =') > k1,
+    edition.name + ': sink maps the dev cleanup object to a kept branch');
+  assert(sinkSrc.includes('worktreeRefused ? worktreeCleanup.reason : worktreeCleanup'),
+    edition.name + ': sink reports the dev cleanup refusal reason');
 }
 
 if (selectedSink && selectedSink !== activeEdition.sink) {
