@@ -679,7 +679,12 @@ function runWrapper(rootOrStub, args, extraEnv) {
     checkOutput: { droid: 'check: missing skill /home/x/.agents/skills/workflow-next/SKILL.md' } });
   const binDir = path.join(stub.root, 'stub-bin');
   fs.mkdirSync(binDir, { recursive: true });
-  const barePath = [binDir, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
+  // Keep `node` reachable without putting the directory that holds THIS node binary on PATH:
+  // a global install of the droid CLI lands beside node (npm's bin dir), so the old
+  // `path.dirname(process.execPath)` arm made the "no droid on PATH" case fail on a machine
+  // that has droid installed — the row then read FAIL instead of the advisory PLAN.
+  fs.symlinkSync(process.execPath, path.join(binDir, 'node'));
+  const barePath = [binDir, '/usr/bin', '/bin'].join(path.delimiter);
   const r = runWrapper(stub, ['--check'], { PATH: barePath });
   assert(r.status === 0, 'E4: advisory skills failure does not fail --check: ' + r.out);
   assert(/droid\s+PLAN/.test(r.out) && !/droid\s+FAIL/.test(r.out),

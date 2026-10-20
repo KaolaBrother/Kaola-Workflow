@@ -1573,6 +1573,25 @@ function runDirectMerge(args, opts) {
   if (wtResult) {
     if (wtResult.removed === true) wtRemovedStatus = 'removed';
     else if (wtResult.removed === false && wtResult.reason === 'missing') wtRemovedStatus = 'missing';
+    else if (wtResult.removed === false
+      && (wtResult.reason === 'worktree_occupied'
+        || wtResult.reason === 'worktree_cwd_unverifiable'
+        || wtResult.reason === 'worktree_guard_unavailable')) {
+      // #374: the guard kept the worktree. Stop before checkout/merge; the typed envelope is
+      // the durable record because this path has no step journal.
+      sinkEmit({
+        result: 'refuse',
+        status: 'not_merged',
+        reason: wtResult.reason,
+        worktree: wtResult.path || null,
+        worktree_guard: wtResult.guard || 'kaola-project-runner/worktree-guard',
+        occupants: wtResult.occupants || [],
+        route: wtResult.route || '',
+        probe: wtResult.probe,
+        detail: wtResult.detail,
+      }, 1);
+      return;
+    }
     else wtRemovedStatus = 'failed';
   }
 

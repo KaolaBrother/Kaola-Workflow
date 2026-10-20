@@ -1972,6 +1972,30 @@ unreadable folders instead of failing closed.
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).
 
+### Worktree removal guard (KPR #374)
+
+Every removal through the shared `removeWorktree()` choke point (finalize, `stale-worktree-cleanup`,
+`legacy-worktree-cleanup`, and the release/watch-pr paths) asks an installed Kaola Project Runner
+first. `kaola-project-runner-locate receipt` resolves `root.path`; then
+`python3 <root>/scripts/kaola-dispatch.py worktree-guard --repo <root> --path <worktree>` runs after
+the existing dirty/unprobeable gates and before `git worktree remove`. The guard's JSON receipt is
+the contract (KPR `docs/api.md`; KPR #374). When the Runner's `kaola-acp.py` is available, the
+caller first reads `list --include-dead --repo <root>` and `--repo <worktree>` and passes the union
+as `--live`, which is exactly the row set the guard's own `trees_from_rows` would keep; a list fault
+falls back to the unscoped guard. This bounds the guard call (measured ~12 s unscoped vs ~1.3 s
+scoped on a busy machine) without changing the receipt:
+
+- `clear` — remove as before.
+- `occupied` — keep the worktree and report `worktree_occupied` with the occupant list and route.
+- `cwd-unverifiable` — keep the worktree (fail-closed) and report `worktree_cwd_unverifiable`.
+- a located Runner that cannot answer — keep the worktree and report `worktree_guard_unavailable`.
+- no locator on `PATH` — exactly the previous behavior; there is no hard dependency.
+
+`finalize` emits `{ status: "refused", reason, worktree, occupants, route, ... }` and exits `1`
+before its label/close/branch work. `sink-merge` emits a `refuse` / `status: "not_merged"` envelope
+with the same facts and returns before the branch checkout. Both cleanup commands add
+`skipped_occupied` entries (path, reason, occupants, route) and remove nothing.
+
 ### `claim.js stale-worktree-cleanup`
 
 Removes what `stale-worktree-check` finds. Dry-run by default.
@@ -2001,9 +2025,11 @@ upstream. That is not data loss — the tip remains reachable via `refs/remotes/
 it means `deleted_branch` does not imply "ancestor-proven into the default branch" for every entry.
 
 ```json
-{ "dry_run": true,  "would_remove": [], "would_delete_branch": [], "skipped_dirty": [] }
+{ "dry_run": true,  "would_remove": [], "would_delete_branch": [], "skipped_dirty": [],
+  "skipped_unprobeable": [] }
 { "dry_run": false, "removed": [], "deleted_branch": [], "skipped_dirty": [], "stashed": [],
-  "exported": [], "failed_preserve": [], "skipped_unmerged": [] }
+  "exported": [], "failed_preserve": [], "skipped_unmerged": [], "skipped_unprobeable": [],
+  "skipped_occupied": [] }
 ```
 
 Exit `0` on success (either mode), `1` on an execution error.
