@@ -1140,7 +1140,8 @@ function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archi
   }
 }
 
-function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebaseTests) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebaseTests, wtWarnings) {
+  wtWarnings = Array.isArray(wtWarnings) ? wtWarnings : [];
   // #617: capture the feature branch's commit SHA now, before Step 9 below deletes the branch
   // ref — this is "the recorded implementation commit" the remote-closed-after-publish invariant
   // (wired into checkClosureInvariants below) verifies is an ancestor of defBranch before the
@@ -1367,6 +1368,8 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
     receipt.failed_issue_closures = bundleBuckets.failed_issue_closures;
     receipt.open_issues = bundleBuckets.open_issues;
   }
+  // #374/K2: the worktree was removed fail-open; the typed warning survives with the receipt.
+  if (wtWarnings.length) receipt.worktree_warnings = wtWarnings;
   // #617: wire the remote-closed-after-publish invariant — verify the captured branch SHA is an
   // ancestor of defBranch before trusting this receipt's close.
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest, { implRef: implCommitSha, sinkTarget: defBranch });
@@ -1399,12 +1402,14 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       out.closed_issues = bundleBuckets.closed_issues;
       out.failed_issue_closures = bundleBuckets.failed_issue_closures;
     }
+    if (wtWarnings.length) out.worktree_warnings = wtWarnings;
     sinkEmit(out);
     return { exitCode: 1 };
   }
 
   // #393a: surface the member-set source.
   const emit = { status: 'merged', closure_receipt: receipt, closure_invariants: invariants };
+  if (wtWarnings.length) emit.worktree_warnings = wtWarnings;
   if (args.member_source) emit.member_source = args.member_source;
   sinkEmit(emit);
 }
@@ -1486,6 +1491,7 @@ function runDirectMerge(args, opts) {
   try { process.chdir(os.tmpdir()); } catch (e) {
     process.stderr.write('sink-merge: could not chdir before worktree removal: ' + e.message + '\n');
   }
+  let wtWarnings = [];
   let wtRemovedStatus = 'failed';
 
   // Step 1 — Fetch
@@ -1564,14 +1570,14 @@ function runDirectMerge(args, opts) {
   let wtResult;
   try { wtResult = removeWorktree(mainRoot, args.project, folder); } catch (_) {}
   if (wtResult) {
-    if (wtResult.removed === true) wtRemovedStatus = 'removed';
+    if (wtResult.removed === true) {
+      wtRemovedStatus = 'removed';
+      wtWarnings = Array.isArray(wtResult.warnings) ? wtResult.warnings : [];
+    }
     else if (wtResult.removed === false && wtResult.reason === 'missing') wtRemovedStatus = 'missing';
-    else if (wtResult.removed === false
-      && (wtResult.reason === 'worktree_occupied'
-        || wtResult.reason === 'worktree_cwd_unverifiable'
-        || wtResult.reason === 'worktree_guard_unavailable')) {
-      // #374: the guard kept the worktree. Stop before checkout/merge; the typed envelope is
-      // the durable record because this path has no step journal.
+    else if (wtResult.removed === false && wtResult.reason === 'worktree_occupied') {
+      // #374/K1: only the guard's explicit `occupied` answer stops the sink before checkout. The
+      // typed envelope is durable because this path has no step journal.
       sinkEmit({
         result: 'refuse',
         status: 'not_merged',
@@ -1582,6 +1588,7 @@ function runDirectMerge(args, opts) {
         route: wtResult.route || '',
         probe: wtResult.probe,
         detail: wtResult.detail,
+        warnings: Array.isArray(wtResult.warnings) ? wtResult.warnings : [],
       }, 1);
       return;
     }
@@ -1656,7 +1663,7 @@ function runDirectMerge(args, opts) {
     disarmStagedJournalNote(); // #980: past the landing, there is no un-landed stage to name
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, testGate.result);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, testGate.result, wtWarnings);
   // #619(1): postMergeCleanup can now also return { exitCode: 1 } (a failed-close sink_incomplete
   // refusal) alongside the pre-existing { exitCode: 3 } (merge-impossible fallback) — generalize
   // from the exact-3 check to any returned exitCode.
@@ -3396,14 +3403,16 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       const wtRes = removeWorktree(mainRoot, args.project, folder, { force: false });
       if (wtRes && wtRes.removed) {
         cleanupSummary.worktree = 'removed';
+        // #374/K2: the removal was fail-open; keep every non-blocking guard warning in the sink
+        // receipt so the locator/guard failure is visible beside the removal it did not block.
+        if (Array.isArray(wtRes.warnings) && wtRes.warnings.length) {
+          cleanupSummary.worktree_warnings = wtRes.warnings;
+        }
       } else if (wtRes && wtRes.reason === 'missing') {
         cleanupSummary.worktree = 'skipped_missing';
-      } else if (wtRes && wtRes.removed === false
-        && (wtRes.reason === 'worktree_occupied'
-          || wtRes.reason === 'worktree_cwd_unverifiable'
-          || wtRes.reason === 'worktree_guard_unavailable')) {
-        // #374/K1: the guard kept the dev worktree. Report the typed refusal here, before the
-        // dirty re-probe, and keep the branch (it is still checked out there).
+      } else if (wtRes && wtRes.removed === false && wtRes.reason === 'worktree_occupied') {
+        // #374/K1: only the guard's explicit `occupied` answer keeps the dev worktree. Report the
+        // typed refusal here, before the dirty re-probe, and keep the branch (still checked out).
         cleanupSummary.worktree = {
           result: 'refused',
           reason: wtRes.reason,
@@ -3412,6 +3421,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           route: wtRes.route || '',
           probe: wtRes.probe,
           detail: wtRes.detail,
+          warnings: Array.isArray(wtRes.warnings) ? wtRes.warnings : [],
         };
       } else if (devWt && fs.existsSync(devWt)) {
         // The removal refused and the worktree still stands: re-probe dirt. A dirty verdict is

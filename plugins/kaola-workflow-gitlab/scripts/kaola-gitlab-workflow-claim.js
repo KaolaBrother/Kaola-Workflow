@@ -419,6 +419,109 @@ function kprGuardDetail(err) {
   return raw.replace(/\s+/g, ' ').trim().slice(0, 400);
 }
 
+// #374/K2: a located Runner that cannot answer is a typed, recoverable warning. `guard_reason`
+// keeps the exact failure class (a missing locator is not a stale registration or a broken guard
+// script), and `route` names the repair command for that class. Only an explicit `occupied` answer
+// keeps the worktree; every other failure removes it and carries this warning.
+function kprRecoveryRoute(reason, ctx) {
+  const c = ctx || {};
+  const kprRoot = typeof c.kprRoot === 'string' ? c.kprRoot : '';
+  const dispatch = c.dispatch || (kprRoot
+    ? path.join(kprRoot, 'scripts', 'kaola-dispatch.py')
+    : 'scripts/kaola-dispatch.py');
+  const locator = kprRoot ? path.join(kprRoot, 'scripts', 'kaola-locate.py')
+    : 'scripts/kaola-locate.py';
+  const revision = kprRoot
+    ? '$(git -C "' + kprRoot + '" rev-parse HEAD)'
+    : '$(git rev-parse HEAD)';
+  const register = 'python3 "' + locator + '" register --target local --expect-revision "'
+    + revision + '"';
+  const reinstall = kprRoot
+    ? 'cd "' + kprRoot + '" && ./scripts/install-local.sh --bin-links'
+    : 'cd <KPR checkout> && ./scripts/install-local.sh --bin-links';
+  const direct = 'python3 "' + dispatch + '" worktree-guard --repo "' + c.root + '" --path "'
+    + c.wtPath + '"';
+  const rerun = ' The Kaola-Workflow worktree removal proceeded; fix the named KPR fact before the '
+    + 'next removal.';
+  switch (reason) {
+    case 'locator-failed':
+      return 'Diagnose with "kaola-project-runner-locate receipt". From the Kaola Project Runner '
+        + 'checkout, re-register with "' + register + '" or reinstall its runtime with "'
+        + reinstall + '".' + rerun;
+    case 'locator-refused':
+      return 'From the Kaola Project Runner checkout, fix the fact named by the locator reasons, '
+        + 'then re-register with "' + register + '"; if the checkout is stale or broken, reinstall '
+        + 'its runtime with "' + reinstall + '".' + rerun;
+    case 'locator-receipt-unreadable':
+      return 'Run "kaola-project-runner-locate receipt" and require one JSON receipt. Re-register '
+        + 'from the Kaola Project Runner checkout with "' + register + '" or reinstall its runtime '
+        + 'with "' + reinstall + '".' + rerun;
+    case 'guard-script-missing':
+      return 'The located Kaola Project Runner checkout has no scripts/kaola-dispatch.py. Repair '
+        + 'or reinstall it with "' + reinstall + '", then re-register with "' + register + '".'
+        + rerun;
+    case 'guard-failed':
+      return 'Run the guard directly to see its failure: "' + direct + '". Reinstall the Kaola '
+        + 'Project Runner runtime with "' + reinstall + '" if it still fails.' + rerun;
+    case 'guard-receipt-unreadable':
+      return 'The guard printed no readable JSON receipt. Run it directly: "' + direct + '". '
+        + 'Reinstall the Kaola Project Runner runtime with "' + reinstall + '" if the output is '
+        + 'still not one JSON receipt.' + rerun;
+    case 'guard-refused':
+      return (c.guardRoute ? 'Kaola Project Runner refused: ' + c.guardRoute + ' ' : '')
+        + 'Verify the refusal with "' + direct + '". Fix the named KPR fact, then rerun.' + rerun;
+    case 'guard-unexpected-answer':
+      return 'The guard answered with an unexpected result. Run it directly: "' + direct + '". '
+        + 'Reinstall the Kaola Project Runner runtime with "' + reinstall + '" if the answer is '
+        + 'still unexpected.' + rerun;
+    default:
+      return 'Run the guard directly: "' + direct + '". If it does not answer, reinstall the '
+        + 'Kaola Project Runner runtime with "' + reinstall + '".' + rerun;
+  }
+}
+
+function kprUnavailable(reason, detail, ctx, extra) {
+  const merged = Object.assign({}, ctx || {}, extra || {});
+  return {
+    available: true,
+    result: 'unavailable',
+    reason,
+    guard_reason: reason,
+    detail: String(detail || ''),
+    route: kprRecoveryRoute(reason, merged),
+    guard_reasons: Array.isArray(merged.guard_reasons) ? merged.guard_reasons : [],
+    exit_code: typeof merged.exit_code === 'number' ? merged.exit_code : undefined,
+  };
+}
+
+// KPR's guard receipt carries warnings[] as { code, path, detail, recovery }. Pass them through
+// unchanged (normalising the one field that may be absent), so a clear-but-degraded answer keeps
+// its typed evidence beside the removal it did not block.
+function kprGuardWarnings(list, wtPath) {
+  if (!Array.isArray(list)) return [];
+  return list.filter(w => w && typeof w === 'object').map(w => ({
+    code: typeof w.code === 'string' && w.code ? w.code : 'worktree_guard_warning',
+    path: typeof w.path === 'string' && w.path ? w.path : wtPath,
+    detail: typeof w.detail === 'string' ? w.detail : '',
+    recovery: typeof w.recovery === 'string' ? w.recovery
+      : (typeof w.route === 'string' ? w.route : ''),
+  }));
+}
+
+function kprUnavailableWarning(guard, root, wtPath, code) {
+  const reason = guard.guard_reason || guard.reason || 'guard-unavailable';
+  const warning = {
+    code: code || 'worktree_guard_unavailable',
+    guard_reason: reason,
+    path: wtPath,
+    detail: guard.detail || guard.reason || 'the worktree guard did not answer',
+    recovery: guard.route || kprRecoveryRoute(reason, { root, wtPath }),
+  };
+  if (Array.isArray(guard.guard_reasons) && guard.guard_reasons.length) {
+    warning.guard_reasons = guard.guard_reasons;
+  }
+  return warning;
+}
 
 // The guard consumes rows whose repo is the root or the target, so ask the Runner for exactly
 // those two lists and hand the union over as ``--live``. A global ``list`` also probes unrelated
@@ -464,6 +567,7 @@ function kprLiveRows(kprRoot, root, wtPath) {
 }
 
 function kprWorktreeGuard(root, wtPath) {
+  const ctx = { root, wtPath };
   let located;
   try {
     located = execFileSync(KPR_LOCATOR, ['receipt'], {
@@ -471,21 +575,29 @@ function kprWorktreeGuard(root, wtPath) {
     });
   } catch (err) {
     if (err && err.code === 'ENOENT') return { available: false };
-    return { available: true, result: 'unavailable', reason: 'locator-failed',
-      detail: kprGuardDetail(err) };
+    return kprUnavailable('locator-failed', kprGuardDetail(err), ctx);
   }
   let locator;
   try { locator = JSON.parse(located); } catch (_) { locator = null; }
   const kprRoot = locator && locator.result === 'ok' && locator.root && locator.root.path;
   if (typeof kprRoot !== 'string' || !kprRoot) {
-    const reasons = locator && Array.isArray(locator.reasons) ? locator.reasons.join(', ') : '';
-    return { available: true, result: 'unavailable', reason: 'locator-refused',
-      detail: reasons || 'the locator returned no root.path' };
+    if (!locator) {
+      return kprUnavailable('locator-receipt-unreadable',
+        String(located || '').replace(/\s+/g, ' ').trim().slice(0, 300), ctx);
+    }
+    const reasons = Array.isArray(locator.reasons) ? locator.reasons : [];
+    if (locator.result === 'refused') {
+      return kprUnavailable('locator-refused',
+        reasons.join(', ') || 'the locator returned no root.path', ctx, { guard_reasons: reasons });
+    }
+    return kprUnavailable('locator-receipt-unreadable',
+      'the locator returned result=' + String(locator.result) + ' without root.path', ctx,
+      { guard_reasons: reasons });
   }
   const dispatch = path.join(kprRoot, 'scripts', 'kaola-dispatch.py');
+  const guardCtx = { root, wtPath, kprRoot, dispatch };
   if (!fs.existsSync(dispatch)) {
-    return { available: true, result: 'unavailable', reason: 'guard-script-missing',
-      detail: dispatch };
+    return kprUnavailable('guard-script-missing', dispatch, guardCtx);
   }
   let out = '';
   let status = 0;
@@ -503,8 +615,7 @@ function kprWorktreeGuard(root, wtPath) {
     out = String((err && err.stdout) || '');
     status = (err && typeof err.status === 'number') ? err.status : null;
     if (status === null) {
-      return { available: true, result: 'unavailable', reason: 'guard-failed',
-        detail: kprGuardDetail(err) };
+      return kprUnavailable('guard-failed', kprGuardDetail(err), guardCtx);
     }
   } finally {
     if (live) try { fs.unlinkSync(live); } catch (_) {}
@@ -512,29 +623,31 @@ function kprWorktreeGuard(root, wtPath) {
   let guard;
   try { guard = JSON.parse(out); } catch (_) { guard = null; }
   if (!guard || typeof guard !== 'object') {
-    return { available: true, result: 'unavailable', reason: 'guard-receipt-unreadable',
-      detail: out.replace(/\s+/g, ' ').trim().slice(0, 300), exit_code: status };
+    return kprUnavailable('guard-receipt-unreadable',
+      out.replace(/\s+/g, ' ').trim().slice(0, 300), guardCtx, { exit_code: status });
   }
   const occupants = Array.isArray(guard.occupants) ? guard.occupants : [];
   const route = typeof guard.route === 'string' ? guard.route : '';
+  const warnings = kprGuardWarnings(guard.warnings, wtPath);
   if (guard.result === 'occupied') {
     return { available: true, result: 'occupied', occupants, route,
-      probe: guard.probe, exit_code: status };
+      probe: guard.probe, exit_code: status, warnings };
   }
   if (guard.result === 'unverifiable') {
     return { available: true, result: 'cwd-unverifiable', occupants: [], route,
-      probe: guard.probe, exit_code: status };
+      probe: guard.probe, exit_code: status, warnings };
   }
   if (guard.result === 'clear' && status === 0) {
-    return { available: true, result: 'clear', probe: guard.probe };
+    return { available: true, result: 'clear', probe: guard.probe, warnings };
   }
   if (guard.result === 'refused') {
-    return { available: true, result: 'unavailable', reason: guard.reason || 'guard-refused',
-      detail: guard.detail || '', route, exit_code: status };
+    return kprUnavailable('guard-refused', guard.detail || guard.reason || '', guardCtx,
+      { guardRoute: route, guard_reasons: guard.reason ? [guard.reason] : [], exit_code: status,
+        warnings });
   }
-  return { available: true, result: 'unavailable', reason: 'guard-unexpected-answer',
-    detail: 'result=' + String(guard.result) + ' exit=' + String(status), route,
-    exit_code: status };
+  return kprUnavailable('guard-unexpected-answer',
+    'result=' + String(guard.result) + ' exit=' + String(status), guardCtx,
+    { guardRoute: route, exit_code: status, warnings });
 }
 
 
@@ -549,6 +662,7 @@ function removeWorktree(root, project, folder, opts) {
   // #374: KPR's read-only guard runs AFTER the caller's dirty/unprobeable gates and BEFORE any
   // destructive step. An absent Runner leaves the previous behavior exactly as it was.
   const guard = kprWorktreeGuard(root, wtPath);
+  const guardWarnings = [];
   if (guard.available) {
     if (guard.result === 'occupied') {
       return { removed: false, path: wtPath, reason: 'worktree_occupied',
@@ -556,30 +670,28 @@ function removeWorktree(root, project, folder, opts) {
         route: guard.route || ('Move the shell named in occupants out of ' + wtPath
           + ' or stop that seat, then rerun the same command.'),
         probe: guard.probe, guard: 'kaola-project-runner/worktree-guard',
-        guard_result: 'occupied',
+        guard_result: 'occupied', warnings: Array.isArray(guard.warnings) ? guard.warnings : [],
         detail: 'Kaola Project Runner worktree-guard kept ' + wtPath
           + ': a live process cwd is inside it. Move that shell to the project root or stop '
           + 'that seat, then rerun.' };
     }
+    // #374/K2: only an explicit `occupied` answer is a hard block. Every other non-clear answer
+    // (unverifiable, refused, unexpected) and every locator/guard infrastructure failure is
+    // fail-open: remove the worktree and carry a typed warning with the repair command.
+    if (Array.isArray(guard.warnings)) guardWarnings.push(...guard.warnings);
     if (guard.result === 'cwd-unverifiable') {
-      return { removed: false, path: wtPath, reason: 'worktree_cwd_unverifiable',
-        occupants: [],
-        route: guard.route || ('The cwd probe is unavailable; keep this worktree and inspect '
-          + 'the original receipt before retrying.'),
-        probe: guard.probe, guard: 'kaola-project-runner/worktree-guard',
-        guard_result: 'cwd-unverifiable',
+      guardWarnings.push({
+        code: 'worktree_cwd_unverifiable',
+        guard_reason: 'cwd-unverifiable',
+        path: wtPath,
         detail: 'Kaola Project Runner worktree-guard could not verify cwd occupancy for '
-          + wtPath + '; the worktree was kept (fail-closed). Inspect the receipt route before '
-          + 'retrying.' };
-    }
-    if (guard.result !== 'clear') {
-      return { removed: false, path: wtPath, reason: 'worktree_guard_unavailable',
-        occupants: [],
-        route: 'Repair or re-register kaola-project-runner-locate, then rerun the same command. '
-          + 'The worktree was kept.',
-        probe: guard.probe, guard: 'kaola-project-runner/worktree-guard',
-        guard_result: guard.result || 'unavailable',
-        detail: guard.detail || guard.reason || 'the worktree guard did not answer' };
+          + wtPath + '; the worktree was removed (fail-open).',
+        recovery: guard.route || ('Inspect the original worktree-guard receipt before the next '
+          + 'removal.'),
+      });
+    } else if (guard.result !== 'clear') {
+      guardWarnings.push(kprUnavailableWarning(guard, root, wtPath,
+        'worktree_guard_unavailable'));
     }
   }
   let archiveRescued = false;
@@ -627,7 +739,9 @@ function removeWorktree(root, project, folder, opts) {
       cwd: root,
       stdio: ['ignore', 'ignore', 'ignore']
     });
-    return { removed: true, path: wtPath, ...(archiveRescued ? { archive_rescued: true } : {}) };
+    return { removed: true, path: wtPath,
+      ...(archiveRescued ? { archive_rescued: true } : {}),
+      ...(guardWarnings.length ? { warnings: guardWarnings } : {}) };
   } catch (_) {
     return { removed: false, path: wtPath, ...(archiveRescued ? { archive_rescued: true } : {}) };
   }
@@ -4976,22 +5090,24 @@ function cmdFinalize() {
     } catch (_) { archiveStateStamped = 'failed'; }
   }
   let worktreeRemoved = 'failed';
+  let worktreeWarnings = [];
   if (!args.keepWorktree) {
     try {
       // #426: run git-worktree-remove from mainRoot (not inside the worktree being removed).
       const wtResult = removeWorktree(cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root, args.project, folder);
-      if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+      if (wtResult && wtResult.removed === true) {
+        worktreeRemoved = 'removed';
+        worktreeWarnings = Array.isArray(wtResult.warnings) ? wtResult.warnings : [];
+      }
       else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
-      else if (wtResult && wtResult.removed === false
-        && (wtResult.reason === 'worktree_occupied'
-          || wtResult.reason === 'worktree_cwd_unverifiable'
-          || wtResult.reason === 'worktree_guard_unavailable')) {
-        // #374: a live cwd (or an unreadable probe / unavailable guard) keeps the worktree and
-        // stops this finalize before any label, close or branch work.
+      else if (wtResult && wtResult.removed === false && wtResult.reason === 'worktree_occupied') {
+        // #374/K1: only the guard's explicit `occupied` answer is a hard block. Every infrastructure
+        // failure is fail-open and reports through worktreeWarnings instead.
         output({ status: 'refused', reason: wtResult.reason, project: args.project,
           worktree: wtResult.path || null, worktree_guard: wtResult.guard,
           occupants: wtResult.occupants || [], route: wtResult.route || '',
-          probe: wtResult.probe, detail: wtResult.detail }, 1);
+          probe: wtResult.probe, detail: wtResult.detail,
+          warnings: Array.isArray(wtResult.warnings) ? wtResult.warnings : [] }, 1);
         return;
       }
       else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
@@ -5654,6 +5770,9 @@ function cmdFinalize() {
     finalize_transaction: finalizeTx
   });
   if (finalizeChangedProbe !== 'measured') finalizeEmit.changed_paths_probe = finalizeChangedProbe;
+  // #374/K2: the worktree was removed; name every non-blocking guard warning (locator/guard
+  // failure, unverifiable probe) with its repair route. Omitted when there was nothing to say.
+  if (worktreeWarnings.length) finalizeEmit.worktree_warnings = worktreeWarnings;
   // #937: present only when a name was actually corrected, so a run given the exact spelling emits
   // the envelope it emitted before.
   if (projectSlug.note) finalizeEmit.resolved_project_note = projectSlug.note;
@@ -5694,7 +5813,11 @@ function cmdRelease() {
         + (result.archive_incomplete === true ? ' ' + archiveIncompleteRemedy(root, folder.project) : '') }, 1);
     return;
   }
-  try { removeWorktree(root, folder.project, folder); } catch (_) {}
+  let worktreeWarnings = [];
+  try {
+    const wtResult = removeWorktree(root, folder.project, folder);
+    if (wtResult && Array.isArray(wtResult.warnings)) worktreeWarnings = wtResult.warnings;
+  } catch (_) {}
 
   // In-place branch restore: if this project created a feature branch (NATIVE=0 path),
   // checkout base/default BEFORE deleting the feature branch (git refuses deleting current branch).
@@ -5785,6 +5908,7 @@ function cmdRelease() {
     { discard_archive_branch: discardCommit.branch },
     discardCommit.committed ? {} : { discard_archive_commit_detail: discardCommit.detail },
     restoreNote ? { restore_note: restoreNote } : {},
+    worktreeWarnings.length ? { worktree_warnings: worktreeWarnings } : {},
     releaseWarnings.length ? { warnings: releaseWarnings } : {}
   ));
 }
@@ -6154,7 +6278,7 @@ function cmdStaleWorktreeCleanup() {
   const dryRun = !args.execute;
   // #620: skipped_unmerged records a branch that survived because it could not be proven merged —
   // fail LOUD (visible in the JSON report) rather than silently either destroying it or dropping it.
-  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unmerged: [], skipped_unprobeable: [], skipped_occupied: [] };
+  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unmerged: [], skipped_unprobeable: [], skipped_occupied: [], warnings: [] };
   const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [], skipped_unprobeable: [] };
   const removedBranches = new Set();
 
@@ -6216,13 +6340,14 @@ function cmdStaleWorktreeCleanup() {
       if (rmResult.removed) {
         buckets.removed.push(wt.path);
         removedBranches.add(branch);
-      } else if (rmResult.reason === 'worktree_occupied'
-        || rmResult.reason === 'worktree_cwd_unverifiable'
-        || rmResult.reason === 'worktree_guard_unavailable') {
-        // #374: the guard kept the worktree; report the occupants and route, never a bare failure.
+        // #374/K2: the removal succeeded; carry every non-blocking guard warning into the receipt.
+        if (Array.isArray(rmResult.warnings)) buckets.warnings.push(...rmResult.warnings);
+      } else if (rmResult.reason === 'worktree_occupied') {
+        // #374/K1: only the guard's explicit `occupied` answer keeps the worktree.
         buckets.skipped_occupied.push({ path: wt.path, reason: rmResult.reason,
           occupants: rmResult.occupants || [], route: rmResult.route || '',
-          probe: rmResult.probe, detail: rmResult.detail });
+          probe: rmResult.probe, detail: rmResult.detail,
+          warnings: Array.isArray(rmResult.warnings) ? rmResult.warnings : [] });
       }
     }
   }
@@ -6329,9 +6454,13 @@ function watchMergeRequests(root, args) {
         continue;
       }
       let worktreeRemoved = 'failed';
+      let worktreeWarnings = [];
       try {
         const wtResult = removeWorktree(root, folder.project, folder);
-        if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+        if (wtResult && wtResult.removed === true) {
+          worktreeRemoved = 'removed';
+          worktreeWarnings = Array.isArray(wtResult.warnings) ? wtResult.warnings : [];
+        }
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
@@ -6374,6 +6503,7 @@ function watchMergeRequests(root, args) {
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      if (worktreeWarnings.length) folderReceipt.worktree_warnings = worktreeWarnings;
       // #328/#369: attach bundle receipt fields after builder (filter bypass) — incl. per-member buckets
       if (isBundle) {
         folderReceipt.issue_numbers = folder.issue_numbers;
@@ -6426,9 +6556,13 @@ function watchMergeRequests(root, args) {
       const discardCommit2 = commitDiscardArchive(archiveResult, folder.project, sweepBaseBranch,
         { discardedBranch: folder.branch || null, defaultBase: sweepDefaultBase });
       let worktreeRemoved = 'failed';
+      let worktreeWarnings = [];
       try {
         const wtResult = removeWorktree(root, folder.project, folder);
-        if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+        if (wtResult && wtResult.removed === true) {
+          worktreeRemoved = 'removed';
+          worktreeWarnings = Array.isArray(wtResult.warnings) ? wtResult.warnings : [];
+        }
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
@@ -6450,6 +6584,7 @@ function watchMergeRequests(root, args) {
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      if (worktreeWarnings.length) folderReceipt.worktree_warnings = worktreeWarnings;
       // #328: attach bundle receipt fields after builder (filter bypass)
       if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
         folderReceipt.issue_numbers = folder.issue_numbers;
@@ -6622,13 +6757,17 @@ function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed, probeErrors) {
     }
     if (claimLabelStatus == null) claimLabelStatus = 'failed';
     let worktreeRemoved = 'failed';
+    let worktreeWarnings = [];
     try {
       const wtResult = removeWorktree(root, name, {
         project: name,
         worktree_path: field(content, 'worktree_path') || '',
         branch: field(content, 'branch') || ''
       });
-      if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+      if (wtResult && wtResult.removed === true) {
+        worktreeRemoved = 'removed';
+        worktreeWarnings = Array.isArray(wtResult.warnings) ? wtResult.warnings : [];
+      }
       else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
       else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
     } catch (_) { worktreeRemoved = 'failed'; }
@@ -6641,6 +6780,7 @@ function reconcileArchivedMrRuns(cwdRoot, args, liveProcessed, probeErrors) {
       worktree_removed: worktreeRemoved,
       branch_removed: 'kept'
     });
+    if (worktreeWarnings.length) receipt.worktree_warnings = worktreeWarnings;
     receipt.issue_numbers = members;
     receipt.closed_issues = mClosed.slice().sort((a, b) => a - b);
     receipt.failed_issue_closures = mFailed.slice().sort((a, b) => a - b);
@@ -7304,7 +7444,7 @@ function cmdLegacyWorktreeCleanup() {
   }
 
   const dryRun = !args.execute;
-  const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unprobeable: [], skipped_occupied: [] };
+  const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unprobeable: [], skipped_occupied: [], warnings: [] };
   const dryBuckets = { would_remove: [], skipped_dirty: [], skipped_unprobeable: [] };
 
   for (const wt of legacyWorktrees) {
@@ -7363,13 +7503,13 @@ function cmdLegacyWorktreeCleanup() {
       const rmResult = removeWorktree(root, branch || wtPath, { worktree_path: wtPath });
       if (rmResult.removed) {
         buckets.removed.push(wtPath);
-      } else if (rmResult.reason === 'worktree_occupied'
-        || rmResult.reason === 'worktree_cwd_unverifiable'
-        || rmResult.reason === 'worktree_guard_unavailable') {
-        // #374: same guard refusal as the stale sweep, typed instead of a silent keep.
+        if (Array.isArray(rmResult.warnings)) buckets.warnings.push(...rmResult.warnings);
+      } else if (rmResult.reason === 'worktree_occupied') {
+        // #374/K1: same explicit-occupied hard block as the stale sweep.
         buckets.skipped_occupied.push({ path: wtPath, reason: rmResult.reason,
           occupants: rmResult.occupants || [], route: rmResult.route || '',
-          probe: rmResult.probe, detail: rmResult.detail });
+          probe: rmResult.probe, detail: rmResult.detail,
+          warnings: Array.isArray(rmResult.warnings) ? rmResult.warnings : [] });
       }
     }
   }
