@@ -360,6 +360,20 @@ function runCli(ed, args, cwd) {
   check(verdict.ok
     && /line 1: a blocked mission was renumbered to 2/.test(verdict.warnings.join(' ')),
   'transition: inserting a mission before a blocked line warns and proceeds (not hard-refused)');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([
+    { name: 'todo lane', details: '', status: 'todo' },
+    { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+  ]), schema.serializeLedger([
+    { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+  ]));
+  check(verdict.ok
+    && /line 2: a blocked mission was renumbered to 1/.test(verdict.warnings.join(' ')),
+  'transition: removing a mission before a trailing blocked line warns and proceeds (not hard-refused)');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([
+    { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+  ]), schema.serializeLedger([]));
+  check(!verdict.ok && /a blocked mission may not be removed/.test(verdict.errors.join(' ')),
+    'transition: removing the only blocked line (no move target) stays refused');
 
   // N1: duplicate content must not turn a hand-over or a recoverable transition into a "move".
   const duplicate = { name: 'review', details: 'result: blocked', status: 'blocked' };
@@ -406,9 +420,19 @@ function runCli(ed, args, cwd) {
   'transition[N1]: rewriting the second of two identical failed lines reports immutable, not a renumber');
   verdict = schema.validateLedgerTransition(duplicateDoneText, schema.serializeLedger([duplicateDone]));
   check(!verdict.ok
-    && /a done line may not be removed/.test(verdict.errors.join(' '))
-    && !/renumbered/.test(verdict.errors.join(' ')),
-  'transition[N1]: removing one of two identical done lines reports removal, not a renumber');
+    && /line 2: a done line would be renumbered to 1/.test(verdict.errors.join(' '))
+    && !/line 1: a done line would be renumbered/.test(verdict.errors.join(' ')),
+  'transition[N1]: removing one of two identical done lines names the surviving line, not the vanished slot');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([
+    { name: 'todo lane', details: '', status: 'todo' },
+    duplicateDone,
+    duplicateDone,
+  ]), schema.serializeLedger([duplicateDone, duplicateDone]));
+  check(!verdict.ok
+    && /line 2: a done line would be renumbered to 1/.test(verdict.errors.join(' '))
+    && /line 3: a done line would be renumbered to 2/.test(verdict.errors.join(' '))
+    && !/line 3: a done line would be renumbered to 1/.test(verdict.errors.join(' ')),
+  'transition[R3-3]: duplicate done lines report their actual renumbered positions, not a shared first slot');
 })();
 
 // ---------- 4. the reference writer, all four editions ----------
@@ -454,6 +478,19 @@ function runCli(ed, args, cwd) {
       throws(() => claim.writeMissionLedger(blockedNoHandover, []),
         /line 1: a blocked mission may not be removed/,
         'writer[' + edition + ']: refuses removal of a blocked line without a hand-over');
+      const shiftedBlocked = path.join(dir, 'shifted-blocked.jsonl');
+      claim.writeMissionLedger(shiftedBlocked, [
+        { name: 'todo lane', details: '', status: 'todo' },
+        { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+      ]);
+      const shiftedCapture = captureStderr(() => claim.writeMissionLedger(shiftedBlocked, [
+        { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+      ]));
+      check(!shiftedCapture.error
+        && /mission ledger warning: .*line 2: a blocked mission was renumbered to 1/.test(shiftedCapture.warnings),
+      'writer[' + edition + ']: removing a mission before a trailing blocked line warns and proceeds');
+      check(/"n":1,"name":"blocked lane"/.test(read(shiftedBlocked)),
+        'writer[' + edition + ']: the shifted blocked line is written at its new position');
 
       const recoverable = path.join(dir, 'recoverable.jsonl');
       claim.writeMissionLedger(recoverable, [{ name: 'blocked lane', details: 'result: blocked', status: 'blocked' }]);

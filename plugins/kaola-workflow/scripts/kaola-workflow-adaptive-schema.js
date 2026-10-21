@@ -1757,22 +1757,35 @@ function ledgerContentKey(mission) {
   });
 }
 
-// ledgerMovedIndex — the ONE next position this previous line moved to, or -1 when the evidence is
-// ambiguous. A duplicate is not a move: a next line that is byte-identical to its own previous
-// counterpart is an unchanged line that merely shares this line's content, so it is skipped. If more
-// than one candidate remains, this line's identity among duplicates cannot be proven and no move is
-// claimed. Without both rules, two identical blocked lines would each "match" the other and the
-// owner-approved hand-over would be refused as a renumber.
-function ledgerMovedIndex(beforeMissions, afterMissions, mission, index) {
-  const key = ledgerContentKey(mission);
-  const matches = [];
-  for (let j = 0; j < afterMissions.length; j += 1) {
-    if (j === index) continue;
-    if (ledgerContentKey(afterMissions[j]) !== key) continue;
-    if (beforeMissions[j] && ledgerLine(beforeMissions[j]) === ledgerLine(afterMissions[j])) continue;
-    matches.push(j);
+// ledgerMoveMap — one order-preserving mapping from previous mission index to next mission index
+// for lines whose content (name/details/status, without `n`) is unchanged. An LCS is used rather
+// than "first matching line": with duplicate content the first match belongs to another line, and
+// a per-line first-match made two identical blocked lines refuse each other's hand-over as a
+// renumber. The LCS also keeps the mapping one-to-one, so a duplicate pair reports the actual
+// shifted position instead of both pointing at the first copy. A content-changed line (the
+// hand-over write itself, or a status change) is deliberately unmapped.
+function ledgerMoveMap(beforeMissions, afterMissions) {
+  const n = beforeMissions.length;
+  const m = afterMissions.length;
+  const beforeKeys = beforeMissions.map(ledgerContentKey);
+  const afterKeys = afterMissions.map(ledgerContentKey);
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i += 1) {
+    for (let j = 1; j <= m; j += 1) {
+      dp[i][j] = beforeKeys[i - 1] === afterKeys[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
   }
-  return matches.length === 1 ? matches[0] : -1;
+  const map = new Array(n).fill(-1);
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    if (beforeKeys[i - 1] === afterKeys[j - 1]) { map[i - 1] = j - 1; i -= 1; j -= 1; }
+    else if (dp[i - 1][j] >= dp[i][j - 1]) i -= 1;
+    else j -= 1;
+  }
+  return map;
 }
 
 // validateLedgerTransition — the #1120 rewrite rule, pure. Given the previous and next ledger
@@ -1786,15 +1799,17 @@ function ledgerMovedIndex(beforeMissions, afterMissions, mission, index) {
 //                   `handed-over: #M` may become blocked WITH exactly one token. After that token is
 //                   recorded the line is terminal. A blocked line without the token may still change
 //                   status/details, be renamed in that write, or be renumbered by an insertion or
-//                   removal before it — all recoverable, so each WARNS and proceeds. Removing ANY
-//                   blocked line is refused: with its token it is terminal, and without it the
-//                   record still says the mission was blocked. A token on a non-blocked result is
+//                   removal before it — all recoverable, so each WARNS and proceeds. Removing a
+//                   blocked line is refused only where its slot disappears with no move target; the
+//                   guard is positional, not absolute, because a blocked line without its hand-over
+//                   can first return to `todo` with a warning. A token on a non-blocked result is
 //                   also prose, with a warning.
 //   todo/in-flight  ordinary write moments, unrestricted; removal/renumbering warns.
 //
-// The hard-refusal domain is deliberately narrow: a `done`/`failed`/already-handed-over line whose
-// bytes or `n` would change (rewrite, removal, or middle insert/remove renumber). Everything else
-// is recoverable and warns, per the owner rule of 2026-10-14 14:05.
+// The hard-refusal domain is deliberately narrow: a blocked line's positionally evident removal,
+// plus a `done`/`failed`/already-handed-over line whose bytes or `n` would change (rewrite,
+// removal, or middle insert/remove renumber). Everything else is recoverable and warns, per the
+// owner rule of 2026-10-14 14:05.
 //
 // Appending a new mission is always allowed. Returns { ok, errors, warnings, before, after }.
 function validateLedgerTransition(previousText, nextText) {
@@ -1815,12 +1830,16 @@ function validateLedgerTransition(previousText, nextText) {
     return { ok: true, errors, warnings, before: before.missions, after: after.missions };
   }
   const count = Math.max(before.missions.length, after.missions.length);
+  const moveMap = ledgerMoveMap(before.missions, after.missions);
   for (let i = 0; i < count; i += 1) {
     const prev = before.missions[i];
     if (!prev) continue;   // an appended mission is a new record, never a rewrite
     const next = after.missions[i];
-    if (next && ledgerLine(prev) === ledgerLine(next)) continue;
-    const movedTo = ledgerMovedIndex(before.missions, after.missions, prev, i);
+    const movedTo = moveMap[i];
+    // An exact byte match means "unchanged" ONLY when the order-preserving map also keeps this line
+    // at its own index. With duplicates, the line at the old index can be a different identical
+    // mission; treating that as unchanged hides the real move and lets it keep a stale message.
+    if (next && ledgerLine(prev) === ledgerLine(next) && (movedTo < 0 || movedTo === i)) continue;
 
     if (prev.status === 'done' || prev.status === 'failed') {
       if (movedTo >= 0 && movedTo !== i) {
@@ -1848,13 +1867,13 @@ function validateLedgerTransition(previousText, nextText) {
         }
         continue;
       }
-      if (!next) {
-        errors.push('line ' + prev.n + ': a blocked mission may not be removed');
-        continue;
-      }
       if (movedTo >= 0 && movedTo !== i) {
         warnings.push('line ' + prev.n + ': a blocked mission was renumbered to '
           + (movedTo + 1) + ' (recoverable; blocked lines are not terminal until their hand-over)');
+        continue;
+      }
+      if (!next) {
+        errors.push('line ' + prev.n + ': a blocked mission may not be removed');
         continue;
       }
       if (nextHandover.valid > 0) {
