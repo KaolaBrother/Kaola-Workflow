@@ -3639,11 +3639,12 @@ function prepareMissionLedger(root, issueNumber) {
 // key order, positional `n`. Refuses a mission array that would not validate.
 //
 // #1120: the rewrite rule. The writer reads the previous bytes before replacing them and asks the
-// kernel's pure transition rule what this write would do. A `done`/`failed` line (or a `blocked`
-// line that already records its one hand-over) may not be rewritten or removed — that would destroy
-// the only record of a finished mission and is hard-refused. A blocked line's one hand-over write is
-// allowed. Every other recoverable condition warns on stderr and proceeds, per the owner rule: never
-// hard-block normal behavior for a recoverable situation.
+// kernel's pure transition rule what this write would do. A `done`/`failed` line may not be
+// rewritten or removed, no blocked line may be removed, and a blocked line that already records its
+// one hand-over is terminal to rewrites too — that would destroy the only record of a finished
+// mission and is hard-refused. A blocked line's one hand-over write is allowed (and warns if it
+// drops the previous details text). Every other recoverable condition warns on stderr and proceeds,
+// per the owner rule: never hard-block normal behavior for a recoverable situation.
 function writeMissionLedger(file, missions) {
   const text = serializeLedger(missions);
   const verdict = validateLedger(text);
@@ -3654,7 +3655,13 @@ function writeMissionLedger(file, missions) {
   if (previous !== null) {
     const transition = adaptiveSchema.validateLedgerTransition(previous, text);
     if (!transition.ok) throw new Error('mission ledger rewrite refused: ' + transition.errors.join('; '));
-    for (const warning of transition.warnings) {
+    for (const warning of verdict.warnings.concat(transition.warnings)) {
+      process.stderr.write('mission ledger warning: ' + warning + '\n');
+    }
+  } else {
+    // A first write has no previous bytes to compare; still surface any shape warning (for example
+    // hand-over-shaped prose on a non-blocked line) instead of swallowing it.
+    for (const warning of verdict.warnings) {
       process.stderr.write('mission ledger warning: ' + warning + '\n');
     }
   }
@@ -4888,10 +4895,27 @@ function cmdFinalize() {
     const ledgerIssueNumber = field(finalizeAuthorityState, 'issue_number');
     const ledgerFile = ledgerIssueNumber ? liveLedgerPath(root, ledgerIssueNumber) : null;
     if (ledgerFile && fs.existsSync(ledgerFile)) {
-      const ledgerVerdict = adaptiveSchema.validateLedgerFinalize(fs.readFileSync(ledgerFile, 'utf8'));
-      finalizeTx.mission_ledger = ledgerVerdict.state;
-      for (const warning of ledgerVerdict.warnings) {
-        recordFinalizeFinding(warning.code, warning.summary, warning.lines);
+      // A path that exists but cannot be read (a directory, a permission fault) is a finding, not a
+      // crash: the mirror step above may already have written, and the owner rule says report a
+      // recoverable condition and proceed. Only the read/validate is guarded, so a real finding
+      // write is never swallowed under `unreadable`.
+      let ledgerVerdict = null;
+      try {
+        ledgerVerdict = adaptiveSchema.validateLedgerFinalize(fs.readFileSync(ledgerFile, 'utf8'));
+      } catch (_) {
+        finalizeTx.mission_ledger = 'unreadable';
+      }
+      if (ledgerVerdict) {
+        finalizeTx.mission_ledger = ledgerVerdict.state;
+        for (const warning of ledgerVerdict.warnings) {
+          if (warning.code === 'blocked_without_handover') {
+            recordFinalizeFinding('blocked_without_handover', warning.summary, warning.lines);
+          } else if (warning.code === 'mission_ledger_invalid') {
+            recordFinalizeFinding('mission_ledger_invalid', warning.summary, warning.lines);
+          } else {
+            recordFinalizeFinding(warning.code, warning.summary, warning.lines);
+          }
+        }
       }
     } else if (ledgerIssueNumber) {
       finalizeTx.mission_ledger = 'absent';

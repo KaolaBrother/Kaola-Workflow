@@ -662,7 +662,8 @@ not support it.
 | `residue_attribution` | `unattributable_unknown`, present only when the attribution above could not be made at all — git could not be asked, or the branch carries no commits of its own. The residue is staged exactly as it was before this classification existed, and this field is why: with no evidence of what the run authored, "all of it is foreign" would be an ordinary run left unfinished rather than a finding |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
-| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `residue_unattributed`, `finalize_commit_probe_failed`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
+| `mission_ledger` | the run's mission-ledger state read **before archive**: `complete`, `handed_over`, `blocked_without_handover`, `invalid`, `absent`, or `unreadable`. `absent` is the expected crash-resume answer once archive has already moved the ledger; `unreadable` is an existing path that could not be read (for example a directory), reported instead of crashing mid-transaction. A blocked line without its `handed-over: #M` is recoverable: it raises `blocked_without_handover` and finalize still closes |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `residue_unattributed`, `finalize_commit_probe_failed`, `claim_release_skipped_offline`, `blocked_without_handover`, `mission_ledger_invalid`. Absent or empty on a healthy **online** run |
 
 `finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
 happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
@@ -693,8 +694,8 @@ claimed online, so the finding is worded conditionally and names the issues it a
 report, not a gate, and `closure_invariants.ok` stays `true` — `skipped_offline` remains an allowed
 value of that invariant, unchanged.
 
-**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **seven**
-finding types where canonical and Codex raise **eight**. The delta is exactly one, `archive_unstage_failed`.
+**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **nine**
+finding types where canonical and Codex raise **ten**. The delta is exactly one, `archive_unstage_failed`.
 All four editions now stage the archive the same way — a `git rm -r --cached` of the live run folder
 followed by a scoped `git add` of a computed candidate-path list — but the forge ports run both calls
 inside **one** try/catch, so a fault in either raises the single `archive_stage_failed`, while
@@ -918,9 +919,9 @@ agent writing the file by hand is likeliest to omit, and both remediation hints 
 | `LEDGER_KEYS` | frozen `['n', 'name', 'details', 'status']` |
 | `LEDGER_STATUSES` | frozen `['todo', 'in-flight', 'done', 'failed', 'blocked']` |
 | `ledgerPath(mainRoot, issueNumber)` | pure path join `<mainRoot>/kaola-workflow/.ledger/issue-<N>.jsonl`; `null` unless `issueNumber` is a positive integer |
-| `validateLedger(text)` | pure shape rule: every line parses to an object with keys exactly `LEDGER_KEYS` in order, `n` runs 1..k with no gap, `name` one non-empty line, `details` a string, `status` in `LEDGER_STATUSES`. A `details` string may carry at most one well-formed `handed-over: #M` (positive issue number), and only on a `blocked` line. Returns `{ ok, missions, errors }`; `missions` holds every line that parsed |
-| `ledgerHandovers(details)` | count and decode the `handed-over: #M` tokens in one `details` string: `{ total, valid, issues }` |
-| `validateLedgerTransition(previousText, nextText)` | pure rewrite rule for the reference writer: `done`/`failed` lines are immutable, a `blocked` line gets exactly one hand-over write (adding/updating `handed-over: #M`), and a blocked line that already carries the token is terminal. Removing a terminal line or renaming it during the hand-over write is refused. A blocked line returning to `in-flight` after a ruling, or an unparseable previous ledger, warns and proceeds. Returns `{ ok, errors, warnings, before, after }` |
+| `validateLedger(text)` | pure shape rule: every line parses to an object with keys exactly `LEDGER_KEYS` in order, `n` runs 1..k with no gap, `name` one non-empty line, `details` a string, `status` in `LEDGER_STATUSES`. A `blocked` line's `details` may carry at most one well-formed `handed-over: #M` (the exact sentence form: non-word left boundary, one space, positive decimal issue number). Hand-over-shaped prose on a non-blocked line is a warning, not an error. Returns `{ ok, missions, errors, warnings }`; `missions` holds every line that parsed |
+| `ledgerHandovers(details)` | count and decode the hand-over spans in one `details` string: `{ total, valid, issues }`, where `valid` counts only the exact `handed-over: #M` form |
+| `validateLedgerTransition(previousText, nextText)` | pure rewrite rule for the reference writer: `done`/`failed` lines are immutable, a `blocked` line gets exactly one hand-over write (adding `handed-over: #M` while preserving the previous details text), and a blocked line that already carries the token is terminal. Removing or renumbering a done/failed/blocked/handed-over line and renaming it during the hand-over write are refused, with the actual offending line named; a hand-over write that drops the previous details text warns rather than refusing. A blocked line returning to `in-flight`/`done`/`failed` after a ruling, or an unparseable previous ledger, warns and proceeds. Returns `{ ok, errors, warnings, before, after }` |
 | `validateLedgerFinalize(text)` | finalize-side reading: never refuses. Returns `{ ok, state, warnings, handovers, missions, errors }`, where `state` is `complete`, `handed_over`, `blocked_without_handover`, or `invalid`; a blocked line without its hand-over is an advisory warning |
 | `serializeLedger(missions)` | canonical bytes: one line per mission, fixed key order, `n` = index + 1 (never the caller's), trailing newline |
 

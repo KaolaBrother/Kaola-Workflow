@@ -71,8 +71,12 @@ const LEDGER_STATUSES = Object.freeze(['todo', 'in-flight', 'done', 'failed', 'b
 // `done`/`failed` line is immutable, and a blocked line that already carries the token is terminal
 // to the writer. Whether the target issue is actually open is a forge fact this pure module cannot
 // read; finalize reports that boundary as an advisory finding instead of inventing a verdict.
-const LEDGER_HANDOVER_ANY = /handed-over:/g;
-const LEDGER_HANDOVER_VALID = /handed-over:[ \t]*#[1-9][0-9]*/g;
+//
+// The token is anchored to the sentence's exact form: a left boundary that is not a word or hyphen
+// (so `not-handed-over:` is prose, not a token), one space after the colon, `#` and decimal digits
+// only, and no trailing letter/underscore/hyphen (so `#12abc` is malformed). A non-blocked line
+// carrying hand-over-shaped prose is a warning, because a done line's historical note is not a
+// hand-over and must not become a writer crash (owner rule, 2026-10-14 14:05).
 
 // The retired frozen-plan artifact. Kept only as a name: the finalize mirror still has to recognise
 // a legacy project folder that carries one, and nothing authors it any more.
@@ -1664,27 +1668,34 @@ function ledgerPath(mainRoot, issueNumber) {
   return path.join(String(mainRoot || ''), LEDGER_DIR_REL, 'issue-' + n + '.jsonl');
 }
 
-// ledgerHandovers — the hand-over tokens a `details` string carries, counted and decoded. A token is
-// valid only in the owner-approved form `handed-over: #M` with M a positive issue number; anything
-// else that starts with `handed-over:` is counted as malformed so the validator can refuse it.
+// ledgerHandovers — the hand-over tokens a `details` string carries, counted and decoded. `total`
+// counts hand-over-SHAPED spans (a token start, whatever follows); `valid` counts only the exact
+// owner form `handed-over: #M` with M a positive issue number. The left boundary excludes a word or
+// hyphen, so `not-handed-over: #5` is prose rather than a near-miss token.
 function ledgerHandovers(details) {
   const text = String(details == null ? '' : details);
-  const all = text.match(LEDGER_HANDOVER_ANY) || [];
-  const valid = text.match(LEDGER_HANDOVER_VALID) || [];
+  const shaped = /(^|[^A-Za-z0-9_-])handed-over:/g;
+  const token = /(^|[^A-Za-z0-9_-])handed-over: #([1-9][0-9]*)(?![A-Za-z0-9_-])/g;
+  const issues = [];
+  let match;
+  while ((match = token.exec(text)) !== null) issues.push(Number(match[2]));
   return {
-    total: all.length,
-    valid: valid.length,
-    issues: valid.map(token => Number(token.replace(/^handed-over:[ \t]*#/, ''))),
+    total: (text.match(shaped) || []).length,
+    valid: issues.length,
+    issues,
   };
 }
 
 // validateLedger — the shape rule, pure. Every non-empty line parses to an object whose keys are
 // EXACTLY `n,name,details,status` in that order, `n` runs 1..k with no gap, `name` is a one-line
-// non-empty string, `details` a string, `status` a member of LEDGER_STATUSES. A `details` string
-// may carry at most one well-formed `handed-over: #M`, and only on a `blocked` line. Returns
-// { ok, missions, errors } — `missions` holds every line that parsed, so a reader can still count.
+// non-empty string, `details` a string, `status` a member of LEDGER_STATUSES. A `blocked` line's
+// `details` may carry at most one well-formed `handed-over: #M`; a non-blocked line carrying
+// hand-over-shaped prose gets a warning rather than an error (owner rule: warn and proceed when the
+// condition is recoverable). Returns { ok, missions, errors, warnings } — `missions` holds every
+// line that parsed, so a reader can still count.
 function validateLedger(text) {
   const errors = [];
+  const warnings = [];
   const missions = [];
   const lines = String(text == null ? '' : text).split('\n');
   if (lines.length && lines[lines.length - 1] === '') lines.pop();
@@ -1700,13 +1711,16 @@ function validateLedger(text) {
     if (!LEDGER_STATUSES.includes(obj.status)) errors.push(at + ': status must be one of ' + LEDGER_STATUSES.join('|'));
     if (typeof obj.details === 'string') {
       const handovers = ledgerHandovers(obj.details);
-      if (handovers.total > 1) errors.push(at + ': details may carry at most one handed-over: #M');
-      if (handovers.total !== handovers.valid) errors.push(at + ': handed-over must be `handed-over: #M` with a positive issue number');
-      if (handovers.valid > 0 && obj.status !== 'blocked') errors.push(at + ': handed-over is only allowed on a blocked line');
+      if (obj.status === 'blocked') {
+        if (handovers.total > 1) errors.push(at + ': details may carry at most one handed-over: #M');
+        if (handovers.total !== handovers.valid) errors.push(at + ': handed-over must be `handed-over: #M` with a positive issue number');
+      } else if (handovers.total > 0) {
+        warnings.push(at + ': handed-over is only meaningful on a blocked line; treating the text as prose');
+      }
     }
     missions.push(obj);
   });
-  return { ok: errors.length === 0, missions, errors };
+  return { ok: errors.length === 0, missions, errors, warnings };
 }
 
 // serializeLedger — the canonical bytes for a mission array: one line per mission, keys in the fixed
@@ -1732,18 +1746,41 @@ function ledgerLine(mission) {
   });
 }
 
+// ledgerContentKey — a mission's bytes WITHOUT `n`. Used to tell a line that was rewritten from a
+// line that merely moved because a mission was inserted or removed before it; `n` is positional, so
+// a positional compare alone blames the terminal line that shifted instead of the edit that moved it.
+function ledgerContentKey(mission) {
+  return JSON.stringify({
+    name: String(mission && mission.name != null ? mission.name : ''),
+    details: String(mission && mission.details != null ? mission.details : ''),
+    status: String(mission && mission.status != null ? mission.status : 'todo')
+  });
+}
+
+function ledgerContentIndex(missions, mission) {
+  const key = ledgerContentKey(mission);
+  for (let i = 0; i < missions.length; i += 1) {
+    if (ledgerContentKey(missions[i]) === key) return i;
+  }
+  return -1;
+}
+
 // validateLedgerTransition — the #1120 rewrite rule, pure. Given the previous and next ledger
 // bytes, decide which changes are refused and which are recoverable warnings.
 //
 //   done / failed   immutable: any byte change, removal, or renumber is an ERROR (it would destroy
-//                   the only record of a finished mission).
+//                   the only record of a finished mission). The error names the terminal line whose
+//                   bytes changed, not whichever line happens to sit at that index after an insert
+//                   or removal.
 //   blocked         the owner-approved hand-over is the ONE extra write: a blocked line with no
-//                   `handed-over: #M` may become blocked WITH exactly one token, keeping its name.
-//                   After that token is recorded the line is terminal too. A blocked line without
-//                   the token may still return to in-flight or reach a terminal result after a
-//                   ruling — that is normal, recoverable behavior, so it WARNS and proceeds rather
-//                   than hard-blocking. Removing a blocked line is refused.
-//   todo/in-flight  ordinary write moments, unrestricted.
+//                   `handed-over: #M` may become blocked WITH exactly one token, keeping its name
+//                   and its previous details text. After that token is recorded the line is
+//                   terminal too. A blocked line without the token may still return to in-flight or
+//                   reach a terminal result after a ruling — that is normal, recoverable behavior,
+//                   so it WARNS and proceeds rather than hard-blocking. Removing ANY blocked line
+//                   is refused: with its token it is terminal, and without it the record still
+//                   says the mission was blocked.
+//   todo/in-flight  ordinary write moments, unrestricted; removal/renumbering warns.
 //
 // Appending a new mission is always allowed. Returns { ok, errors, warnings, before, after }.
 function validateLedgerTransition(previousText, nextText) {
@@ -1766,29 +1803,44 @@ function validateLedgerTransition(previousText, nextText) {
   const count = Math.max(before.missions.length, after.missions.length);
   for (let i = 0; i < count; i += 1) {
     const prev = before.missions[i];
-    const next = after.missions[i];
     if (!prev) continue;   // an appended mission is a new record, never a rewrite
-    if (!next) {
-      if (prev.status === 'done' || prev.status === 'failed' || prev.status === 'blocked') {
-        errors.push('line ' + prev.n + ': a terminal ' + prev.status + ' mission may not be removed');
-      } else {
-        warnings.push('line ' + prev.n + ': a non-terminal mission was removed; later mission numbers shift (recoverable)');
-      }
-      continue;
-    }
+    const next = after.missions[i];
+    if (next && ledgerLine(prev) === ledgerLine(next)) continue;
+    const movedTo = ledgerContentIndex(after.missions, prev);
+
     if (prev.status === 'done' || prev.status === 'failed') {
-      if (ledgerLine(prev) !== ledgerLine(next)) {
+      if (movedTo >= 0 && movedTo !== i) {
+        errors.push('line ' + prev.n + ': a ' + prev.status + ' line would be renumbered to '
+          + (movedTo + 1) + '; terminal lines may not be renumbered');
+      } else if (!next) {
+        errors.push('line ' + prev.n + ': a ' + prev.status + ' line may not be removed');
+      } else {
         errors.push('line ' + prev.n + ': a ' + prev.status + ' line is immutable and may not be rewritten');
       }
       continue;
     }
+
     if (prev.status === 'blocked') {
       const priorHandover = ledgerHandovers(prev.details);
-      const nextHandover = ledgerHandovers(next.details);
+      const nextHandover = ledgerHandovers(next && next.details);
       if (priorHandover.valid > 0) {
-        if (ledgerLine(prev) !== ledgerLine(next)) {
+        if (movedTo >= 0 && movedTo !== i) {
+          errors.push('line ' + prev.n + ': a blocked line that already records its hand-over would be renumbered to '
+            + (movedTo + 1) + '; it is terminal');
+        } else if (!next) {
+          errors.push('line ' + prev.n + ': a blocked line that already records its hand-over is terminal and may not be removed');
+        } else {
           errors.push('line ' + prev.n + ': the one allowed handed-over: #M write is already recorded; the blocked line is now terminal');
         }
+        continue;
+      }
+      if (!next) {
+        errors.push('line ' + prev.n + ': a blocked mission may not be removed');
+        continue;
+      }
+      if (movedTo >= 0 && movedTo !== i) {
+        errors.push('line ' + prev.n + ': a blocked mission would be renumbered to '
+          + (movedTo + 1) + '; mission numbers may not be reassigned');
         continue;
       }
       if (nextHandover.valid > 0) {
@@ -1796,13 +1848,31 @@ function validateLedgerTransition(previousText, nextText) {
           errors.push('line ' + prev.n + ': handed-over: #M is only allowed on a blocked line');
         } else if (next.name !== prev.name) {
           errors.push('line ' + prev.n + ': the hand-over write may not rename the mission');
+        } else if (!String(next.details).startsWith(String(prev.details))) {
+          warnings.push('line ' + prev.n + ': the hand-over write did not preserve the previous details text'
+            + ' (recoverable; the outcome locator may have been dropped)');
         }
         continue;
       }
-      if (ledgerLine(prev) !== ledgerLine(next)) {
-        warnings.push('line ' + prev.n + ': blocked line changed without a handed-over: #M write'
-          + ' (recoverable; record the hand-over before finalize if one exists)');
+      warnings.push('line ' + prev.n + ': blocked line changed without a handed-over: #M write'
+        + ' (recoverable; record the hand-over before finalize if one exists)');
+      continue;
+    }
+
+    // todo / in-flight: ordinary writes. A removal or a move (normally caused by an inserted or
+    // removed mission before this one) is recoverable, so warn rather than hard-block.
+    if (!next) {
+      if (after.missions.length < before.missions.length && movedTo < 0) {
+        warnings.push('line ' + prev.n + ': a ' + prev.status + ' mission was removed; later mission numbers shift (recoverable)');
       }
+      continue;
+    }
+    if (movedTo < 0 && after.missions.length < before.missions.length) {
+      warnings.push('line ' + prev.n + ': a ' + prev.status + ' mission was removed; later mission numbers shift (recoverable)');
+    }
+    if (movedTo >= 0 && movedTo !== i) {
+      warnings.push('line ' + prev.n + ': a ' + prev.status + ' mission would be renumbered to '
+        + (movedTo + 1) + ' (recoverable)');
     }
   }
   return { ok: errors.length === 0, errors, warnings, before: before.missions, after: after.missions };

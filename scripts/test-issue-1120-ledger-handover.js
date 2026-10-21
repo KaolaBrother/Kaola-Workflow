@@ -57,6 +57,24 @@ function throws(fn, pattern, message) {
   if (error) check(pattern.test(String(error.message || error)), message + ' (wrong error: ' + error.message + ')');
 }
 function write(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); }
+function captureStderr(fn) {
+  const original = process.stderr.write;
+  let text = '';
+  process.stderr.write = chunk => { text += String(chunk); return true; };
+  let error = null;
+  try { fn(); } catch (e) { error = e; }
+  finally { process.stderr.write = original; }
+  return { error, warnings: text };
+}
+function findingSection(file, type) {
+  if (!fs.existsSync(file)) return null;
+  const text = fs.readFileSync(file, 'utf8');
+  const start = text.indexOf('\n### ' + type + '\n');
+  if (start < 0) return null;
+  const rest = text.slice(start + 1);
+  const next = rest.indexOf('\n### ');
+  return next < 0 ? rest : rest.slice(0, next);
+}
 
 function fixtureRepo(tmp, name) {
   const root = path.join(tmp, name);
@@ -149,12 +167,11 @@ function runCli(ed, args, cwd) {
     'validator: ledgerHandovers decodes one positive issue number, got ' + JSON.stringify(decoded));
 
   const invalid = {
-    'hand-over on done': [{ name: 'x', details: 'result: done | handed-over: #7', status: 'done' }],
-    'hand-over on failed': [{ name: 'x', details: 'result: failed | handed-over: #7', status: 'failed' }],
-    'hand-over on in-flight': [{ name: 'x', details: 'dispatched: self | handed-over: #7', status: 'in-flight' }],
     'hand-over without a number': [{ name: 'x', details: 'result: blocked | handed-over: #M', status: 'blocked' }],
     'hand-over without a hash': [{ name: 'x', details: 'result: blocked | handed-over: 7', status: 'blocked' }],
     'hand-over zero': [{ name: 'x', details: 'result: blocked | handed-over: #0', status: 'blocked' }],
+    'hand-over without the sentence space': [{ name: 'x', details: 'result: blocked | handed-over:#7', status: 'blocked' }],
+    'hand-over with a trailing suffix': [{ name: 'x', details: 'result: blocked | handed-over: #12abc', status: 'blocked' }],
     'two hand-overs': [{ name: 'x', details: 'handed-over: #7 | handed-over: #8', status: 'blocked' }],
   };
   for (const [label, rows] of Object.entries(invalid)) {
@@ -166,9 +183,25 @@ function runCli(ed, args, cwd) {
     { name: 'b', details: 'blocked | handed-over: #8', status: 'blocked' },
   ])).ok, 'validator: one hand-over per blocked line is legal on more than one line');
   check(!schema.validateLedger(schema.serializeLedger([
-    { name: 'closed target', details: 'blocked | handed-over: #7', status: 'blocked' },
-  ]).replace('handed-over: #7', 'handed-over: owner said later')).ok,
-  'validator: a malformed hand-over token is refused rather than read as prose');
+    { name: 'closed target', details: 'blocked | handed-over: owner said later', status: 'blocked' },
+  ])).ok, 'validator: a malformed hand-over token on a blocked line is refused rather than read as prose');
+  const notToken = schema.validateLedger(schema.serializeLedger([
+    { name: 'not a token', details: 'blocked | not-handed-over: #5', status: 'blocked' },
+  ]));
+  check(notToken.ok && !notToken.warnings.some(warning => /handed-over/.test(warning)),
+    'validator: not-handed-over is prose, not a near-miss token');
+  for (const status of ['done', 'failed', 'in-flight', 'todo']) {
+    const prose = schema.validateLedger(schema.serializeLedger([
+      { name: 'historical note', details: 'result: ' + status + ' | handed-over: #7', status },
+    ]));
+    check(prose.ok && prose.warnings.some(warning => /only meaningful on a blocked line/.test(warning)),
+      'validator: hand-over-shaped text on a ' + status + ' line is a warning, not an error');
+    const freeText = schema.validateLedger(schema.serializeLedger([
+      { name: 'historical note', details: 'handed-over: see notes', status },
+    ]));
+    check(freeText.ok && freeText.warnings.some(warning => /only meaningful on a blocked line/.test(warning)),
+      'validator: free-text handed-over: prose on a ' + status + ' line is a warning, not an error');
+  }
 })();
 
 // ---------- 3. the transition rule, pure ----------
@@ -203,18 +236,47 @@ function runCli(ed, args, cwd) {
   ]));
   check(!verdict.ok && /immutable/.test(verdict.errors.join(' ')),
     'transition: a done line rewrite is refused');
-  verdict = schema.validateLedgerTransition(base, schema.serializeLedger([
+  for (const [target, label] of [['in-flight', 'in-flight'], ['done', 'done'], ['failed', 'failed']]) {
+    verdict = schema.validateLedgerTransition(base, schema.serializeLedger([
+      { name: 'done lane', details: 'result: pull request', status: 'done' },
+      { name: 'blocked lane', details: 'result: ' + target, status: target },
+      { name: 'flow lane', details: 'dispatched: self', status: 'in-flight' },
+    ]));
+    check(verdict.ok && /blocked line changed without a handed-over/.test(verdict.warnings.join(' ')),
+      'transition: blocked -> ' + label + ' after a ruling warns and proceeds (recoverable)');
+  }
+  verdict = schema.validateLedgerTransition(handover, schema.serializeLedger([
     { name: 'done lane', details: 'result: pull request', status: 'done' },
-    { name: 'blocked lane', details: 'result: blocked', status: 'in-flight' },
+    { name: 'blocked lane', details: 'result: blocked | handed-over: #77', status: 'done' },
     { name: 'flow lane', details: 'dispatched: self', status: 'in-flight' },
   ]));
-  check(verdict.ok && /blocked line changed without a handed-over/.test(verdict.warnings.join(' ')),
-    'transition: blocked returning to in-flight after a ruling warns and proceeds (recoverable)');
+  check(!verdict.ok && /already recorded/.test(verdict.errors.join(' ')),
+    'transition: a handed-over line changing status is refused');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]), schema.serializeLedger([]));
+  check(!verdict.ok && /line 1: a done line may not be removed/.test(verdict.errors.join(' ')),
+    'transition: removing a done line is refused with the actual line named');
   verdict = schema.validateLedgerTransition(base, schema.serializeLedger([
     { name: 'done lane', details: 'result: pull request', status: 'done' },
+    { name: 'blocked lane', details: 'result: blocked', status: 'done' },
+    { name: 'flow lane', details: 'dispatched: self', status: 'in-flight' },
   ]));
-  check(!verdict.ok && /(may not be removed|already recorded)/.test(verdict.errors.join(' ')),
-    'transition: removing a terminal line (and thus renumbering) is refused');
+  check(verdict.ok, 'transition: a blocked line may reach a terminal done result');
+  const blockedOnly = schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+    { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
+  ]);
+  verdict = schema.validateLedgerTransition(blockedOnly, schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]));
+  check(!verdict.ok && /a blocked mission may not be removed/.test(verdict.errors.join(' ')),
+    'transition: removing a blocked line without a hand-over is refused');
+  verdict = schema.validateLedgerTransition(handover, schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]));
+  check(!verdict.ok && /already records its hand-over is terminal and may not be removed/.test(verdict.errors.join(' ')),
+    'transition: removing a handed-over blocked line names the terminal hand-over');
   verdict = schema.validateLedgerTransition(base, schema.serializeLedger([
     { name: 'done lane', details: 'result: pull request', status: 'done' },
     { name: 'blocked lane', details: 'result: blocked', status: 'blocked' },
@@ -229,6 +291,44 @@ function runCli(ed, args, cwd) {
   ]));
   check(!verdict.ok && /rename/.test(verdict.errors.join(' ')),
     'transition: the hand-over write may not rename the mission');
+  verdict = schema.validateLedgerTransition(base, schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+    { name: 'blocked lane', details: 'handed-over: #77', status: 'blocked' },
+    { name: 'flow lane', details: 'dispatched: self', status: 'in-flight' },
+  ]));
+  check(verdict.ok && /did not preserve the previous details text/.test(verdict.warnings.join(' ')),
+    'transition: a hand-over write that drops the previous details text warns');
+  verdict = schema.validateLedgerTransition('not a ledger\n', base);
+  check(verdict.ok && /previous ledger did not validate/.test(verdict.warnings.join(' ')),
+    'transition: an unparseable previous ledger warns and proceeds');
+  const beforeMiddle = schema.serializeLedger([
+    { name: 'todo lane', details: '', status: 'todo' },
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]);
+  verdict = schema.validateLedgerTransition(beforeMiddle, schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]));
+  check(!verdict.ok
+    && /line 2: a done line would be renumbered to 1/.test(verdict.errors.join(' '))
+    && /line 1: a todo mission was removed/.test(verdict.warnings.join(' ')),
+  'transition: removing a todo before a done names both the removed line and the renumbered done line');
+  const beforeInsert = schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]);
+  verdict = schema.validateLedgerTransition(beforeInsert, schema.serializeLedger([
+    { name: 'todo lane', details: '', status: 'todo' },
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]));
+  check(!verdict.ok && /line 1: a done line would be renumbered to 2/.test(verdict.errors.join(' ')),
+    'transition: inserting a todo before a done names the renumbered done line');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+    { name: 'todo lane', details: '', status: 'todo' },
+  ]), schema.serializeLedger([
+    { name: 'done lane', details: 'result: pull request', status: 'done' },
+  ]));
+  check(verdict.ok && /line 2: a todo mission was removed/.test(verdict.warnings.join(' ')),
+    'transition: removing a trailing todo warns and proceeds');
 })();
 
 // ---------- 4. the reference writer, all four editions ----------
@@ -264,24 +364,82 @@ function runCli(ed, args, cwd) {
       check(fs.readFileSync(file).equals(handedOverBytes),
         'writer[' + edition + ']: a refused second hand-over leaves the bytes untouched');
       throws(() => claim.writeMissionLedger(file, [base[0]]),
-        /may not be removed|already recorded/, 'writer[' + edition + ']: refuses removal of a terminal line');
+        /already records its hand-over is terminal and may not be removed/,
+        'writer[' + edition + ']: refuses removal of a handed-over line with the exact terminal reason');
       check(fs.readFileSync(file).equals(handedOverBytes),
         'writer[' + edition + ']: a refused removal leaves the bytes untouched');
 
+      const blockedNoHandover = path.join(dir, 'blocked-no-handover.jsonl');
+      claim.writeMissionLedger(blockedNoHandover, [{ name: 'blocked lane', details: 'result: blocked', status: 'blocked' }]);
+      throws(() => claim.writeMissionLedger(blockedNoHandover, []),
+        /line 1: a blocked mission may not be removed/,
+        'writer[' + edition + ']: refuses removal of a blocked line without a hand-over');
+
       const recoverable = path.join(dir, 'recoverable.jsonl');
       claim.writeMissionLedger(recoverable, [{ name: 'blocked lane', details: 'result: blocked', status: 'blocked' }]);
-      const originalWrite = process.stderr.write;
-      let warnings = '';
-      process.stderr.write = chunk => { warnings += String(chunk); return true; };
-      try {
-        claim.writeMissionLedger(recoverable, [{ name: 'blocked lane', details: 'result: blocked', status: 'in-flight' }]);
-      } finally {
-        process.stderr.write = originalWrite;
-      }
-      check(/mission ledger warning: .*blocked line changed without a handed-over/.test(warnings),
-        'writer[' + edition + ']: a recoverable blocked -> in-flight change warns');
+      let captured = captureStderr(() => claim.writeMissionLedger(recoverable,
+        [{ name: 'blocked lane', details: 'result: blocked', status: 'in-flight' }]));
+      check(!captured.error
+        && /mission ledger warning: .*blocked line changed without a handed-over/.test(captured.warnings),
+      'writer[' + edition + ']: a recoverable blocked -> in-flight change warns');
       check(/"status":"in-flight"/.test(read(recoverable)),
-        'writer[' + edition + ']: the warned recoverable change still proceeds');
+        'writer[' + edition + ']: the warned blocked -> in-flight change still proceeds');
+      for (const target of ['done', 'failed']) {
+        const terminal = path.join(dir, 'recoverable-' + target + '.jsonl');
+        claim.writeMissionLedger(terminal, [{ name: 'blocked lane', details: 'result: blocked', status: 'blocked' }]);
+        captured = captureStderr(() => claim.writeMissionLedger(terminal,
+          [{ name: 'blocked lane', details: 'result: ' + target, status: target }]));
+        check(!captured.error
+          && /mission ledger warning: .*blocked line changed without a handed-over/.test(captured.warnings),
+        'writer[' + edition + ']: a recoverable blocked -> ' + target + ' change warns');
+        check(JSON.parse(read(terminal)).status === target,
+          'writer[' + edition + ']: the warned blocked -> ' + target + ' change still proceeds');
+      }
+
+      const invalidPrevious = path.join(dir, 'invalid-previous.jsonl');
+      write(invalidPrevious, '{not json}\n');
+      captured = captureStderr(() => claim.writeMissionLedger(invalidPrevious,
+        [{ name: 'repaired lane', details: '', status: 'todo' }]));
+      check(!captured.error
+        && /mission ledger warning: .*previous ledger did not validate/.test(captured.warnings),
+      'writer[' + edition + ']: an unparseable previous ledger warns and the repair write proceeds');
+      check(/"name":"repaired lane"/.test(read(invalidPrevious)),
+        'writer[' + edition + ']: the repaired ledger is written over the unparseable bytes');
+
+      const prose = path.join(dir, 'done-prose.jsonl');
+      captured = captureStderr(() => claim.writeMissionLedger(prose,
+        [{ name: 'done lane', details: 'result: done | handed-over: see notes', status: 'done' }]));
+      check(!captured.error
+        && /mission ledger warning: .*only meaningful on a blocked line/.test(captured.warnings),
+      'writer[' + edition + ']: hand-over-shaped prose on a done line warns instead of crashing');
+      check(/handed-over: see notes/.test(read(prose)),
+        'writer[' + edition + ']: the prose line is written unchanged');
+      captured = captureStderr(() => claim.writeMissionLedger(prose,
+        [{ name: 'done lane', details: 'result: done | handed-over: see notes', status: 'done' }]));
+      check(!captured.error
+        && /mission ledger warning: .*only meaningful on a blocked line/.test(captured.warnings),
+      'writer[' + edition + ']: an idempotent write over done prose still warns and proceeds');
+
+      const drop = path.join(dir, 'drop-details.jsonl');
+      claim.writeMissionLedger(drop, [{ name: 'blocked lane', details: 'result: blocked | notes', status: 'blocked' }]);
+      captured = captureStderr(() => claim.writeMissionLedger(drop,
+        [{ name: 'blocked lane', details: 'handed-over: #77', status: 'blocked' }]));
+      check(!captured.error
+        && /mission ledger warning: .*did not preserve the previous details text/.test(captured.warnings),
+      'writer[' + edition + ']: a hand-over write that drops the previous details text warns');
+      check(/handed-over: #77/.test(read(drop)),
+        'writer[' + edition + ']: the warned hand-over write still proceeds');
+
+      const handedStatus = path.join(dir, 'handed-status.jsonl');
+      claim.writeMissionLedger(handedStatus, [
+        { name: 'blocked lane', details: 'result: blocked | handed-over: #77', status: 'blocked' },
+      ]);
+      const handedStatusBytes = fs.readFileSync(handedStatus);
+      throws(() => claim.writeMissionLedger(handedStatus, [
+        { name: 'blocked lane', details: 'result: blocked | handed-over: #77', status: 'done' },
+      ]), /already recorded/, 'writer[' + edition + ']: refuses a handed-over line changing status');
+      check(fs.readFileSync(handedStatus).equals(handedStatusBytes),
+        'writer[' + edition + ']: a refused handed-over status change leaves the bytes untouched');
 
       const rename = path.join(dir, 'rename.jsonl');
       claim.writeMissionLedger(rename, [{ name: 'blocked lane', details: 'result: blocked', status: 'blocked' }]);
@@ -336,7 +494,7 @@ function runCli(ed, args, cwd) {
       claim.writeMissionLedger(ledger, [
         { name: 'lane', details: 'result: blocked', status: 'blocked' },
       ]);
-      let checked = runCli(ed, ['finalize', '--project', 'issue-1120', '--check', '--json'], repo);
+      const checked = runCli(ed, ['finalize', '--project', 'issue-1120', '--check', '--json'], repo);
       check(checked.json && checked.json.checks && checked.json.checks.mission_ledger === 'blocked_without_handover',
         'finalize[' + edition + ']: --check reports blocked_without_handover, got '
         + JSON.stringify(checked.json && checked.json.checks && checked.json.checks.mission_ledger));
@@ -344,21 +502,80 @@ function runCli(ed, args, cwd) {
         && !checked.json.reasons.some(reason => /ledger/.test(reason)),
       'finalize[' + edition + ']: a blocked line without a hand-over is not a refusal reason');
 
+      // MAJOR 1: drive the REAL finalize transaction, not just --check. The blocked line has no
+      // hand-over; finalize must close, carry the state on finalize_transaction, raise the typed
+      // finding on the envelope, and write the durable `## Finalize Findings` section.
+      const before = fs.readFileSync(ledger);
+      const real = runCli(ed, ['finalize', '--project', 'issue-1120', '--json'], repo);
+      check(real.status === 0,
+        'finalize[' + edition + ']: real finalize with a blocked line and no hand-over exits 0, got '
+        + real.status + '\nstdout: ' + real.stdout + '\nstderr: ' + real.stderr);
+      check(real.json && real.json.status === 'closed',
+        'finalize[' + edition + ']: real finalize still closes the run');
+      check(real.json && real.json.finalize_transaction
+        && real.json.finalize_transaction.mission_ledger === 'blocked_without_handover',
+      'finalize[' + edition + ']: finalize_transaction.mission_ledger is blocked_without_handover');
+      check(real.json && real.json.finalize_transaction
+        && real.json.finalize_transaction.findings.includes('blocked_without_handover'),
+      'finalize[' + edition + ']: the blocked_without_handover finding reaches the envelope');
+      const summary = path.join(repo, 'kaola-workflow', 'archive', 'issue-1120', 'finalization-summary.md');
+      check(findingSection(summary, 'blocked_without_handover') !== null,
+        'finalize[' + edition + ']: the durable ## Finalize Findings section names blocked_without_handover');
+      const archived = path.join(repo, 'kaola-workflow', 'archive', 'issue-1120', 'mission-ledger.jsonl');
+      check(!fs.existsSync(ledger), 'finalize[' + edition + ']: real finalize moved the live ledger');
+      check(fs.existsSync(archived) && fs.readFileSync(archived).equals(before),
+        'finalize[' + edition + ']: the archived ledger is byte-identical to the pre-finalize bytes');
+    }
+
+    // The accepted hand-over shape: the same real finalize reports handed_over and raises no
+    // blocked_without_handover finding. Canonical is enough here; all four editions share the code.
+    {
+      const ed = EDITIONS.canonical;
+      const repo = fixtureRepo(tmp, 'repo-handed-over');
+      const acquired = runCli(ed, ['claim', '--project', 'issue-1120', '--issue', '1120'], repo);
+      check(acquired.json && acquired.json.claim === 'acquired', 'finalize[handed-over]: fixture claim acquires');
+      const claim = require(path.join(ed.dir, ed.claim));
+      const ledger = acquired.json.ledger_path;
       claim.writeMissionLedger(ledger, [
         { name: 'lane', details: 'result: blocked | handed-over: #99', status: 'blocked' },
       ]);
-      checked = runCli(ed, ['finalize', '--project', 'issue-1120', '--check', '--json'], repo);
+      const checked = runCli(ed, ['finalize', '--project', 'issue-1120', '--check', '--json'], repo);
       check(checked.json && checked.json.checks && checked.json.checks.mission_ledger === 'handed_over',
-        'finalize[' + edition + ']: --check accepts the one hand-over write as handed_over');
+        'finalize[handed-over]: --check accepts the one hand-over write as handed_over');
       const before = fs.readFileSync(ledger);
-      const dest = path.join(repo, 'kaola-workflow', 'archive', 'issue-1120');
-      fs.mkdirSync(dest, { recursive: true });
-      const moved = claim.moveMissionLedger(repo, 1120, dest);
-      check(moved === 'moved', 'finalize[' + edition + ']: archive moves the handed-over ledger, got ' + moved);
-      check(!fs.existsSync(ledger), 'finalize[' + edition + ']: live ledger is gone after the move');
-      const archived = path.join(dest, 'mission-ledger.jsonl');
-      check(fs.existsSync(archived) && fs.readFileSync(archived).equals(before),
-        'finalize[' + edition + ']: archived bytes are byte-identical to the handed-over ledger');
+      const real = runCli(ed, ['finalize', '--project', 'issue-1120', '--json'], repo);
+      check(real.status === 0, 'finalize[handed-over]: real finalize exits 0, got ' + real.status + '\n' + real.stderr);
+      check(real.json && real.json.finalize_transaction
+        && real.json.finalize_transaction.mission_ledger === 'handed_over',
+      'finalize[handed-over]: finalize_transaction.mission_ledger is handed_over');
+      check(real.json && real.json.finalize_transaction
+        && !real.json.finalize_transaction.findings.includes('blocked_without_handover'),
+      'finalize[handed-over]: no blocked_without_handover finding is raised');
+      const summary = path.join(repo, 'kaola-workflow', 'archive', 'issue-1120', 'finalization-summary.md');
+      check(findingSection(summary, 'blocked_without_handover') === null,
+        'finalize[handed-over]: no blocked_without_handover section is written');
+      const archived = path.join(repo, 'kaola-workflow', 'archive', 'issue-1120', 'mission-ledger.jsonl');
+      check(fs.readFileSync(archived).equals(before),
+        'finalize[handed-over]: the archived ledger bytes are unchanged');
+    }
+
+    // M3: an existing but unreadable ledger path (a directory) must be reported as `unreadable`,
+    // never crash the transaction after the mirror step may have written.
+    {
+      const ed = EDITIONS.canonical;
+      const repo = fixtureRepo(tmp, 'repo-unreadable');
+      const acquired = runCli(ed, ['claim', '--project', 'issue-1120', '--issue', '1120'], repo);
+      check(acquired.json && acquired.json.claim === 'acquired', 'finalize[unreadable]: fixture claim acquires');
+      const ledger = acquired.json.ledger_path;
+      fs.rmSync(ledger, { force: true });
+      fs.mkdirSync(ledger, { recursive: true });
+      const real = runCli(ed, ['finalize', '--project', 'issue-1120', '--json'], repo);
+      check(real.status === 0,
+        'finalize[unreadable]: an unreadable ledger path does not crash finalize, got ' + real.status
+        + '\nstdout: ' + real.stdout + '\nstderr: ' + real.stderr);
+      check(real.json && real.json.finalize_transaction
+        && real.json.finalize_transaction.mission_ledger === 'unreadable',
+      'finalize[unreadable]: finalize_transaction.mission_ledger reports unreadable');
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
