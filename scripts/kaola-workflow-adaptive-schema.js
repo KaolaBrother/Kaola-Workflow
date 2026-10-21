@@ -1757,12 +1757,22 @@ function ledgerContentKey(mission) {
   });
 }
 
-function ledgerContentIndex(missions, mission) {
+// ledgerMovedIndex — the ONE next position this previous line moved to, or -1 when the evidence is
+// ambiguous. A duplicate is not a move: a next line that is byte-identical to its own previous
+// counterpart is an unchanged line that merely shares this line's content, so it is skipped. If more
+// than one candidate remains, this line's identity among duplicates cannot be proven and no move is
+// claimed. Without both rules, two identical blocked lines would each "match" the other and the
+// owner-approved hand-over would be refused as a renumber.
+function ledgerMovedIndex(beforeMissions, afterMissions, mission, index) {
   const key = ledgerContentKey(mission);
-  for (let i = 0; i < missions.length; i += 1) {
-    if (ledgerContentKey(missions[i]) === key) return i;
+  const matches = [];
+  for (let j = 0; j < afterMissions.length; j += 1) {
+    if (j === index) continue;
+    if (ledgerContentKey(afterMissions[j]) !== key) continue;
+    if (beforeMissions[j] && ledgerLine(beforeMissions[j]) === ledgerLine(afterMissions[j])) continue;
+    matches.push(j);
   }
-  return -1;
+  return matches.length === 1 ? matches[0] : -1;
 }
 
 // validateLedgerTransition — the #1120 rewrite rule, pure. Given the previous and next ledger
@@ -1773,14 +1783,18 @@ function ledgerContentIndex(missions, mission) {
 //                   bytes changed, not whichever line happens to sit at that index after an insert
 //                   or removal.
 //   blocked         the owner-approved hand-over is the ONE extra write: a blocked line with no
-//                   `handed-over: #M` may become blocked WITH exactly one token, keeping its name
-//                   and its previous details text. After that token is recorded the line is
-//                   terminal too. A blocked line without the token may still return to in-flight or
-//                   reach a terminal result after a ruling — that is normal, recoverable behavior,
-//                   so it WARNS and proceeds rather than hard-blocking. Removing ANY blocked line
-//                   is refused: with its token it is terminal, and without it the record still
-//                   says the mission was blocked.
+//                   `handed-over: #M` may become blocked WITH exactly one token. After that token is
+//                   recorded the line is terminal. A blocked line without the token may still change
+//                   status/details, be renamed in that write, or be renumbered by an insertion or
+//                   removal before it — all recoverable, so each WARNS and proceeds. Removing ANY
+//                   blocked line is refused: with its token it is terminal, and without it the
+//                   record still says the mission was blocked. A token on a non-blocked result is
+//                   also prose, with a warning.
 //   todo/in-flight  ordinary write moments, unrestricted; removal/renumbering warns.
+//
+// The hard-refusal domain is deliberately narrow: a `done`/`failed`/already-handed-over line whose
+// bytes or `n` would change (rewrite, removal, or middle insert/remove renumber). Everything else
+// is recoverable and warns, per the owner rule of 2026-10-14 14:05.
 //
 // Appending a new mission is always allowed. Returns { ok, errors, warnings, before, after }.
 function validateLedgerTransition(previousText, nextText) {
@@ -1806,7 +1820,7 @@ function validateLedgerTransition(previousText, nextText) {
     if (!prev) continue;   // an appended mission is a new record, never a rewrite
     const next = after.missions[i];
     if (next && ledgerLine(prev) === ledgerLine(next)) continue;
-    const movedTo = ledgerContentIndex(after.missions, prev);
+    const movedTo = ledgerMovedIndex(before.missions, after.missions, prev, i);
 
     if (prev.status === 'done' || prev.status === 'failed') {
       if (movedTo >= 0 && movedTo !== i) {
@@ -1839,19 +1853,22 @@ function validateLedgerTransition(previousText, nextText) {
         continue;
       }
       if (movedTo >= 0 && movedTo !== i) {
-        errors.push('line ' + prev.n + ': a blocked mission would be renumbered to '
-          + (movedTo + 1) + '; mission numbers may not be reassigned');
+        warnings.push('line ' + prev.n + ': a blocked mission was renumbered to '
+          + (movedTo + 1) + ' (recoverable; blocked lines are not terminal until their hand-over)');
         continue;
       }
       if (nextHandover.valid > 0) {
-        if (next.status !== 'blocked') {
-          errors.push('line ' + prev.n + ': handed-over: #M is only allowed on a blocked line');
-        } else if (next.name !== prev.name) {
-          errors.push('line ' + prev.n + ': the hand-over write may not rename the mission');
-        } else if (!String(next.details).startsWith(String(prev.details))) {
-          warnings.push('line ' + prev.n + ': the hand-over write did not preserve the previous details text'
-            + ' (recoverable; the outcome locator may have been dropped)');
+        if (next.status === 'blocked') {
+          if (next.name !== prev.name) {
+            warnings.push('line ' + prev.n + ': the hand-over write renamed the mission (recoverable)');
+          }
+          if (!String(next.details).startsWith(String(prev.details))) {
+            warnings.push('line ' + prev.n + ': the hand-over write did not preserve the previous details text'
+              + ' (recoverable; the outcome locator may have been dropped)');
+          }
         }
+        // On a non-blocked result the token is prose; validateLedger already warns, and the write
+        // proceeds (owner rule: token-presence anomalies are recoverable).
         continue;
       }
       warnings.push('line ' + prev.n + ': blocked line changed without a handed-over: #M write'

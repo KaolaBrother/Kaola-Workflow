@@ -4914,8 +4914,6 @@ function cmdFinalize() {
             recordFinalizeFinding('blocked_without_handover', warning.summary, warning.lines);
           } else if (warning.code === 'mission_ledger_invalid') {
             recordFinalizeFinding('mission_ledger_invalid', warning.summary, warning.lines);
-          } else {
-            recordFinalizeFinding(warning.code, warning.summary, warning.lines);
           }
         }
       }

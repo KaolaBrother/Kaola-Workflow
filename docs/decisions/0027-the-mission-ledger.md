@@ -47,14 +47,16 @@ finalization, closure, archive, and sink are not missions all stand.
    rename, or an in-place edit). `done` and `failed` lines are immutable afterwards.
    **Amended 2026-10-14 (owner-approved, #1120):** a `blocked` line may receive exactly one more
    write before finalize — the hand-over to an open issue, recorded as the exact token
-   `handed-over: #M` in `details`. After that write the blocked line is terminal too. The writer
-   refuses any other rewrite or removal of a terminal line, including removing a blocked line that
-   has not yet received its hand-over. A hand-over write that drops the previous `details` text
-   warns; a recoverable blocked transition warns and proceeds rather than being hard-blocked; and
-   `handed-over:`-shaped prose on a non-blocked line is a warning, not an error. Finalization
-   reports the ledger state as an advisory field — including `absent` on a crash-resume where
-   archive already moved the ledger, and `unreadable` when the path exists but cannot be read —
-   and never refuses the candidate over a ledger line.
+   `handed-over: #M` in `details`. After that write the blocked line is terminal too. Hard refusal
+   is limited to what destroys a terminal record: removal of any blocked line, and any rewrite or
+   renumber of a `done`, `failed`, or already-handed-over line. A blocked line without its token
+   may still change status or `details`, be renamed in its hand-over write, or be renumbered by an
+   insertion/removal before it — each warns and proceeds. A hand-over write that drops the previous
+   `details` text warns; `handed-over:`-shaped text on a non-blocked result is prose with a warning;
+   and an unparseable previous ledger warns rather than refusing the repair. Finalization reports
+   the ledger state as an advisory field — including `absent` on a crash-resume where archive
+   already moved the ledger, and `unreadable` when the path exists but cannot be read — and never
+   refuses the candidate over a ledger line.
 5. **Claim and archive.** Claim creates `kaola-workflow/.ledger/` in the main checkout and reports
    `ledger_path`; when the path is not gitignored it reports a `ledger_not_gitignored` finding and
    never edits `.gitignore`. Archive moves the file to
