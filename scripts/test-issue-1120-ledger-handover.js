@@ -420,9 +420,9 @@ function runCli(ed, args, cwd) {
   'transition[N1]: rewriting the second of two identical failed lines reports immutable, not a renumber');
   verdict = schema.validateLedgerTransition(duplicateDoneText, schema.serializeLedger([duplicateDone]));
   check(!verdict.ok
-    && /line 2: a done line would be renumbered to 1/.test(verdict.errors.join(' '))
-    && !/line 1: a done line would be renumbered/.test(verdict.errors.join(' ')),
-  'transition[N1]: removing one of two identical done lines names the surviving line, not the vanished slot');
+    && /line 2: a done line may not be removed/.test(verdict.errors.join(' '))
+    && !/renumbered/.test(verdict.errors.join(' ')),
+  'transition[N1]: removing one of two identical done lines reports the vanished slot, not a renumber');
   verdict = schema.validateLedgerTransition(schema.serializeLedger([
     { name: 'todo lane', details: '', status: 'todo' },
     duplicateDone,
@@ -433,6 +433,44 @@ function runCli(ed, args, cwd) {
     && /line 3: a done line would be renumbered to 2/.test(verdict.errors.join(' '))
     && !/line 3: a done line would be renumbered to 1/.test(verdict.errors.join(' ')),
   'transition[R3-3]: duplicate done lines report their actual renumbered positions, not a shared first slot');
+
+  // R4-1/R4-2/R4-3: the reviewer's E5-E11 duplicate-content probes.
+  const dupDone = { name: 'done lane', details: 'result: pull request', status: 'done' };
+  const dupTodo = { name: 'todo lane', details: '', status: 'todo' };
+  const dupBlocked = { name: 'blocked lane', details: 'result: blocked', status: 'blocked' };
+  const dupHanded = { name: 'handed lane', details: 'result: blocked | handed-over: #5', status: 'blocked' };
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupDone]),
+    schema.serializeLedger([dupDone, dupDone]));
+  check(verdict.ok && verdict.errors.length === 0,
+    'transition[E5]: appending a byte-identical done line is allowed');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupDone, dupTodo]),
+    schema.serializeLedger([dupDone, dupDone]));
+  check(verdict.ok, 'transition[E6]: replacing a todo with a byte-identical done line proceeds');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupDone, dupDone]),
+    schema.serializeLedger([dupDone, dupDone, dupDone]));
+  check(verdict.ok && verdict.errors.length === 0,
+    'transition[E7]: appending a third byte-identical done line is allowed');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupBlocked]),
+    schema.serializeLedger([dupBlocked, dupBlocked]));
+  check(verdict.ok && !/renumbered/.test(verdict.warnings.join(' ')),
+    'transition[E8]: appending a byte-identical blocked line adds no spurious renumber warning');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupHanded, dupTodo]),
+    schema.serializeLedger([dupHanded, dupHanded]));
+  check(verdict.ok, 'transition[E9]: replacing a todo with a byte-identical handed-over line proceeds');
+  verdict = schema.validateLedgerTransition(schema.serializeLedger([dupBlocked, dupBlocked]),
+    schema.serializeLedger([dupBlocked]));
+  check(!verdict.ok && /a blocked mission may not be removed/.test(verdict.errors.join(' ')),
+    'transition[E10]: removing one of two identical blocked lines is refused when its slot disappears');
+  const swapOne = { name: 'done one', details: 'result one', status: 'done' };
+  const swapTwo = { name: 'done two', details: 'result two', status: 'done' };
+  verdict = schema.validateLedgerTransition(
+    schema.serializeLedger([swapOne, swapTwo]),
+    schema.serializeLedger([swapTwo, swapOne]));
+  check(!verdict.ok
+    && /line 1: a done line would be renumbered to 2/.test(verdict.errors.join(' '))
+    && /line 2: a done line would be renumbered to 1/.test(verdict.errors.join(' '))
+    && !/immutable/.test(verdict.errors.join(' ')),
+  'transition[E11]: swapping two done lines names both moves, not an immutable rewrite');
 })();
 
 // ---------- 4. the reference writer, all four editions ----------
@@ -612,6 +650,14 @@ function runCli(ed, args, cwd) {
       ]));
       check(!captured.error && /blocked line changed without a handed-over/.test(captured.warnings),
         'writer[' + edition + '][N1]: a duplicate blocked -> in-flight change warns and proceeds');
+      const appendDone = path.join(dir, 'append-done.jsonl');
+      const appendingDone = { name: 'done lane', details: 'result: pull request', status: 'done' };
+      claim.writeMissionLedger(appendDone, [appendingDone]);
+      captured = captureStderr(() => claim.writeMissionLedger(appendDone, [appendingDone, appendingDone]));
+      check(!captured.error && !/renumbered/.test(captured.warnings),
+        'writer[' + edition + '][E5]: appending a byte-identical done line is allowed');
+      check(read(appendDone).trim().split('\n').length === 2,
+        'writer[' + edition + '][E5]: both identical done lines are written');
       check(!fs.readdirSync(dir).some(name => /\.tmp$/.test(name)),
         'writer[' + edition + ']: no temp file is left behind after refusals');
     }

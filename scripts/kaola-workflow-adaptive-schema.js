@@ -1758,32 +1758,85 @@ function ledgerContentKey(mission) {
 }
 
 // ledgerMoveMap — one order-preserving mapping from previous mission index to next mission index
-// for lines whose content (name/details/status, without `n`) is unchanged. An LCS is used rather
-// than "first matching line": with duplicate content the first match belongs to another line, and
-// a per-line first-match made two identical blocked lines refuse each other's hand-over as a
-// renumber. The LCS also keeps the mapping one-to-one, so a duplicate pair reports the actual
-// shifted position instead of both pointing at the first copy. A content-changed line (the
-// hand-over write itself, or a status change) is deliberately unmapped.
+// for lines whose content (name/details/status, without `n`) is unchanged. Three rules keep the map
+// honest when the ledger holds duplicate content:
+//
+//  1. PIN same-position byte-identical lines FIRST (when the ledger did not shrink). Appending a
+//     duplicate, or editing one of two identical lines, must not move the untouched line onto the
+//     appended copy — the exact line at its own position is unchanged by definition.
+//  2. For what remains, use an earliest-match LCS over content keys, reconstructed forward. This
+//     is what makes a removal before duplicates shift them in order ([T,D,D] -> [D,D] is D->1,
+//     D->2) instead of pairing each old line with the latest copy.
+//  3. An old line the LCS leaves unmatched gets ONE unclaimed content match if exactly one exists.
+//     That recovers a swap (two distinct done lines exchanged) without inventing a move. A
+//     content-changed line (the hand-over write itself, or a status change) stays unmapped.
+//
+// The result is one-to-one: a new position is claimed by at most one old line.
 function ledgerMoveMap(beforeMissions, afterMissions) {
   const n = beforeMissions.length;
   const m = afterMissions.length;
-  const beforeKeys = beforeMissions.map(ledgerContentKey);
-  const afterKeys = afterMissions.map(ledgerContentKey);
-  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = 1; i <= n; i += 1) {
-    for (let j = 1; j <= m; j += 1) {
-      dp[i][j] = beforeKeys[i - 1] === afterKeys[j - 1]
-        ? dp[i - 1][j - 1] + 1
-        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  const map = new Array(n).fill(-1);
+  const claimedAfter = new Set();
+  const pinnedOld = new Set();
+  const pinnedAfter = new Set();
+  if (n <= m) {
+    for (let i = 0; i < n; i += 1) {
+      if (i < m && ledgerLine(beforeMissions[i]) === ledgerLine(afterMissions[i])) {
+        map[i] = i;
+        claimedAfter.add(i);
+        pinnedOld.add(i);
+        pinnedAfter.add(i);
+      }
     }
   }
-  const map = new Array(n).fill(-1);
-  let i = n;
-  let j = m;
-  while (i > 0 && j > 0) {
-    if (beforeKeys[i - 1] === afterKeys[j - 1]) { map[i - 1] = j - 1; i -= 1; j -= 1; }
-    else if (dp[i - 1][j] >= dp[i][j - 1]) i -= 1;
-    else j -= 1;
+  const oldIndexes = [];
+  const newIndexes = [];
+  for (let i = 0; i < n; i += 1) if (!pinnedOld.has(i)) oldIndexes.push(i);
+  for (let j = 0; j < m; j += 1) if (!pinnedAfter.has(j)) newIndexes.push(j);
+  const beforeKeys = oldIndexes.map(i => ledgerContentKey(beforeMissions[i]));
+  const afterKeys = newIndexes.map(j => ledgerContentKey(afterMissions[j]));
+  const rows = oldIndexes.length;
+  const cols = newIndexes.length;
+  const dp = Array.from({ length: rows + 1 }, () => new Array(cols + 1).fill(0));
+  for (let i = rows - 1; i >= 0; i -= 1) {
+    for (let j = cols - 1; j >= 0; j -= 1) {
+      dp[i][j] = beforeKeys[i] === afterKeys[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  while (i < rows && j < cols) {
+    if (beforeKeys[i] === afterKeys[j] && dp[i][j] === dp[i + 1][j + 1] + 1) {
+      map[oldIndexes[i]] = newIndexes[j];
+      claimedAfter.add(newIndexes[j]);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  for (let oi = 0; oi < n; oi += 1) {
+    if (map[oi] >= 0) continue;
+    const key = ledgerContentKey(beforeMissions[oi]);
+    const candidates = [];
+    for (let j2 = 0; j2 < m; j2 += 1) {
+      if (claimedAfter.has(j2)) continue;
+      if (ledgerContentKey(afterMissions[j2]) === key) candidates.push(j2);
+    }
+    if (candidates.length === 1) {
+      map[oi] = candidates[0];
+      claimedAfter.add(candidates[0]);
+    }
+  }
+  const owners = new Map();
+  for (let oi = 0; oi < n; oi += 1) {
+    if (map[oi] < 0) continue;
+    if (owners.has(map[oi])) map[oi] = -1;
+    else owners.set(map[oi], oi);
   }
   return map;
 }
@@ -1831,21 +1884,27 @@ function validateLedgerTransition(previousText, nextText) {
   }
   const count = Math.max(before.missions.length, after.missions.length);
   const moveMap = ledgerMoveMap(before.missions, after.missions);
+  const mappedPositions = new Set(moveMap.filter(index => index >= 0));
   for (let i = 0; i < count; i += 1) {
     const prev = before.missions[i];
     if (!prev) continue;   // an appended mission is a new record, never a rewrite
     const next = after.missions[i];
     const movedTo = moveMap[i];
     // An exact byte match means "unchanged" ONLY when the order-preserving map also keeps this line
-    // at its own index. With duplicates, the line at the old index can be a different identical
-    // mission; treating that as unchanged hides the real move and lets it keep a stale message.
-    if (next && ledgerLine(prev) === ledgerLine(next) && (movedTo < 0 || movedTo === i)) continue;
+    // at its own index and no other old line claims that position. With duplicates, the line at the
+    // old index can be a different identical mission; treating that as unchanged hides the real
+    // move and lets it keep a stale message.
+    const slotTaken = movedTo < 0 && mappedPositions.has(i);
+    if (next && ledgerLine(prev) === ledgerLine(next) && !slotTaken
+        && (movedTo < 0 || movedTo === i)) continue;
 
+    const contentSeen = after.missions.some(mission =>
+      ledgerContentKey(mission) === ledgerContentKey(prev));
     if (prev.status === 'done' || prev.status === 'failed') {
       if (movedTo >= 0 && movedTo !== i) {
         errors.push('line ' + prev.n + ': a ' + prev.status + ' line would be renumbered to '
           + (movedTo + 1) + '; terminal lines may not be renumbered');
-      } else if (!next) {
+      } else if (!next || (!contentSeen && after.missions.length < before.missions.length)) {
         errors.push('line ' + prev.n + ': a ' + prev.status + ' line may not be removed');
       } else {
         errors.push('line ' + prev.n + ': a ' + prev.status + ' line is immutable and may not be rewritten');
@@ -1860,7 +1919,7 @@ function validateLedgerTransition(previousText, nextText) {
         if (movedTo >= 0 && movedTo !== i) {
           errors.push('line ' + prev.n + ': a blocked line that already records its hand-over would be renumbered to '
             + (movedTo + 1) + '; it is terminal');
-        } else if (!next) {
+        } else if (!next || (!contentSeen && after.missions.length < before.missions.length)) {
           errors.push('line ' + prev.n + ': a blocked line that already records its hand-over is terminal and may not be removed');
         } else {
           errors.push('line ' + prev.n + ': the one allowed handed-over: #M write is already recorded; the blocked line is now terminal');
