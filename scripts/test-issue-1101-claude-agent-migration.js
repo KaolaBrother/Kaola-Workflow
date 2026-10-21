@@ -124,6 +124,14 @@ function plantFixture(era, sub, home, destRoot) {
     }
   };
   walk('', '');
+  // A real release install carried its global-contract target record beside the runtime home.
+  // Without it, a frozen carrier whose text predates the current contract reads as an owner edit
+  // and the upgrade correctly refuses (#1120). Plant the record with every full `.claude` fixture;
+  // an alternate `destRoot` (agent-only staging) is deliberately left record-free.
+  if (!destRoot && sub === '.claude'
+      && fs.existsSync(path.join(FIXTURES, era, 'home', 'dot-config'))) {
+    plantFixture(era, '.config', home);
+  }
   return dest;
 }
 
@@ -267,6 +275,9 @@ try {
   section('C6 a user-authored same-name agent survives install and uninstall', () => {
     const home = makeHome('same-name');
     plantFixture(CURRENT, '.claude', home);
+    // A real 46fbe12d install also carried its global-contract target record; without it the
+    // fixture's frozen carrier would read as an owner edit against the current (changed) contract.
+    plantFixture(CURRENT, '.config', home);
     const mine = '---\nname: implementer\ndescription: my own implementer\n---\nmine\n';
     const file = path.join(agentsOf(home), 'implementer.md');
     fs.writeFileSync(file, mine);
@@ -306,6 +317,7 @@ try {
   section('C9 without a manifest only released bytes go; unsafe manifest rows never escape the dir', () => {
     const home = makeHome('no-record');
     plantFixture(CURRENT, '.claude', home);
+    plantFixture(CURRENT, '.config', home);
     fs.rmSync(path.join(agentsOf(home), '.kaola-workflow-agent-manifest'));
     const edited = path.join(agentsOf(home), 'implementer.md');
     fs.appendFileSync(edited, '\nmy local note\n');
@@ -322,6 +334,7 @@ try {
 
     const home2 = makeHome('hostile-manifest');
     plantFixture(CURRENT, '.claude', home2);
+    plantFixture(CURRENT, '.config', home2);
     const victim = path.join(home2, '.claude', 'victim.md');
     fs.writeFileSync(victim, `victim\n${MARKER}\n`);
     const manifest = path.join(agentsOf(home2), '.kaola-workflow-agent-manifest');
@@ -389,6 +402,7 @@ try {
 
     const home2 = makeHome('symlink-entry');
     plantFixture(CURRENT, '.claude', home2);
+    plantFixture(CURRENT, '.config', home2);
     const target = path.join(home2, 'real-implementer.md');
     fs.renameSync(path.join(agentsOf(home2), 'implementer.md'), target);
     fs.symlinkSync(target, path.join(agentsOf(home2), 'implementer.md'));

@@ -47,6 +47,7 @@ const GLOBAL_CONTRACT_BLOCKS = [
       'three write moments',
       'before the work goes out',
       'where the output will land',
+      'A `blocked` line may get one more write before finalize: the hand-over to an open issue (`handed-over: #M`). A `done` or `failed` line is immutable.',
       'A `done` or `failed` line is immutable',
       'One dispatch has one result, including `failed` or `blocked`',
       'A failed command, intermediate finding, repair attempt, or review round does not create another mission',

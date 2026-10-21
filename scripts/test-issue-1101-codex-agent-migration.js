@@ -134,6 +134,14 @@ function plantFixture(era, sub, home, destSub) {
     }
   };
   walk('', '');
+  // A real release install carried its global-contract target record beside the runtime home.
+  // Without it, a frozen carrier whose text predates the current contract reads as an owner edit
+  // and the upgrade correctly refuses (#1120). Plant the record with every full `.codex` fixture;
+  // an alternate `destSub` (symlink-target fixtures) is deliberately left record-free.
+  if (!destSub && sub === '.codex'
+      && fs.existsSync(path.join(FIXTURES, era, 'home', 'dot-config'))) {
+    plantFixture(era, '.config', home);
+  }
   return dest;
 }
 

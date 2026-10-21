@@ -36,8 +36,9 @@ safety boundaries.
 - Only the run's Main Orchestrator writes it, rewriting the whole file, at three write moments:
   create with `todo`; before the work goes out, set `in-flight` and add to `details` where it went,
   including where the output will land; then set the terminal status and add where the outcome
-  landed. A `done` or `failed` line is immutable. One dispatch has one result, including `failed`
-  or `blocked`.
+  landed. A `blocked` line may get one more write before finalize: the hand-over to an open issue
+  (`handed-over: #M`). A `done` or `failed` line is immutable. One dispatch has one result,
+  including `failed` or `blocked`.
 - A mission is a recoverable outcome. A failed command, intermediate finding, repair attempt, or
   review round does not create another mission. `blocked` means the current owner cannot safely or
   legitimately continue.

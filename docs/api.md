@@ -502,11 +502,15 @@ preconditions come back from one invocation instead of one per re-run. Zero side
 ```
 
 `checks` carries `mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`,
-`changed_paths`, `dirty_paths`, — only when the residue mirror would refuse (`#1077`) —
+`mission_ledger`, `changed_paths`, `dirty_paths`, — only when the residue mirror would refuse (`#1077`) —
 `residue_conflicts`, — only when the mirror declines a main path whose exact name is neither in this
 run's HEAD nor in the main index (`#1110`) — `residue_unattributed`, and — only when a `chains_stale` finding named them — `stale_paths`,
 `stale_kind` and `stale_paths_truncated`. `checks.residue_unattributed` is a report, not an unmet
-precondition: it does not enter `reasons` and does not make `ok` false. `validation` is the bare classification token; the three
+precondition: it does not enter `reasons` and does not make `ok` false. `checks.mission_ledger` is
+the same kind of report (`complete`, `handed_over`, `blocked_without_handover`, `invalid`, `absent`,
+or `unreadable`): the finalize transaction reads the run's ledger before archive and writes any
+`blocked_without_handover` / `mission_ledger_invalid` finding into `## Finalize Findings`, but a
+ledger line never refuses the candidate. `validation` is the bare classification token; the three
 stale fields sit beside it rather than inside it, so a reader can tell a prose edit from a code
 change without re-deriving the hashes. They are the finding's own values, verbatim, and absent when
 it declined to diagnose — an empty list would read as "measured, nothing changed". **`stale_paths` is
@@ -904,7 +908,7 @@ reader can check the claim rather than take it on trust. The producer of all thr
 `kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
 agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
 
-### Kernel mission-ledger exports — `kaola-workflow-adaptive-schema.js` (#1089)
+### Kernel mission-ledger exports — `kaola-workflow-adaptive-schema.js` (#1089, #1120)
 
 | Export | Contract |
 |---|---|
@@ -914,14 +918,19 @@ agent writing the file by hand is likeliest to omit, and both remediation hints 
 | `LEDGER_KEYS` | frozen `['n', 'name', 'details', 'status']` |
 | `LEDGER_STATUSES` | frozen `['todo', 'in-flight', 'done', 'failed', 'blocked']` |
 | `ledgerPath(mainRoot, issueNumber)` | pure path join `<mainRoot>/kaola-workflow/.ledger/issue-<N>.jsonl`; `null` unless `issueNumber` is a positive integer |
-| `validateLedger(text)` | pure shape rule: every line parses to an object with keys exactly `LEDGER_KEYS` in order, `n` runs 1..k with no gap, `name` one non-empty line, `details` a string, `status` in `LEDGER_STATUSES`. Returns `{ ok, missions, errors }`; `missions` holds every line that parsed |
+| `validateLedger(text)` | pure shape rule: every line parses to an object with keys exactly `LEDGER_KEYS` in order, `n` runs 1..k with no gap, `name` one non-empty line, `details` a string, `status` in `LEDGER_STATUSES`. A `details` string may carry at most one well-formed `handed-over: #M` (positive issue number), and only on a `blocked` line. Returns `{ ok, missions, errors }`; `missions` holds every line that parsed |
+| `ledgerHandovers(details)` | count and decode the `handed-over: #M` tokens in one `details` string: `{ total, valid, issues }` |
+| `validateLedgerTransition(previousText, nextText)` | pure rewrite rule for the reference writer: `done`/`failed` lines are immutable, a `blocked` line gets exactly one hand-over write (adding/updating `handed-over: #M`), and a blocked line that already carries the token is terminal. Removing a terminal line or renaming it during the hand-over write is refused. A blocked line returning to `in-flight` after a ruling, or an unparseable previous ledger, warns and proceeds. Returns `{ ok, errors, warnings, before, after }` |
+| `validateLedgerFinalize(text)` | finalize-side reading: never refuses. Returns `{ ok, state, warnings, handovers, missions, errors }`, where `state` is `complete`, `handed_over`, `blocked_without_handover`, or `invalid`; a blocked line without its hand-over is an advisory warning |
 | `serializeLedger(missions)` | canonical bytes: one line per mission, fixed key order, `n` = index + 1 (never the caller's), trailing newline |
 
 `MISSION_LIST_FILE` and `parseGoal` are retired with `mission-list.md`. In `claim.js`,
 `writeMissionLedger(file, missions)` is the reference writer: it serializes, refuses a result that
-does not validate (throws `mission ledger invalid: …`), and replaces the file atomically.
-`liveLedgerPath(root, issueNumber)` resolves `ledgerPath` against the main checkout from any
-worktree, and `moveMissionLedger(root, issueNumber, dest)` is archive's move.
+does not validate (throws `mission ledger invalid: …`), reads the previous bytes and refuses a
+rewrite the transition rule rejects (throws `mission ledger rewrite refused: …`), warns on stderr
+for a recoverable transition, and replaces the file atomically. `liveLedgerPath(root, issueNumber)`
+resolves `ledgerPath` against the main checkout from any worktree, and
+`moveMissionLedger(root, issueNumber, dest)` is archive's move.
 
 ### Kernel publish-primitive exports — `kaola-workflow-adaptive-schema.js` (#1097)
 

@@ -196,10 +196,11 @@ that identity only when its project and claim match the archived run. See
 [Same-name archive resolution](docs/api.md#same-name-archive-resolution).
 
 The mission ledger has one JSON line per mission, keys exactly `n`, `name`, `details`, `status`
-(`todo` | `in-flight` | `done` | `failed` | `blocked`). It lives only in the main checkout, never in
-a worktree; archive moves it to `archive/<run>/mission-ledger.jsonl`. A Runner Host reads it
-read-only (`jq -c '{n,status}'`): progress is `done` lines over total, and an absent file is
-`unknown`.
+(`todo` | `in-flight` | `done` | `failed` | `blocked`). A `blocked` line may get one more write
+before finalize: the hand-over to an open issue (`handed-over: #M`). A `done` or `failed` line is
+immutable. It lives only in the main checkout, never in a worktree; archive moves it to
+`archive/<run>/mission-ledger.jsonl`. A Runner Host reads it read-only (`jq -c '{n,status}'`):
+progress is `done` lines over total, and an absent file is `unknown`.
 
 ```mermaid
 flowchart LR

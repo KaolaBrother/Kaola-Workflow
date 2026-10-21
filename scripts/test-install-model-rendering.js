@@ -1867,16 +1867,24 @@ try {
   const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
   const preflightPath = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
   const frozenCodex = path.join(root, 'scripts', 'fixtures', 'issue-1101', 'v12.2.6-46fbe12d', 'home', 'dot-codex');
-  const plantFrozenCodex = dest => {
+  const frozenConfig = path.join(root, 'scripts', 'fixtures', 'issue-1101', 'v12.2.6-46fbe12d', 'home', 'dot-config');
+  // A real 46fbe12d install also carried its global-contract target record. Without it, the
+  // frozen carrier's older contract text reads as an owner edit against the current source and the
+  // upgrade correctly refuses (#1120). Plant the runtime home AND its records so this fixture is a
+  // real install, not a carrier-only tree.
+  const plantFrozenCodex = (homeRoot, options) => {
+    const withConfig = !options || options.config !== false;
     const walk = (src, dst) => {
       fs.mkdirSync(dst, { recursive: true });
       for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
         const name = entry.name.startsWith('dot-') ? '.' + entry.name.slice(4) : entry.name;
         if (entry.isDirectory()) walk(path.join(src, entry.name), path.join(dst, name));
-        else fs.copyFileSync(path.join(src, entry.name), path.join(dst, name));
+        else fs.writeFileSync(path.join(dst, name),
+          fs.readFileSync(path.join(src, entry.name), 'utf8').split('@@HOME@@').join(homeRoot));
       }
     };
-    walk(frozenCodex, dest);
+    walk(frozenCodex, path.join(homeRoot, '.codex'));
+    if (withConfig) walk(frozenConfig, path.join(homeRoot, '.config'));
   };
 
   // A redirected Codex scope authority is refused before anything is read through it: normal
@@ -1891,7 +1899,7 @@ try {
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-home-'));
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-authority-outside-'));
     try {
-      plantFrozenCodex(path.join(homeRoot, '.codex'));
+      plantFrozenCodex(homeRoot);
       const source = path.join(homeRoot, rel);
       const target = path.join(outsideRoot, 'redirected');
       fs.renameSync(source, target);
@@ -1930,7 +1938,7 @@ try {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-selected-home-project-'));
     const originalHome = process.env.HOME;
     try {
-      plantFrozenCodex(path.join(selectedHome, '.codex'));
+      plantFrozenCodex(selectedHome);
       const selectedProfile = path.join(selectedHome, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
       assert(fs.existsSync(selectedProfile), 'selected-home fixture carries retired-role residue');
       process.env.HOME = inheritedHome;
@@ -1985,7 +1993,7 @@ try {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-nested-repo-'));
     try {
       fs.mkdirSync(path.join(repoRoot, '.git'));
-      plantFrozenCodex(path.join(repoRoot, '.codex'));
+      plantFrozenCodex(repoRoot, { config: false });
       trustCodexProject(homeRoot, repoRoot, 'trusted');
       const nested = path.join(repoRoot, 'a', 'b');
       fs.mkdirSync(nested, { recursive: true });
@@ -2066,7 +2074,7 @@ try {
     const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-order-home-'));
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-order-project-'));
     try {
-      plantFrozenCodex(path.join(homeRoot, '.codex'));
+      plantFrozenCodex(homeRoot);
       trustCodexProject(homeRoot, projectRoot, 'trusted');
       writeFile(path.join(projectRoot, '.codex', 'config.toml'),
         '# BEGIN kaola-workflow agents\n[agents.implementer]\n'

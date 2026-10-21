@@ -259,7 +259,16 @@ try {
     const home = makeHome('codex');
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=github', '--no-settings-merge'], home, 'install.sh');
     runOk('node', [CODEX_INSTALLER, '--global'], home, 'codex install');
-    plantCodexFixture('dot-codex', home, home); // what the pre-#1101 release installed
+    // The fixture is what the pre-#1101 release installed: its retired profiles/config are the
+    // subject, but its frozen AGENTS.md must not clobber the carrier the CURRENT install just wrote
+    // and recorded. The carrier text legitimately changes between releases (#1120 added the
+    // blocked-line hand-over), and the uninstall step below is proof about the carrier this install
+    // owns, not about v12.2.6's bytes. Keep the installed AGENTS.md; plant only the fixture's
+    // profile/config evidence.
+    const installedAgents = path.join(home, '.codex', 'AGENTS.md');
+    const installedAgentsBytes = fs.readFileSync(installedAgents);
+    plantCodexFixture('dot-codex', home, home);
+    fs.writeFileSync(installedAgents, installedAgentsBytes);
     const hooksFile = path.join(home, '.codex', 'hooks.json');
     const hooks = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     hooks.description = 'user description';

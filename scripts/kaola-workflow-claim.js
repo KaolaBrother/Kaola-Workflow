@@ -3851,10 +3851,27 @@ function prepareMissionLedger(root, issueNumber) {
 
 // #1089: the reference writer — whole-file rewrite through the kernel's atomic replace, canonical
 // key order, positional `n`. Refuses a mission array that would not validate.
+//
+// #1120: the rewrite rule. The writer reads the previous bytes before replacing them and asks the
+// kernel's pure transition rule what this write would do. A `done`/`failed` line (or a `blocked`
+// line that already records its one hand-over) may not be rewritten or removed — that would destroy
+// the only record of a finished mission and is hard-refused. A blocked line's one hand-over write is
+// allowed. Every other recoverable condition warns on stderr and proceeds, per the owner rule: never
+// hard-block normal behavior for a recoverable situation.
 function writeMissionLedger(file, missions) {
   const text = serializeLedger(missions);
   const verdict = validateLedger(text);
   if (!verdict.ok) throw new Error('mission ledger invalid: ' + verdict.errors.join('; '));
+  let previous = null;
+  try { previous = fs.readFileSync(file, 'utf8'); }
+  catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (previous !== null) {
+    const transition = adaptiveSchema.validateLedgerTransition(previous, text);
+    if (!transition.ok) throw new Error('mission ledger rewrite refused: ' + transition.errors.join('; '));
+    for (const warning of transition.warnings) {
+      process.stderr.write('mission ledger warning: ' + warning + '\n');
+    }
+  }
   adaptiveSchema.writeFileAtomicReplace(file, text);
   return text;
 }
@@ -4783,6 +4800,7 @@ function evaluateFinalizePreconditions(root, project, opts) {
     implementation_commit: 'not_checked',
     staging_guard: 'ok',
     validation: 'not_checked',
+    mission_ledger: 'not_checked',
     changed_paths: [],
     dirty_paths: []
   };
@@ -4868,6 +4886,22 @@ function evaluateFinalizePreconditions(root, project, opts) {
     if (diag.stale_paths_truncated) checks.stale_paths_truncated = diag.stale_paths_truncated;
   }
 
+  // #1120: the mission ledger is REPORTED, never a reason. A blocked line carrying its one
+  // `handed-over: #M` is a legitimate terminal; a blocked line without one is recoverable and stays
+  // visible here. Nothing about this rung may flip `ok` or make `--check` a second door.
+  const ledgerIssueNumber = field(authority.authorityState, 'issue_number');
+  if (ledgerIssueNumber) {
+    const ledgerFile = liveLedgerPath(root, ledgerIssueNumber);
+    if (ledgerFile && fs.existsSync(ledgerFile)) {
+      try {
+        checks.mission_ledger = adaptiveSchema.validateLedgerFinalize(
+          fs.readFileSync(ledgerFile, 'utf8')).state;
+      } catch (_) { checks.mission_ledger = 'unreadable'; }
+    } else {
+      checks.mission_ledger = 'absent';
+    }
+  }
+
   return { checks, reasons, authority: prediction.topology };
 }
 
@@ -4928,7 +4962,11 @@ function cmdFinalize() {
     // #907: the archive-bookkeeping STAGING step (the `git rm --cached` + `git add` pair that feeds
     // `chore: archive`), reported for the same reason as residue_stage. 'skipped' = nothing to stage.
     archive_stage: 'skipped',
-    finalize_commit: 'skipped'
+    finalize_commit: 'skipped',
+    // #1120: what finalize found in the run's mission ledger before archive. `handed_over` is the
+    // owner-approved blocked terminal; `blocked_without_handover` and `invalid` are reported
+    // findings, never refusals (a ledger line is recoverable; the candidate is not).
+    mission_ledger: 'not_checked'
   };
   // #907: EVERY mechanical fault this transaction observes, collected in one place. The owner's
   // ruling is report-do-not-refuse, and a report has two halves — a typed token on the envelope and a
@@ -5066,6 +5104,23 @@ function cmdFinalize() {
       errors: [finalizeAuthority.innerReason]
     }, 1);
     return;
+  }
+  // #1120: read the mission ledger BEFORE archive and report what finalize finds there. The writer
+  // (writeMissionLedger) is where a terminal-line rewrite is refused; finalize ACCEPTS the state it
+  // was handed — a blocked mission with no `handed-over: #M` is recoverable, so the owner rule says
+  // report it and proceed rather than destroy the candidate over a ledger line.
+  {
+    const ledgerIssueNumber = field(finalizeAuthorityState, 'issue_number');
+    const ledgerFile = ledgerIssueNumber ? liveLedgerPath(root, ledgerIssueNumber) : null;
+    if (ledgerFile && fs.existsSync(ledgerFile)) {
+      const ledgerVerdict = adaptiveSchema.validateLedgerFinalize(fs.readFileSync(ledgerFile, 'utf8'));
+      finalizeTx.mission_ledger = ledgerVerdict.state;
+      for (const warning of ledgerVerdict.warnings) {
+        recordFinalizeFinding(warning.code, warning.summary, warning.lines);
+      }
+    } else if (ledgerIssueNumber) {
+      finalizeTx.mission_ledger = 'absent';
+    }
   }
   // #336: keep-open terminal mode — explicit flag OR the durable ## Sink issue_action field.
   // State-field derivation makes the durable record the source of truth (a caller that

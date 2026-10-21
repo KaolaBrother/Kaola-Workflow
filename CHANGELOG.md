@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The machine-global contract carries the owner-approved blocked-line hand-over, and the ledger writer enforces it (#1120).** The canonical source, `templates/global/kaola-workflow-global.md`, now states in the Mission Ledger three-write-moments bullet: "A `blocked` line may get one more write before finalize: the hand-over to an open issue (`handed-over: #M`). A `done` or `failed` line is immutable." The sentence renders through the existing installation transaction into every runtime rule carrier (claude, codex, cursor, grok, opencode, kimi, zcode, devin, droid, dsh), and the repo-tracked compact-recovery hooks are regenerated from the same source; no installed carrier is hand-edited. The kernel's `validateLedger` accepts at most one well-formed `handed-over: #M`, only on a `blocked` line. The reference writer `writeMissionLedger` reads the previous bytes and allows exactly that one blocked-line write; any other rewrite or removal of a `done`, `failed`, or already-handed-over line stays hard-refused, while recoverable conditions (a blocked line returning to `in-flight` after a ruling, or an unparseable previous ledger) warn and proceed per the owner rule. Finalization reports the ledger state (`complete`, `handed_over`, `blocked_without_handover`, `invalid`) as an advisory `mission_ledger` check and finding, never as a refusal, and archive moves the handed-over bytes unchanged. New regression suite `scripts/test-issue-1120-ledger-handover.js` covers the source and all ten carriers, the validator, the transition rule, all four claim editions, the finalize `--check` boundary, and the archive move; it is registered in both the Claude fast chain and the full tier. The mission-ledger design record and `docs/api.md` document the amendment. No release, tag, or install is implied.
+
 ## [12.5.3] - 2026-10-20
 
 ### Fixed

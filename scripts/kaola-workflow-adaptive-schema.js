@@ -66,6 +66,13 @@ const LEDGER_GITIGNORE_LINE = 'kaola-workflow/.ledger/';
 const ARCHIVED_LEDGER_FILE = 'mission-ledger.jsonl';
 const LEDGER_KEYS = Object.freeze(['n', 'name', 'details', 'status']);
 const LEDGER_STATUSES = Object.freeze(['todo', 'in-flight', 'done', 'failed', 'blocked']);
+// #1120: the owner-approved blocked-line hand-over. A `blocked` line may receive exactly ONE more
+// write before finalize, recording the open issue it was handed to as `handed-over: #M`. A
+// `done`/`failed` line is immutable, and a blocked line that already carries the token is terminal
+// to the writer. Whether the target issue is actually open is a forge fact this pure module cannot
+// read; finalize reports that boundary as an advisory finding instead of inventing a verdict.
+const LEDGER_HANDOVER_ANY = /handed-over:/g;
+const LEDGER_HANDOVER_VALID = /handed-over:[ \t]*#[1-9][0-9]*/g;
 
 // The retired frozen-plan artifact. Kept only as a name: the finalize mirror still has to recognise
 // a legacy project folder that carries one, and nothing authors it any more.
@@ -1657,9 +1664,24 @@ function ledgerPath(mainRoot, issueNumber) {
   return path.join(String(mainRoot || ''), LEDGER_DIR_REL, 'issue-' + n + '.jsonl');
 }
 
+// ledgerHandovers — the hand-over tokens a `details` string carries, counted and decoded. A token is
+// valid only in the owner-approved form `handed-over: #M` with M a positive issue number; anything
+// else that starts with `handed-over:` is counted as malformed so the validator can refuse it.
+function ledgerHandovers(details) {
+  const text = String(details == null ? '' : details);
+  const all = text.match(LEDGER_HANDOVER_ANY) || [];
+  const valid = text.match(LEDGER_HANDOVER_VALID) || [];
+  return {
+    total: all.length,
+    valid: valid.length,
+    issues: valid.map(token => Number(token.replace(/^handed-over:[ \t]*#/, ''))),
+  };
+}
+
 // validateLedger — the shape rule, pure. Every non-empty line parses to an object whose keys are
 // EXACTLY `n,name,details,status` in that order, `n` runs 1..k with no gap, `name` is a one-line
-// non-empty string, `details` a string, `status` a member of LEDGER_STATUSES. Returns
+// non-empty string, `details` a string, `status` a member of LEDGER_STATUSES. A `details` string
+// may carry at most one well-formed `handed-over: #M`, and only on a `blocked` line. Returns
 // { ok, missions, errors } — `missions` holds every line that parsed, so a reader can still count.
 function validateLedger(text) {
   const errors = [];
@@ -1676,6 +1698,12 @@ function validateLedger(text) {
     if (typeof obj.name !== 'string' || !obj.name.trim() || /[\r\n]/.test(obj.name)) errors.push(at + ': name must be one non-empty line');
     if (typeof obj.details !== 'string') errors.push(at + ': details must be a string');
     if (!LEDGER_STATUSES.includes(obj.status)) errors.push(at + ': status must be one of ' + LEDGER_STATUSES.join('|'));
+    if (typeof obj.details === 'string') {
+      const handovers = ledgerHandovers(obj.details);
+      if (handovers.total > 1) errors.push(at + ': details may carry at most one handed-over: #M');
+      if (handovers.total !== handovers.valid) errors.push(at + ': handed-over must be `handed-over: #M` with a positive issue number');
+      if (handovers.valid > 0 && obj.status !== 'blocked') errors.push(at + ': handed-over is only allowed on a blocked line');
+    }
     missions.push(obj);
   });
   return { ok: errors.length === 0, missions, errors };
@@ -1690,6 +1718,129 @@ function serializeLedger(missions) {
     details: String(m && m.details != null ? m.details : ''),
     status: String(m && m.status != null ? m.status : 'todo')
   }) + '\n').join('');
+}
+
+// ledgerLine — one mission's canonical line bytes, WITHOUT the trailing newline. Two missions are
+// the same record when these strings are equal; comparing fields one at a time would miss a key
+// spelling the writer normalized and would report a false rewrite.
+function ledgerLine(mission) {
+  return JSON.stringify({
+    n: mission && mission.n,
+    name: String(mission && mission.name != null ? mission.name : ''),
+    details: String(mission && mission.details != null ? mission.details : ''),
+    status: String(mission && mission.status != null ? mission.status : 'todo')
+  });
+}
+
+// validateLedgerTransition — the #1120 rewrite rule, pure. Given the previous and next ledger
+// bytes, decide which changes are refused and which are recoverable warnings.
+//
+//   done / failed   immutable: any byte change, removal, or renumber is an ERROR (it would destroy
+//                   the only record of a finished mission).
+//   blocked         the owner-approved hand-over is the ONE extra write: a blocked line with no
+//                   `handed-over: #M` may become blocked WITH exactly one token, keeping its name.
+//                   After that token is recorded the line is terminal too. A blocked line without
+//                   the token may still return to in-flight or reach a terminal result after a
+//                   ruling — that is normal, recoverable behavior, so it WARNS and proceeds rather
+//                   than hard-blocking. Removing a blocked line is refused.
+//   todo/in-flight  ordinary write moments, unrestricted.
+//
+// Appending a new mission is always allowed. Returns { ok, errors, warnings, before, after }.
+function validateLedgerTransition(previousText, nextText) {
+  const errors = [];
+  const warnings = [];
+  const before = validateLedger(previousText);
+  const after = validateLedger(nextText);
+  if (!after.ok) {
+    for (const error of after.errors) errors.push(error);
+    return { ok: false, errors, warnings, before: before.missions, after: after.missions };
+  }
+  if (!before.ok) {
+    // A ledger this module cannot parse is not a record whose immutability can be proven. Refusing
+    // would block the operator's repair of a recoverable malformation, so warn and proceed; the
+    // next write over valid bytes is protected again.
+    warnings.push('previous ledger did not validate; terminal-line protection is unavailable for this write: '
+      + before.errors.join('; '));
+    return { ok: true, errors, warnings, before: before.missions, after: after.missions };
+  }
+  const count = Math.max(before.missions.length, after.missions.length);
+  for (let i = 0; i < count; i += 1) {
+    const prev = before.missions[i];
+    const next = after.missions[i];
+    if (!prev) continue;   // an appended mission is a new record, never a rewrite
+    if (!next) {
+      if (prev.status === 'done' || prev.status === 'failed' || prev.status === 'blocked') {
+        errors.push('line ' + prev.n + ': a terminal ' + prev.status + ' mission may not be removed');
+      } else {
+        warnings.push('line ' + prev.n + ': a non-terminal mission was removed; later mission numbers shift (recoverable)');
+      }
+      continue;
+    }
+    if (prev.status === 'done' || prev.status === 'failed') {
+      if (ledgerLine(prev) !== ledgerLine(next)) {
+        errors.push('line ' + prev.n + ': a ' + prev.status + ' line is immutable and may not be rewritten');
+      }
+      continue;
+    }
+    if (prev.status === 'blocked') {
+      const priorHandover = ledgerHandovers(prev.details);
+      const nextHandover = ledgerHandovers(next.details);
+      if (priorHandover.valid > 0) {
+        if (ledgerLine(prev) !== ledgerLine(next)) {
+          errors.push('line ' + prev.n + ': the one allowed handed-over: #M write is already recorded; the blocked line is now terminal');
+        }
+        continue;
+      }
+      if (nextHandover.valid > 0) {
+        if (next.status !== 'blocked') {
+          errors.push('line ' + prev.n + ': handed-over: #M is only allowed on a blocked line');
+        } else if (next.name !== prev.name) {
+          errors.push('line ' + prev.n + ': the hand-over write may not rename the mission');
+        }
+        continue;
+      }
+      if (ledgerLine(prev) !== ledgerLine(next)) {
+        warnings.push('line ' + prev.n + ': blocked line changed without a handed-over: #M write'
+          + ' (recoverable; record the hand-over before finalize if one exists)');
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors, warnings, before: before.missions, after: after.missions };
+}
+
+// validateLedgerFinalize — the finalize-side reading of the #1120 rule. Finalize NEVER refuses over
+// the ledger: a missing hand-over or an unparseable ledger is a recoverable condition the owner
+// rule says to report, not a reason to destroy a candidate. It returns the state finalize reports,
+// every blocked line that still lacks its hand-over, and the hand-over targets it did find. The
+// targets' openness is a forge fact; finalize does not turn an unreadable probe into a verdict.
+function validateLedgerFinalize(text) {
+  const shape = validateLedger(text);
+  const warnings = [];
+  const handovers = [];
+  if (!shape.ok) {
+    warnings.push({
+      code: 'mission_ledger_invalid',
+      summary: 'the mission ledger does not validate; finalize proceeds (recoverable)',
+      lines: shape.errors,
+    });
+    return { ok: true, state: 'invalid', warnings, handovers, missions: shape.missions, errors: shape.errors };
+  }
+  for (const mission of shape.missions) {
+    if (mission.status !== 'blocked') continue;
+    const handover = ledgerHandovers(mission.details);
+    if (handover.valid === 0) {
+      warnings.push({
+        code: 'blocked_without_handover',
+        summary: 'blocked mission ' + mission.n + ' has no handed-over: #M before finalize; finalize proceeds (recoverable)',
+        lines: [],
+      });
+    } else {
+      handovers.push({ n: mission.n, issue: handover.issues[0] });
+    }
+  }
+  const state = warnings.length > 0 ? 'blocked_without_handover'
+    : (handovers.length > 0 ? 'handed_over' : 'complete');
+  return { ok: true, state, warnings, handovers, missions: shape.missions, errors: [] };
 }
 
 // ===========================================================================
@@ -2474,4 +2625,7 @@ module.exports = {
   ledgerPath,
   validateLedger,
   serializeLedger,
+  ledgerHandovers,
+  validateLedgerTransition,
+  validateLedgerFinalize,
 };

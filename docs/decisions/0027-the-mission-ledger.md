@@ -45,6 +45,11 @@ finalization, closure, archive, and sink are not missions all stand.
    dispatch (`in-flight`; `details` gains where it went and where output lands), result (terminal
    status; `details` gains where the outcome landed). Each write rewrites the whole file (temp file +
    rename, or an in-place edit). `done` and `failed` lines are immutable afterwards.
+   **Amended 2026-10-14 (owner-approved, #1120):** a `blocked` line may receive exactly one more
+   write before finalize — the hand-over to an open issue, recorded as `handed-over: #M` in
+   `details`. After that write the blocked line is terminal too. The writer refuses any other
+   rewrite or removal of a terminal line; a recoverable blocked transition warns and proceeds
+   rather than being hard-blocked.
 5. **Claim and archive.** Claim creates `kaola-workflow/.ledger/` in the main checkout and reports
    `ledger_path`; when the path is not gitignored it reports a `ledger_not_gitignored` finding and
    never edits `.gitignore`. Archive moves the file to
@@ -57,7 +62,7 @@ finalization, closure, archive, and sink are not missions all stand.
 > **Mission ledger contract (Workflow ↔ Runner)**
 > 1. Path: `<canonical-root>/kaola-workflow/.ledger/issue-<N>.jsonl`. `canonical-root` is the main checkout the Runner binds with `--repo`; `N` is the issue number in the session name and in the run's `workflow-state.md` `issue_number`. The folder is gitignored and exists only in the main checkout, never in a child worktree.
 > 2. Shape: one JSON object per line, one line per mission, keys exactly `n` (1-based integer), `name` (string), `details` (string, may be empty), `status` ∈ `todo | in-flight | done | failed | blocked`. No header, no other keys.
-> 3. Writer: the run's Workflow Main Orchestrator only, at three moments — create (`todo`), dispatch (`in-flight`, details gains where it went and where output lands), result (terminal status, details gains where the outcome landed). `done`/`failed` lines are immutable afterwards. The Runner never writes.
+> 3. Writer: the run's Workflow Main Orchestrator only, at three moments — create (`todo`), dispatch (`in-flight`, details gains where it went and where output lands), result (terminal status, details gains where the outcome landed). A `blocked` line may get one more write before finalize: the hand-over to an open issue (`handed-over: #M`). A `done` or `failed` line is immutable. One dispatch has one result, including `failed` or `blocked`. The Runner never writes.
 > 4. Reader: the Runner Host reads it read-only. Absent file → no live Workflow run has recorded missions for this issue (`unknown`). Present → progress = `done` lines / total lines; per-mission status by `n`. Identity verification stays on `workflow-state.md` (`claim_repository_id`, `issue_number`) as today.
 > 5. Non-Workflow workers (diagnostics, issue-less tasks) have no file and are never given one.
 > 6. Archive: on Workflow archive the file moves to `kaola-workflow/archive/<project>/mission-ledger.jsonl`; presence under `.ledger/` therefore means a live run.
