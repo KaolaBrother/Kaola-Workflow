@@ -269,12 +269,12 @@ For removal, use the [scope-specific uninstall instructions](docs/installation.m
 
 Maintained by the release transaction:
 
-- Codex `kaola-workflow` plugin manifest: `12.5.3`
-- Codex `kaola-workflow-gitlab` plugin manifest: `12.5.3`
-- Codex `kaola-workflow-gitea` plugin manifest: `12.5.3`
-- Claude Code command install, GitHub edition: `12.5.3`
-- Claude Code command install, GitLab edition: `12.5.3`
-- Claude Code command install, Gitea edition: `12.5.3`
+- Codex `kaola-workflow` plugin manifest: `12.5.4`
+- Codex `kaola-workflow-gitlab` plugin manifest: `12.5.4`
+- Codex `kaola-workflow-gitea` plugin manifest: `12.5.4`
+- Claude Code command install, GitHub edition: `12.5.4`
+- Claude Code command install, GitLab edition: `12.5.4`
+- Claude Code command install, Gitea edition: `12.5.4`
 
 </details>
 
