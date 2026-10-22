@@ -158,6 +158,18 @@ async function main() {
   const vectorChanged = runner.buildValidationVector(mutate(vectorInput, { runs: [semanticRun({ stdout_sha256: 'f'.repeat(64) })] }), []);
   assert.notStrictEqual(vectorChanged.vector_id, vectorA.vector_id);
 
+  // #1116: the declared band rides INSIDE the semantic block, so vector_id binds it; two runs under
+  // different declarations are never the same measurement. An EMPTY declaration adds no field and
+  // leaves the vector byte-identical to the pre-#1116 dialect (no receipt churn).
+  assert.ok(!('test_consumed_paths' in vectorA),
+    '#1116: an undeclared band adds NO semantic field — the old receipt dialect is preserved');
+  const vectorBandA = runner.buildValidationVector(mutate(vectorInput, { test_consumed_paths: ['docs/generated/x.json'] }), []);
+  const vectorBandB = runner.buildValidationVector(mutate(vectorInput, { test_consumed_paths: ['docs/guides/'] }), []);
+  assert.deepStrictEqual(vectorBandA.test_consumed_paths, ['docs/generated/x.json']);
+  assert.notStrictEqual(vectorBandA.vector_id, vectorBandB.vector_id,
+    '#1116: a different declaration changes vector_id — the receipt names the band it hashed under');
+  assert.notStrictEqual(vectorBandA.vector_id, vectorA.vector_id);
+
   // Real landable-tree identity ignores active workflow state and inert docs, but retains source,
   // tests, and the D-547 test-consumed prose band. The helper is exported for the review engine.
   // #709: the self-host consumed band (README/CHANGELOG/docs.api) applies ONLY to self-host repos
@@ -226,6 +238,85 @@ async function main() {
       '#709: a code edit DOES change the digest in a consumer repo (the band still catches real code)');
   } finally {
     fs.rmSync(consumerRepo, { recursive: true, force: true });
+  }
+
+  // #1116: a CONSUMER repo can DECLARE the paths its validation reads. The declaration lives in the
+  // repo's own kaola-workflow/config.json (`validation_test_consumes`), supports exact paths and
+  // trailing-slash directory prefixes, and is read by the runner's digest and the finalize hash
+  // through ONE shared reader so the two bands stay equal (#710). Absent/empty reproduces the old
+  // band exactly; malformed REFUSES rather than silently hashing under [].
+  const declaredRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-declared-'));
+  try {
+    git(declaredRepo, ['init', '-q']);
+    write(declaredRepo, 'src/app.swift', 'let x = 1\n');
+    write(declaredRepo, 'docs/generated/x.json', '{"ok":true}\n');
+    write(declaredRepo, 'docs/guides/a.md', 'guide one\n');
+    write(declaredRepo, 'docs/notes.md', 'notes one\n');
+    write(declaredRepo, 'kaola-workflow/issue-1116/.cache/evidence.md', 'state\n');
+    git(declaredRepo, ['add', '-A']); git(declaredRepo, ['commit', '-q', '-m', 'init']);
+    const configPath = path.join(declaredRepo, 'kaola-workflow', 'config.json');
+
+    // ABSENT == today's band, byte-for-byte. The declared file is invisible without a declaration.
+    const absent = runner.computeLandableTreeDigest(declaredRepo);
+    assert.match(absent, HEX);
+    assert.strictEqual(absent, runner.computeLandableTreeDigest(declaredRepo, { test_consumed_paths: [] }),
+      '#1116: no declaration addresses exactly today\'s band');
+    write(declaredRepo, 'docs/generated/x.json', '{"ok":false}\n');
+    assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo), absent,
+      '#1116: without a declaration a docs/generated edit stays invisible (the issue\'s reproduction)');
+    write(declaredRepo, 'docs/generated/x.json', '{"ok":true}\n');
+
+    // EXACT path declaration: an edit to THAT file moves the digest; an undeclared docs edit does not.
+    write(declaredRepo, 'kaola-workflow/config.json', JSON.stringify({ validation_test_consumes: ['docs/generated/x.json'] }) + '\n');
+    const exactA = runner.computeLandableTreeDigest(declaredRepo);
+    assert.match(exactA, HEX);
+    write(declaredRepo, 'docs/generated/x.json', '{"ok":false}\n');
+    const exactB = runner.computeLandableTreeDigest(declaredRepo);
+    assert.notStrictEqual(exactB, exactA,
+      '#1116: a declared exact path is validation-VISIBLE — editing it moves the digest');
+    write(declaredRepo, 'docs/notes.md', 'notes two\n');
+    assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo), exactB,
+      '#1116: an undeclared docs path stays invisible beside a declaration');
+
+    // PREFIX declaration: the trailing slash admits everything under it, and nothing beside it.
+    write(declaredRepo, 'kaola-workflow/config.json', JSON.stringify({ validation_test_consumes: ['docs/guides/'] }) + '\n');
+    const prefixA = runner.computeLandableTreeDigest(declaredRepo);
+    write(declaredRepo, 'docs/guides/a.md', 'guide two\n');
+    assert.notStrictEqual(runner.computeLandableTreeDigest(declaredRepo), prefixA,
+      '#1116: a trailing-slash directory prefix admits docs/guides/a.md');
+    write(declaredRepo, 'docs/guides-old/b.md', 'neighbour\n');
+    const prefixB = runner.computeLandableTreeDigest(declaredRepo);
+    write(declaredRepo, 'docs/notes.md', 'notes three\n');
+    assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo), prefixB,
+      '#1116: a prefix is segment-bounded — docs/guides/ does not admit docs/guides-old/ or docs/notes.md');
+
+    // EMPTY declaration is the absent band, and the receipt carries no echo for it.
+    write(declaredRepo, 'kaola-workflow/config.json', JSON.stringify({ validation_test_consumes: [] }) + '\n');
+    assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo),
+      runner.computeLandableTreeDigest(declaredRepo, { test_consumed_paths: [] }),
+      '#1116: an empty declaration is the same band as none at all');
+
+    // MALFORMED declarations fail CLOSED. The digest returns null (never a hash under []); the
+    // runValidation entry point throws a refusal naming the declaration.
+    for (const bad of ['docs/generated/x.json', ['../escape'], ['docs/*'], [''], ['.'], ['/abs']]) {
+      fs.writeFileSync(configPath, JSON.stringify({ validation_test_consumes: bad }) + '\n');
+      assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo), null,
+        '#1116: malformed declaration ' + JSON.stringify(bad) + ' yields NO digest (fail closed)');
+      await assert.rejects(
+        () => runner.runValidation({
+          repo_root: declaredRepo,
+          policy: { command: 'node --version', timeout_minutes: 1 },
+          source_env: {},
+        }),
+        /config\.json|validation_test_consumes/,
+        '#1116: runValidation REFUSES a malformed declaration instead of hashing under []');
+    }
+    // An unparseable config is a refusal too: the declaration cannot be ruled out.
+    fs.writeFileSync(configPath, '{ not json\n');
+    assert.strictEqual(runner.computeLandableTreeDigest(declaredRepo), null,
+      '#1116: unparseable config refuses instead of assuming an absent key');
+  } finally {
+    fs.rmSync(declaredRepo, { recursive: true, force: true });
   }
 
   // End-to-end execution is adapter-driven for deterministic tests. The runner takes candidate
@@ -347,8 +438,9 @@ async function main() {
     '#900: the record verb ships as a callable, not only as a CLI branch');
   assert.strictEqual(runner.FINAL_VALIDATION_FILE, 'final-validation.md',
     '#900: the recorder writes the file the gate reads');
-  assert.deepStrictEqual(runner.RECORD_FIELDS.slice(), ['verdict', 'validation_command', 'validated_candidate_hash'],
-    '#900: the verb owns exactly three field lines — the two the gate parses plus the command that produced them');
+  assert.deepStrictEqual(runner.RECORD_FIELDS.slice(), ['verdict', 'validation_command', 'validated_candidate_hash', 'validation_test_consumes'],
+    '#900/#1116: the verb owns exactly four field lines — the two the gate parses, the command that produced them, '
+    + 'and the band echo that keeps its hash from being compared under a different declaration');
   // `Object.isFrozen(undefined)` is `true`, so the Array.isArray guard is load-bearing: without it
   // this assertion passes on a module that exports no such constant at all.
   assert.ok(Array.isArray(runner.RECORD_FIELDS) && Object.isFrozen(runner.RECORD_FIELDS),
@@ -362,6 +454,7 @@ async function main() {
     verdict: 'pass',
     validation_command: 'make test',
     validated_candidate_hash: 'a'.repeat(64),
+    validation_test_consumes: '["docs/generated/x.json"]',
   };
   const bare900 = runner.renderFinalValidationRecord('', FIELDS_900);
   for (const name of runner.RECORD_FIELDS) {
@@ -372,6 +465,15 @@ async function main() {
     assert.strictEqual((bare900.match(new RegExp('^' + name + ':', 'gm')) || []).length, 1,
       '#900: exactly one column-0 `' + name + '` line — a second one is a second answer; got ' + JSON.stringify(bare900));
   }
+  // #1116: no declaration => no echo line => the pre-#1116 record bytes exactly (no churn).
+  assert.strictEqual(
+    runner.renderFinalValidationRecord('', {
+      verdict: 'pass',
+      validation_command: 'make test',
+      validated_candidate_hash: 'a'.repeat(64),
+    }),
+    'verdict: pass\nvalidation_command: make test\nvalidated_candidate_hash: ' + 'a'.repeat(64) + '\n',
+    '#1116: a record with no declared band omits the echo line entirely — upgrading does not churn records');
   assert.strictEqual(bare900, runner.renderFinalValidationRecord(bare900, FIELDS_900),
     '#900: re-recording the same result is BYTE-IDEMPOTENT — the file does not grow');
 

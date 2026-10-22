@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A consumer repo can declare the paths its validation reads, and every hash site reads the same declaration (#1116).** The validation-runner's `candidate_digest` and the finalize freshness key hid root `README.md`, `CHANGELOG.md`, `docs/**` and `kaola-workflow/**` on the #709 premise that a consumer repo reads no prose. A repo whose build or tests DO read those paths (an `include_str!`'d generated contract, README/guide samples executed as tests, a generated-schema freshness check) could produce two receipts with the same `candidate_digest` and opposite outcomes. The repo now declares the set in its own `kaola-workflow/config.json`: `validation_test_consumes` is an array of exact repo-relative paths and trailing-slash directory prefixes. ONE reader (`readValidationTestConsumes`) and ONE matcher (`matchesDeclaredTestConsumedPath`) feed the runner's `run` band, the `record` verb, the self-host chain producer and the finalize gate's `testConsumedExtra` default, so the runner band and the finalize band stay equal — #710's invariant is equal bands, not equal values. The runner receipt echoes `test_consumed_paths` inside the semantic block (so `vector_id`/`receipt_sha256` bind it); the chain receipt already records `validationTestConsumes`; `record` writes a column-0 `validation_test_consumes:` echo beside `validated_candidate_hash`, and the gate replays that band — a declaration change with no re-record reads stale, never as an equal digest. Absent or empty reproduces the old band byte-for-byte, with no receipt field and no record churn; present-but-malformed fails closed at every producer (run exit 2, record/producer exit 1 with a typed reason) and at the gate (`validation_band_malformed`), never silently hashing under `[]`. A declaration that would make the record itself visible is refused (`validation_band_self_referential`) because writing it would move the hash it binds. Tests: `test-validation-runner.js` covers the consumer fixture (exact path, prefix, undeclared control, empty/no-op, malformed), and `test-finalize-door.js` T18 covers the `run`/`record`/gate consumer arm, declaration-change staleness, legacy no-echo records, self-host producer replay, and band equality for the same edit. No release, tag, or install is implied.
+
 ## [12.5.4] - 2026-10-21
 
 ### Added

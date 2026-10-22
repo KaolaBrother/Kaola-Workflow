@@ -221,6 +221,25 @@ See [Workflow State Contract](docs/workflow-state-contract.md) for resume and ar
 [The Mission List](docs/decisions/0017-the-mission-list.md) for the design, and
 [The mission ledger](docs/decisions/0027-the-mission-ledger.md) for its carrier.
 
+### Consumer validation band
+
+The validation digest hides root `README.md`, `CHANGELOG.md`, `docs/**` and `kaola-workflow/**` by
+default, because prose and run state should not stale a receipt. A consumer repo whose build or
+tests actually READ one of those paths — a generated contract behind `include_str!`, README samples
+executed as tests, a generated-schema freshness check — declares the set in its own
+`kaola-workflow/config.json`:
+
+```json
+{ "validation_test_consumes": ["docs/generated/openapi.json", "docs/guides/"] }
+```
+
+Entries are exact repo-relative paths or directory prefixes ending in `/`. The runner's `run` and
+`record`, the chain producer and the finalize gate read the one declaration, so producer and gate
+hash the same band; the receipts echo it. An absent or empty key is today's band exactly and changes
+no receipt. A malformed key is refused, never silently read as an empty band — the finalize gate
+reports `validation_band_malformed`. See
+[the runner API](docs/api.md#validation_test_consumes--declare-paths-the-validation-reads-1116).
+
 ## Token usage at a glance
 
 Approximate **static prompt footprint for the #1101 candidate** (after 12.2.6), using the generated

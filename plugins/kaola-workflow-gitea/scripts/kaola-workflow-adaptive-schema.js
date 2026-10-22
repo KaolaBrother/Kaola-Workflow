@@ -355,6 +355,30 @@ function parseValidatedCandidateHash(text) {
   while ((m = re.exec(src)) !== null) { last = m[1].toLowerCase(); }
   return { present, hash: last };
 }
+
+// #1116: the BAND ECHO the consumer `record` verb writes beside `validated_candidate_hash`, as a
+// JSON array on one column-0 line: `validation_test_consumes: ["docs/generated/x.json"]`. It exists
+// so the gate never compares two hashes computed under different bands. Column-0 anchored and
+// last-match-wins, like every owned record field; a PRESENT but malformed line is invalid (the gate
+// refuses) — only an ABSENT line reads as the legacy no-declaration band.
+// PURE. Returns { present, paths: <canonical array|null>, valid, error }.
+function parseRecordedValidationTestConsumes(text) {
+  const src = String(text || '');
+  const present = /^validation_test_consumes:/m.test(src);
+  if (!present) return { present: false, paths: [], valid: true, error: null };
+  const re = /^validation_test_consumes:[ \t]*(.*)$/gm;
+  let m, last = null;
+  while ((m = re.exec(src)) !== null) last = m[1];
+  let parsed = null;
+  try { parsed = JSON.parse(last); } catch (_) {
+    return { present: true, paths: null, valid: false, error: 'unparseable JSON' };
+  }
+  try {
+    return { present: true, paths: normalizeValidationTestConsumesList(parsed), valid: true, error: null };
+  } catch (e) {
+    return { present: true, paths: null, valid: false, error: (e && e.message) || String(e) };
+  }
+}
 // #579: parked-lane selectivity — applied ON TOP of each clean-check site's existing untracked
 // posture (claim.js treeDirty, sink-merge assertCleanWorktree/assertWorktreeClean). Byte-identical
 // ×4 drift anchor; pure string helpers (no I/O, no forge CLI, no sibling require).
@@ -962,11 +986,145 @@ function projectRelativeArtifactPath(absPath) {
 
 const VALIDATION_GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
-// Paths this repo's own validation READS but the default code band treats as invisible
-// (docs/** is invisible so a doc edit does not invalidate a receipt). Widening this makes the
-// freshness key STRICTER, never looser. 32 archived plans declared such a widening per-run; almost
-// all of them named docs/plan-run-cards/**, which this campaign deletes.
+// The upstream default widening: [] — absent a repo declaration, the band is exactly the pre-#1116
+// band. #1116 moved the per-repo widening out of the retired plan files and into the CONSUMER repo's
+// own kaola-workflow/config.json (`validation_test_consumes`, read by readValidationTestConsumes
+// below). A declared path is test-consumed, not bookkeeping: it stays CODE in the hash, which makes
+// the freshness key STRICTER, never looser.
 const VALIDATION_TEST_CONSUMES = Object.freeze([]);
+
+// #1116: the DECLARATION SURFACE for a consumer repo's test-consumed paths. The frozen constant
+// above is the upstream default (empty here because this repo's own prose is covered by
+// SELF_HOST_TEST_CONSUMED). A repo whose build or tests READ a path the default band hides —
+// `include_str!` of a generated contract, README/guide samples executed as tests, a freshness check
+// over a generated schema — declares it in its own `kaola-workflow/config.json`:
+//
+//   { "validation_test_consumes": ["docs/generated/x.json", "docs/guides/"] }
+//
+// Entries are exact repo-relative paths or directory PREFIXES ending in `/`. ONE reader below
+// resolves the declaration for every hash site (runner run, runner record, chain producer, finalize
+// gate), so the runner band and the finalize band stay EQUAL — the #710 invariant, which is about
+// equal bands, not equal values. Absent or empty reproduces the old `[]` band byte-for-byte; a
+// present-but-malformed declaration fails CLOSED (callers refuse) rather than silently hashing under
+// `[]`, the same direction detectSelfHostNpm already takes for an unreadable package.json.
+const VALIDATION_TEST_CONSUMES_CONFIG_KEY = 'validation_test_consumes';
+
+// Canonicalize ONE declared entry. Throws on anything that is not an exact repo-relative path or a
+// trailing-slash directory prefix: the two matchers this feeds are exact/prefix byte matches, so a
+// glob or a `..` segment would silently match nothing and shrink the band the operator asked for.
+function normalizeValidationTestConsumedPath(entry) {
+  if (typeof entry !== 'string') throw new TypeError('entries must be strings');
+  let raw = entry;
+  while (raw.startsWith('./')) raw = raw.slice(2);
+  if (!raw) throw new Error('an empty path is not a declaration');
+  if (raw !== raw.trim()) throw new Error('a declared path must not carry leading or trailing whitespace: ' + JSON.stringify(entry));
+  if (raw.includes('\0') || raw.includes('\\') || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) {
+    throw new Error('a declared path must be repo-relative with forward slashes, not absolute: ' + JSON.stringify(entry));
+  }
+  if (/[*?\[\]{}]/.test(raw)) {
+    throw new Error('globs are not supported — declare an exact path or a directory prefix ending in "/": ' + JSON.stringify(entry));
+  }
+  const isPrefix = raw.endsWith('/');
+  const body = isPrefix ? raw.slice(0, -1) : raw;
+  const segments = body.split('/');
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error('a declared path must be normalized repo-relative (no empty, "." or ".." segments): ' + JSON.stringify(entry));
+  }
+  return isPrefix ? body + '/' : body;
+}
+
+// Canonicalize a whole declaration: array of strings, deduped, sorted. Sorting is what lets the
+// receipt echo and the gate comparison be order-insensitive; no hash is ever computed over the list
+// itself, only over the paths it admits.
+function normalizeValidationTestConsumesList(value) {
+  if (!Array.isArray(value)) throw new TypeError('must be an array of repo-relative paths');
+  const seen = new Set();
+  const paths = [];
+  for (const entry of value) {
+    const normalized = normalizeValidationTestConsumedPath(entry);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    paths.push(normalized);
+  }
+  paths.sort();
+  return paths;
+}
+
+// THE ONE READER. Resolves the GIT TOP LEVEL of `root` (a caller may be standing in a subdirectory;
+// the config is repo-root scoped) and returns:
+//   { ok: true,  declared: false, paths: [],          file }   — no config, or no key
+//   { ok: true,  declared: true,  paths: [<canonical>], file }   — a valid declaration
+//   { ok: false, declared: *,     paths: null, error,  file }   — unreadable/unparseable/malformed
+// `ok:false` is a REFUSAL for every hash site: an unreadable declaration is not an absent one.
+function readValidationTestConsumes(root) {
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  let base = String(root || '.');
+  try {
+    base = execFileSync('git', ['-C', base, 'rev-parse', '--show-toplevel'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || base;
+  } catch (_) { /* not a git tree — read the declaration at the given root */ }
+  const file = path.join(base, 'kaola-workflow', 'config.json');
+  let raw = null;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: true, declared: false, paths: Object.freeze([]), file, error: null };
+    return { ok: false, declared: false, paths: null, file, error: 'unreadable (' + ((e && e.code) || (e && e.message) || 'unknown') + ')' };
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_) {
+    return { ok: false, declared: false, paths: null, file, error: 'unparseable JSON' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, declared: false, paths: null, file, error: 'the config root is not a JSON object' };
+  }
+  if (!Object.prototype.hasOwnProperty.call(parsed, VALIDATION_TEST_CONSUMES_CONFIG_KEY)) {
+    return { ok: true, declared: false, paths: Object.freeze([]), file, error: null };
+  }
+  try {
+    return { ok: true, declared: true, paths: Object.freeze(normalizeValidationTestConsumesList(parsed[VALIDATION_TEST_CONSUMES_CONFIG_KEY])), file, error: null };
+  } catch (e) {
+    return { ok: false, declared: true, paths: null, file, error: (e && e.message) || String(e) };
+  }
+}
+
+// ONE matcher for the declared widening — exact path OR trailing-slash directory prefix. Shared by
+// the runner band and the finalize band so the two can never disagree about what a declaration means
+// (#710). `docs/guides/` admits `docs/guides/a.md` but not `docs/guides-old/a.md`; a plain
+// `docs/guides` entry is exact and admits only the file of that name.
+function matchesDeclaredTestConsumedPath(rel, extra) {
+  const relative = String(rel || '').trim().replace(/^\.\//, '');
+  if (!relative || !Array.isArray(extra)) return false;
+  for (const raw of extra) {
+    if (typeof raw !== 'string' || raw === '') continue;
+    // Tolerate the `./` spelling a direct library caller may still pass; the reader canonicalizes it
+    // away, so stripping it here keeps the two bands equal for the same declaration (#710).
+    let entry = raw;
+    while (entry.startsWith('./')) entry = entry.slice(2);
+    if (!entry) continue;
+    if (entry.charAt(entry.length - 1) === '/') {
+      const base = entry.slice(0, -1);
+      if (relative === base || relative.startsWith(entry)) return true;
+    } else if (relative === entry) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Band equality for receipt replay: two declarations address the same band iff their canonical
+// sorted forms are identical. A malformed side is never "equal" (fail closed).
+function sameValidationTestConsumesBand(left, right) {
+  const canonical = value => {
+    if (!Array.isArray(value)) return null;
+    try { return normalizeValidationTestConsumesList(value).join('\n'); } catch (_) { return null; }
+  };
+  const a = canonical(left);
+  const b = canonical(right);
+  return a !== null && a === b;
+}
 
 // A repo-root-relative path is BOOKKEEPING — written by the run itself rather than by the work, so
 // a change to it is not a change to the product — iff it matches one of:
@@ -1039,7 +1197,9 @@ function testConsumes(p, extra, opts) {
   // The self-host list applies ONLY to self-host repos. Default self_host=true is fail-closed.
   const selfHost = !(opts && opts.self_host === false);
   if (selfHost && SELF_HOST_TEST_CONSUMED.indexOf(rel) !== -1) return true;
-  return Array.isArray(extra) && extra.indexOf(rel) !== -1;
+  // #1116: the repo-declared widening, exact path or trailing-slash directory prefix, through the
+  // same matcher the runner band uses.
+  return matchesDeclaredTestConsumedPath(rel, extra);
 }
 // A path is VALIDATION-INVISIBLE (excluded from the code-tree hash; a fresh receipt may be cited
 // over it) iff a change to it cannot flip a chain verdict. = the bookkeeping band PLUS the whole
@@ -1280,6 +1440,7 @@ const VALIDATION_HINTS = Object.freeze({
   final_validation_unbound: () => 'final-validation.md lacks a column-0 validated_candidate_hash — record one with `kaola-workflow-validation-runner.js record --project <project> --verdict pass --command "<the validation command you ran>"`, invoked from the working tree you validated (the gate hashes the tree its own shell is in, so a record written from another checkout binds the wrong candidate); if the tree may have moved since, re-run the validation command first.',
   final_validation_stale: () => 'A relevant source/test/test-consumed file changed after validation — or the record was written from a different checkout than this one. Re-run the validation command, then re-record with `kaola-workflow-validation-runner.js record --project <project> --verdict pass --command "<the validation command you ran>"`, invoked from the working tree you validated (the gate hashes the tree its own shell is in, and a linked worktree and main differ until the branch merges); never hand-patch the hash.',
   repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
+  validation_band_malformed: () => 'kaola-workflow/config.json declares `validation_test_consumes`, but the declaration is unusable (not a JSON array of repo-relative paths, or the file itself is unreadable/unparseable). The gate refuses rather than silently hashing under an empty band. Fix the declaration — exact paths, or directory prefixes ending in "/" — and re-run. If the key is not meant to be there, remove it entirely: an absent or empty key is the old band exactly.',
 });
 // A template signals "I cannot render this payload" by returning null / '' and falls through to the
 // generic string; anything THROWN propagates. That split is deliberate and predates this file: a
@@ -1352,12 +1513,19 @@ function classifyRepoKind(root) {
 //     HASHES; it never re-executes tests.
 //
 // Typed classification family (structural, never string-matched), most severe first:
-//   chains_unverified > chains_stale > chains_empty > chains_red > chains_green, and on the
-//   consumer arm final_validation_unverified > final_validation_failed > final_validation_unbound >
-//   final_validation_stale > chains_green. `repo_kind_undetermined` classifies an indeterminate
-//   repo — the one state in which NO measurement can be taken at all.
+//   chains_unverified > validation_band_malformed > chains_stale > chains_empty > chains_red >
+//   chains_green, and on the consumer arm final_validation_unverified > final_validation_failed >
+//   final_validation_unbound > validation_band_malformed > final_validation_stale > chains_green.
+//   `repo_kind_undetermined` classifies an indeterminate repo — the one state in which NO
+//   measurement can be taken at all. `validation_band_malformed` (#1116) is the refusal to compare
+//   hashes when the repo's declared test-consumed band cannot be resolved: an unreadable
+//   declaration is never treated as an absent one.
 //
 // opts: { cacheDir (required), project, receiptPath, head, currentCodeTree, testConsumedExtra }.
+// `testConsumedExtra` defaults to the consumer repo's OWN `validation_test_consumes` declaration
+// (readValidationTestConsumes); an explicit array overrides it, and a malformed declaration refuses.
+// The consumer arm additionally requires the record's `validation_test_consumes:` echo to name the
+// same band, so two hashes computed under different bands are never compared as equals.
 // Returns { classification, green, mode, chains, detail, operator_hint, ...diagnostics }.
 function evaluateChainReceipt(root, opts) {
   const fs = require('fs');
@@ -1382,6 +1550,20 @@ function evaluateChainReceipt(root, opts) {
   // its own getGitTopLevel(cwd) — address the SAME tree and never falsely disagree.
   let hashRoot = root;
   try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
+  // #1116: ONE resolution of the declared band for both arms. An explicit `testConsumedExtra`
+  // (test seam / caller override) wins; otherwise the consumer repo's own config declaration is the
+  // default. A malformed declaration is never an empty band: `ok:false` refuses below.
+  let declaredBand;
+  if (Array.isArray(options.testConsumedExtra)) {
+    try { declaredBand = { ok: true, paths: normalizeValidationTestConsumesList(options.testConsumedExtra) }; }
+    catch (e) { declaredBand = { ok: false, error: (e && e.message) || String(e) }; }
+  } else {
+    declaredBand = readValidationTestConsumes(hashRoot);
+  }
+  const bandMalformed = () => finding('validation_band_malformed',
+    ['kaola-workflow/config.json declares `' + VALIDATION_TEST_CONSUMES_CONFIG_KEY + '` but the declaration'
+      + ' is unusable: ' + declaredBand.error + ' — the test-consumed band cannot be resolved, so no hash may'
+      + ' be compared; refusing rather than silently hashing under []']);
 
   if (repoKind.kind === 'self-host') {
     const receiptPath = options.receiptPath || path.join(cacheDir, 'chain-receipt.json');
@@ -1397,8 +1579,20 @@ function evaluateChainReceipt(root, opts) {
     if (!receipt || typeof receipt !== 'object') {
       return withMode(finding('chains_unverified', ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it']));
     }
+    if (!declaredBand.ok) return withMode(bandMalformed());
+    const recordedBand = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : VALIDATION_TEST_CONSUMES;
+    // #1116: two hashes produced under different bands are never compared as if they were the same
+    // measurement. A declaration that changed since the chains ran (the config sits inside the
+    // invisible band, so the receipt echo is what makes that visible) is stale by construction.
+    if (!sameValidationTestConsumesBand(recordedBand, declaredBand.paths)) {
+      return withMode(finding('chains_stale',
+        ['chain receipt was computed under validationTestConsumes ' + JSON.stringify(recordedBand)
+          + ' but kaola-workflow/config.json now declares ' + JSON.stringify(declaredBand.paths)
+          + ' — the bands differ, so the recorded hash is not a hash of this band; regenerate the receipt'],
+        { payload: { recorded_test_consumes: recordedBand, declared_test_consumes: declaredBand.paths } }));
+    }
     if (typeof receipt.codeTreeHash === 'string' && receipt.codeTreeHash) {
-      const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : VALIDATION_TEST_CONSUMES;
+      const extra = recordedBand;
       const currentCodeTree = options.currentCodeTree || computeCodeTreeHash(hashRoot, projTag, extra);
       if (!currentCodeTree || String(receipt.codeTreeHash).trim() !== currentCodeTree) {
         return attachChainsStaleDiagnostics(withMode(finding('chains_stale',
@@ -1466,7 +1660,31 @@ function evaluateChainReceipt(root, opts) {
     return withFvMode(finding('final_validation_unbound', ['.cache/final-validation.md carries no well-formed'
       + ' column-0 `validated_candidate_hash:` line — the pass verdict is not bound to a candidate snapshot; record one computed after the last relevant edit']));
   }
-  const extra = Array.isArray(options.testConsumedExtra) ? options.testConsumedExtra : VALIDATION_TEST_CONSUMES;
+  if (!declaredBand.ok) return withFvMode(bandMalformed());
+  // #1116: the record must name the band it was hashed under. Without that echo a record written
+  // before a declaration existed would be compared under a band it never used — the exact defect
+  // this issue reports. A malformed echo is unbound; a DIFFERENT echo is stale, never "equal enough".
+  const bandEcho = parseRecordedValidationTestConsumes(fvRaw);
+  if (!bandEcho.valid) {
+    return withFvMode(finding('final_validation_unbound',
+      ['.cache/final-validation.md carries a malformed column-0 `validation_test_consumes:` line ('
+        + bandEcho.error + ') — the band the hash was computed under cannot be replayed; re-record with'
+        + ' kaola-workflow-validation-runner.js record so the echo is a JSON array of declared paths']));
+  }
+  if (bandEcho.present && !sameValidationTestConsumesBand(bandEcho.paths, declaredBand.paths)) {
+    return withFvMode(finding('final_validation_stale',
+      ['recorded validation_test_consumes ' + JSON.stringify(bandEcho.paths)
+        + ' != current declared band ' + JSON.stringify(declaredBand.paths)
+        + ' — the declaration changed after this record was written, so its hash is not a hash of this band; re-run the validation and re-record'],
+      { payload: { recorded_test_consumes: bandEcho.paths, declared_test_consumes: declaredBand.paths } }));
+  }
+  if (!bandEcho.present && declaredBand.paths.length > 0) {
+    return withFvMode(finding('final_validation_stale',
+      ['.cache/final-validation.md carries no `validation_test_consumes:` echo, but kaola-workflow/config.json now'
+        + ' declares ' + JSON.stringify(declaredBand.paths) + ' — the record predates the declaration and cannot'
+        + ' prove which band it was hashed under; re-run the validation and re-record']));
+  }
+  const extra = bandEcho.present ? bandEcho.paths : declaredBand.paths;
   const currentCandidate = options.currentCodeTree || computeCodeTreeHash(hashRoot, projTag, extra);
   if (!currentCandidate || currentCandidate !== bind.hash) {
     return withFvMode(finding('final_validation_stale',
@@ -2771,6 +2989,13 @@ module.exports = {
   // The validation surface. ONE band constant and ONE hash helper, read by BOTH the producer
   // (run-chains) and the gates (finalize, release) — a second copy of either is a second answer.
   VALIDATION_TEST_CONSUMES,
+  VALIDATION_TEST_CONSUMES_CONFIG_KEY,
+  normalizeValidationTestConsumedPath,
+  normalizeValidationTestConsumesList,
+  readValidationTestConsumes,
+  matchesDeclaredTestConsumedPath,
+  sameValidationTestConsumesBand,
+  parseRecordedValidationTestConsumes,
   isBookkeepingPath,
   testConsumes,
   isValidationInvisible,

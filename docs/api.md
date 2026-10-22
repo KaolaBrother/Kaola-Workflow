@@ -883,29 +883,40 @@ disagree.
 | `evaluateReleaseReceipt(root, opts)` | the release gate body. `opts: { receiptPath, candidate }`. Returns `{ ok: true, mode, candidate, chains }` or `{ ok: false, reason, operator_hint, errors, ... }` |
 | `changedPathsSinceBase(root, base, project)` | sorted, deduped branch diff minus the bookkeeping band; `null` when git fails |
 | `isBookkeepingPath(p, project)` | pure. True for repo-root `CHANGELOG.md` / `README.md`, `docs/**` at any depth, and `kaola-workflow/{project}/**`. Path-SHAPE, not suffix: a nested `plugins/.../README.md` is outside the band, and `agents/*.md`, `commands/*.md`, `plugins/*/skills/**`, `plugins/*/agents/*.toml` are behavioral and stay visible |
-| `computeCodeTreeHash(root, project, testConsumedExtra, opts)` | the freshness key: a content address over the code-relevant landable tree |
+| `computeCodeTreeHash(root, project, testConsumedExtra, opts)` | the freshness key: a content address over the code-relevant landable tree. `testConsumedExtra` is the declared widening; the gate defaults it to the repo's own declaration (below) |
+| `readValidationTestConsumes(root)` | the ONE reader for `#1116`: resolves the git top level of `root`, reads `kaola-workflow/config.json`'s `validation_test_consumes`, and returns `{ ok, declared, paths, file, error }`. `ok: false` is a REFUSAL — an unreadable/unparseable/malformed declaration is never treated as absent |
+| `normalizeValidationTestConsumesList(value)` | canonicalizes a declaration: array of strings, exact repo-relative paths plus trailing-slash directory prefixes, deduped and sorted; throws on globs, `..`, absolute paths, empty segments |
+| `matchesDeclaredTestConsumedPath(rel, extra)` | the ONE matcher: exact path, or a directory prefix iff the entry ends in `/` and the path starts with it (`docs/guides/` admits `docs/guides/a.md`, not `docs/guides-old/a.md`) |
+| `parseRecordedValidationTestConsumes(text)` | pure reader for the record's column-0 band echo; `{ present, paths, valid, error }`. A present-but-malformed line is invalid, not an empty band |
 | `resolveFinalizeCheckRoot(planRoot)` | resolves the candidate root from the caller's cwd when the run folder lives in another working tree of the same repository (proven by `git worktree list`, not guessed), so a source-missing resume validates the tree that will actually merge |
-| `VALIDATION_TEST_CONSUMES` | one shared constant, currently `[]`. Both the producer (`run-chains.js`) and the gate read it, so they cannot disagree. Widening it makes the freshness key **stricter**, never looser |
+| `VALIDATION_TEST_CONSUMES` | the frozen **default** widening, `[]` — with no repo declaration the band is exactly the pre-#1116 band. Both the producer and the gate reach it through one helper, so they cannot disagree. Widening makes the freshness key **stricter**, never looser |
 | `SELF_HOST_TEST_CONSUMED` | the prose files this repo's own chains read as input, so a change to one can flip a chain verdict and must stay code-visible: `README.md`, `CHANGELOG.md`, `docs/api.md`, `docs/workflow-state-contract.md`, `docs/agents-source.md`. Applies only to a self-host repo |
 
 **Classification families.** Self-host arm:
-`chains_unverified > chains_stale > chains_empty > chains_red > chains_green`. Consumer arm:
+`chains_unverified > validation_band_malformed > chains_stale > chains_empty > chains_red >
+chains_green`. Consumer arm:
 `final_validation_unverified > final_validation_failed > final_validation_unbound >
-final_validation_stale > chains_green`. `repo_kind_undetermined` classifies the one state in which
-no measurement can be taken at all.
+validation_band_malformed > final_validation_stale > chains_green`. `repo_kind_undetermined`
+classifies the one state in which no measurement can be taken at all;
+`validation_band_malformed` (#1116) is the refusal to compare hashes when the repo's declared
+test-consumed band cannot be resolved.
 
 **Freshness.** The self-host arm prefers the `codeTreeHash` content address and falls back to the
 `headSha` pin for a legacy receipt that predates the field. On the fallback, a sha mismatch alone
 cannot distinguish "the code advanced" from "the workflow advanced HEAD past its own receipt with a
 bookkeeping commit", so `headAdvanceIsValidationInvisible` asks which paths actually moved before
-saying stale — an inert advance is not staleness.
+saying stale — an inert advance is not staleness. Since #1116 the receipt's `validationTestConsumes`
+is the repo-declared band the producer hashed under, and the gate requires it to equal the current
+declaration before it compares anything.
 
 **Consumer arm.** The agent owns verification, so the measurement is the agent's recorded
 `.cache/final-validation.md`: presence, a column-0 `verdict: pass`, and a column-0
 `validated_candidate_hash` equal to the recomputed code-tree hash. It compares two hashes; it never
 re-executes tests. An absent or malformed binding is `final_validation_unbound` (an omitted field
 must not read as bound); a mismatch is `final_validation_stale`, with both hashes carried so a
-reader can check the claim rather than take it on trust. The producer of all three fields is
+reader can check the claim rather than take it on trust. Since #1116 the record may also carry a
+column-0 `validation_test_consumes:` echo; the gate replays that band instead of assuming one, and a
+declaration change with no re-record is stale before any file edit. The producer of the fields is
 `kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
 agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
 
@@ -996,6 +1007,38 @@ kaola-workflow-validation-runner.js record --project <name> --verdict pass|fail
 
 Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not `pass`.
 
+#### `validation_test_consumes` — declare paths the validation reads (#1116)
+
+The default candidate band treats repo-root `README.md`, `CHANGELOG.md`, `docs/**` and
+`kaola-workflow/**` as validation-invisible. That is right for prose, and wrong for a repo whose
+build or tests READ one of those paths — an `include_str!`'d generated contract, README/guide
+samples executed as tests, a generated-schema freshness check. Without a declaration, two receipts
+for different trees could carry the same `candidate_digest` and opposite outcomes.
+
+Declare the set in the repo's own `kaola-workflow/config.json`:
+
+```json
+{ "validation_test_consumes": ["docs/generated/x.json", "docs/guides/"] }
+```
+
+- **Exact paths and directory prefixes.** An entry ending in `/` is a segment-bounded prefix;
+  anything else is an exact path. Globs, `..`, absolute paths and empty segments are rejected.
+- **One reader, every hash site.** `readValidationTestConsumes` resolves the set for the runner's
+  `run` and `record` verbs, the self-host chain producer, and the finalize gate. The runner band and
+  the finalize band therefore stay equal — the #710 invariant is equal bands, not equal values.
+- **Absent or empty is the old band, byte-for-byte.** No declaration adds no receipt field and
+  moves no digest, so upgrading churns nothing and no consumer has to declare anything.
+- **Present but malformed fails closed.** An unreadable `config.json`, a non-array value, or an
+  invalid entry is a refusal (`validation_band_malformed` at the gates; exit 2 on `run`, exit 1 on
+  `record`/the producer) — never a silent hash under `[]`.
+- **The receipt names its band.** The runner receipt carries `test_consumed_paths` inside the
+  semantic block (so `vector_id`/`receipt_sha256` bind it) and omits it when nothing is declared;
+  the chain receipt already writes `validationTestConsumes`; `record` writes a column-0
+  `validation_test_consumes:` line beside `validated_candidate_hash`. A declaration change alone
+  makes an old record stale instead of comparing two hashes computed under different bands.
+- There is deliberately **no widening CLI flag**: a flag would widen one producer while the gate
+  kept the default band, which is exactly the split #710 repaired.
+
 #### `--env-allowlist <A,B>` — and the keys it cannot grant
 
 The runner sandboxes the environment so `command_id` is a function of the inputs and not of the
@@ -1054,11 +1097,13 @@ always-on: the default posture — raw child output is not persisted — is unch
 
 #### `record` — bind a consumer validation to the tree it validated
 
-Writes `kaola-workflow/<project>/.cache/final-validation.md` with the three column-0 fields the
-consumer arm requires: `verdict`, `validation_command`, and `validated_candidate_hash`. The hash is
-`adaptiveSchema.computeCodeTreeHash(candidateRoot, project, VALIDATION_TEST_CONSUMES)` — the gate's own
-function, reached over the gate's own root resolution, so producer and gate cannot compute different
-answers over the same tree.
+Writes `kaola-workflow/<project>/.cache/final-validation.md` with the column-0 fields the consumer
+arm requires: `verdict`, `validation_command`, `validated_candidate_hash`, and — when the repo
+declares a non-empty band — `validation_test_consumes`. The hash is
+`adaptiveSchema.computeCodeTreeHash(candidateRoot, project, <declared band>)` — the gate's own
+function over the gate's own reader and root resolution, so producer and gate cannot compute
+different answers over the same tree or compare across different bands. No declaration means no
+band-echo line, and the record bytes are the pre-#1116 bytes exactly.
 
 - **It hashes the working tree the shell is in.** `candidate_root` is echoed on the result for exactly
   that reason. A linked worktree and the main checkout hash differently until the branch merges, so a
@@ -1068,12 +1113,17 @@ answers over the same tree.
 - **The verdict is a field, not the exit code.** `0` means the record was written, `--verdict fail`
   included; the gate then reads `final_validation_failed`. `1` is `outcome: "inconclusive"` with
   `reasons` naming why no binding could be recorded (`candidate_root_unresolved`,
-  `project_folder_missing`, `candidate_hash_unresolved`). `2` is an argument or usage error.
-- **Merge, never clobber.** The verb owns only its three field lines, recognised at column zero
+  `project_folder_missing`, `candidate_hash_unresolved`, `validation_band_malformed`,
+  `validation_band_self_referential`). `2` is an argument or usage error.
+- **Merge, never clobber.** The verb owns only its field lines, recognised at column zero
   anywhere in the file; every owned line is removed wherever it sat and one fresh block is appended, so
   repeating the call is byte-idempotent and surrounding agent prose survives. Ownership includes a
   column-0 field line inside a code fence, deliberately — the gate reads the file fence-blind, so such
   a line is already a live binding and leaving one behind would leave a second answer.
+- **The band is not allowed to hide the record itself.** A declaration that matches the record's own
+  `kaola-workflow/<project>/.cache/final-validation.md` (for example a `kaola-workflow/` prefix)
+  is refused with `validation_band_self_referential`: writing the file would move the hash it binds,
+  so the gate could never agree. Declare the specific consumed paths instead.
 - `other_candidate_roots` lists other working trees of the same repository that also carry the run
   folder, `[]` when none, with an operator hint when it is not empty.
 
@@ -2234,7 +2284,10 @@ retired `parallel_mode`) is ignored, never rewritten.
 `kaola-workflow/config.json` (optional, checked into the repo):
 
 ```json
-{ "priority_top_tier_labels": ["hotfix", "critical"] }
+{
+  "priority_top_tier_labels": ["hotfix", "critical"],
+  "validation_test_consumes": ["docs/generated/openapi.json", "docs/guides/"]
+}
 ```
 
 - `priority_top_tier_labels` — labels that sort as tier 1 regardless of P-label, overriding the
@@ -2242,6 +2295,12 @@ retired `parallel_mode`) is ignored, never rewritten.
   missing value falls back to the default. This path is daily governance in the machine-global
   contract and is reachable without invoking Next or Finalize. Organizing issues does not
   auto-claim. This repository still has no `kaola-workflow/config.json`.
+- `validation_test_consumes` (#1116) — the paths this repo's validation READS even though the default
+  band hides them: exact repo-relative paths, plus directory prefixes ending in `/`. Read by
+  `readValidationTestConsumes` for the runner's `run`/`record`, the chain producer and the finalize
+  gate, so producer and gate hash the same band. Absent or `[]` is the default band exactly; a
+  present-but-malformed value is a refusal, never an empty band. See
+  [the runner section](#validation_test_consumes--declare-paths-the-validation-reads-1116).
 
 ### Subagent model and effort
 

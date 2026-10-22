@@ -10,7 +10,7 @@ const { spawnSync } = require('child_process');
 // Loaded at module start, not only at the lazy call sites below: the kernel's require-time
 // TMPDIR/TMP/TEMP normalisation must have run before the first sandbox/temp path in this
 // file is built from os.tmpdir().
-require('./kaola-workflow-adaptive-schema');
+const validationSchema = require('./kaola-workflow-adaptive-schema');
 
 const RECEIPT_SCHEMA_VERSION = 1;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -71,6 +71,28 @@ function detectSelfHostNpm(repoRoot) {
   }
   _selfHostCache.set(key, result);
   return result;
+}
+
+// #1116: resolve the band this run hashes under. An explicit `test_consumed_paths` (library/test
+// seam) wins; otherwise the consumer repo's OWN `kaola-workflow/config.json` declaration is read
+// through the ONE shared reader. A present-but-malformed declaration THROWS — refusing is the point:
+// hashing under [] after the operator asked for a widening would silently reproduce the defect.
+// Returns the canonical declared paths (absent/empty => []); never a partial list.
+function resolveTestConsumedPaths(repoRoot, explicit) {
+  if (explicit !== undefined) {
+    try {
+      return validationSchema.normalizeValidationTestConsumesList(explicit);
+    } catch (e) {
+      throw new Error('test_consumed_paths is malformed: ' + ((e && e.message) || String(e)));
+    }
+  }
+  const declared = validationSchema.readValidationTestConsumes(repoRoot);
+  if (!declared.ok) {
+    throw new Error('kaola-workflow/config.json declares `' + validationSchema.VALIDATION_TEST_CONSUMES_CONFIG_KEY
+      + '` but it cannot be used (' + declared.error + ') — fix the declaration; a malformed band is never'
+      + ' silently replaced by an empty one');
+  }
+  return declared.paths.slice();
 }
 const TOOLCHAIN_FILES = Object.freeze([
   '.node-version',
@@ -535,8 +557,13 @@ function isValidationInvisible(relativePath, extraConsumed, opts) {
   // validation-invisible there (matching isBarrierInvisible). Default self_host=true is fail-closed.
   const selfHost = !(opts && opts.self_host === false);
   const baseConsumed = selfHost ? TEST_CONSUMED_PATHS : [];
-  const consumed = new Set([...baseConsumed, ...(Array.isArray(extraConsumed) ? extraConsumed.map(item => normalizeRepoRelative(item, 'test_consumed_path')) : [])]);
-  if (consumed.has(relative)) return false;
+  // #1116: the declared widening is matched through the SAME matcher the finalize band uses — exact
+  // path OR trailing-slash directory prefix — so the two bands can never disagree (#710).
+  const declared = Array.isArray(extraConsumed)
+    ? extraConsumed.map(item => normalizeRepoRelative(item, 'test_consumed_path'))
+    : [];
+  if (baseConsumed.indexOf(relative) !== -1) return false;
+  if (validationSchema.matchesDeclaredTestConsumedPath(relative, declared)) return false;
   if (relative === 'README.md' || relative === 'CHANGELOG.md' || relative.startsWith('docs/')) return true;
   if (relative.startsWith('kaola-workflow/')) return true;
   return false;
@@ -556,6 +583,17 @@ function computeLandableTreeDigest(repoRoot, options) {
   // #709: auto-detect self_host (consumer repos exclude CHANGELOG/README/docs from the candidate
   // digest). An explicit opts.self_host overrides the probe (test seam + deterministic calls).
   const selfHost = opts.self_host !== undefined ? opts.self_host : detectSelfHostNpm(repoRoot);
+  // #1116: a direct library call with no explicit list still honors the repo's declaration — every
+  // hash site reads the same reader. A malformed declaration yields null (fail closed) here; the CLI
+  // resolves it earlier and REFUSES with a typed message instead of reporting inconclusive.
+  let testConsumed = opts.test_consumed_paths;
+  if (testConsumed === undefined) {
+    const declared = validationSchema.readValidationTestConsumes(repoRoot);
+    if (!declared.ok) return null;
+    testConsumed = declared.paths;
+  } else if (!Array.isArray(testConsumed)) {
+    return null;
+  }
   let root;
   try { root = fs.realpathSync(repoRoot); } catch (_) { return null; }
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-index-'));
@@ -583,7 +621,7 @@ function computeLandableTreeDigest(repoRoot, options) {
         const tab = record.indexOf(9);
         if (tab < 0) return null;
         const relative = record.subarray(tab + 1).toString('utf8');
-        if (!isValidationInvisible(relative, opts.test_consumed_paths, { self_host: selfHost })) records.push(Buffer.from(record));
+        if (!isValidationInvisible(relative, testConsumed, { self_host: selfHost })) records.push(Buffer.from(record));
       }
       start = index + 1;
     }
@@ -665,6 +703,13 @@ function buildValidationVector(input, auditRuns) {
     outcome: reduction.outcome,
     reduction_reasons: reduction.reasons,
   };
+  // #1116: the band the digest was computed under rides INSIDE the semantic block, so vector_id and
+  // receipt_sha256 bind it — two receipts hashed under different bands can never present as the same
+  // measurement. Omitted when the declared set is empty, which keeps every receipt from a repo that
+  // declares nothing BYTE-IDENTICAL to the pre-#1116 dialect (no churn; #709-safe).
+  if (Array.isArray(input.test_consumed_paths) && input.test_consumed_paths.length > 0) {
+    semantic.test_consumed_paths = [...new Set(input.test_consumed_paths.map(String))].sort();
+  }
   const vectorId = sha256(canonicalJson(semantic));
   const receipt = Object.assign({}, semantic, {
     vector_id: vectorId,
@@ -809,6 +854,10 @@ async function runValidation(options, adapters) {
   const cwdAbs = path.resolve(repoRoot, policy.cwd);
   const relative = path.relative(repoRoot, cwdAbs);
   if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('cwd resolves outside repo_root');
+  // #1116: resolve the band ONCE, before anything executes or any retention directory is created.
+  // Every digest this run takes (pre/post/vector) uses this list, and the receipt echoes it, so the
+  // runner band and the finalize band are the same band (#710). Malformed => throw => refusal.
+  const testConsumedPaths = resolveTestConsumedPaths(repoRoot, opts.test_consumed_paths);
   // Before anything executes: a --keep-output that cannot be honoured is a usage error, and reporting it
   // after the run would discard the run it exists to explain.
   const keepOutputDir = opts.keep_output ? prepareKeepOutput(opts.keep_output) : null;
@@ -840,7 +889,7 @@ async function runValidation(options, adapters) {
     isolated_tmp: sandbox.tmp,
   }));
   const computeCandidate = injected.compute_candidate_digest || (() => computeLandableTreeDigest(repoRoot, {
-    test_consumed_paths: opts.test_consumed_paths,
+    test_consumed_paths: testConsumedPaths,
   }));
   const execute = injected.execute || defaultExecute;
   const now = injected.now || Date.now;
@@ -952,6 +1001,7 @@ async function runValidation(options, adapters) {
   const vector = buildValidationVector({
     command_id: commandId,
     candidate_digest: candidateDigest || null,
+    test_consumed_paths: testConsumedPaths,
     execution_identity: {
       comparable: initialIdentity.comparable === true,
       digest: initialIdentity.digest || null,
@@ -1185,7 +1235,11 @@ const FINAL_VALIDATION_FILE = 'final-validation.md';
 // survives byte-for-byte. Ownership is by field name at column zero ANYWHERE in the file, fenced or
 // not, because the gate's parser is `^`-anchored and fence-blind: a field line inside a code fence is
 // already a live binding, so leaving one behind would leave a second answer in the file.
-const RECORD_FIELDS = Object.freeze(['verdict', 'validation_command', 'validated_candidate_hash']);
+//
+// `validation_test_consumes` (#1116) is the BAND ECHO: the declaration this hash was computed under.
+// It is OPTIONAL in the rendered block — omitted when the declaration is empty, which keeps records
+// from repos that declare nothing byte-identical to the pre-#1116 dialect.
+const RECORD_FIELDS = Object.freeze(['verdict', 'validation_command', 'validated_candidate_hash', 'validation_test_consumes']);
 
 // Same rule as the shared run-folder name check: one path segment, no separators, no NUL, not a dot
 // entry. Kept inline rather than imported so this ×4 byte-identical module keeps its single sibling
@@ -1410,7 +1464,12 @@ function renderFinalValidationRecord(existingText, fields) {
   const owned = new RegExp('^(?:' + RECORD_FIELDS.join('|') + '):');
   const kept = String(existingText || '').split('\n').filter(line => !owned.test(line));
   while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
-  const block = RECORD_FIELDS.map(name => name + ': ' + fields[name]).join('\n');
+  // #1116: an absent optional field is OMITTED, never rendered as `undefined`. The band echo rides
+  // this rule: no declaration => no line => the old record bytes exactly.
+  const block = RECORD_FIELDS
+    .filter(name => fields[name] !== undefined && fields[name] !== null)
+    .map(name => name + ': ' + fields[name])
+    .join('\n');
   return (kept.length ? kept.join('\n') + '\n\n' + block : block) + '\n';
 }
 
@@ -1446,6 +1505,18 @@ function recordFinalValidation(options) {
     return inconclusive('candidate_root_unresolved',
       'No git working tree resolves from this directory, so the candidate the verdict would bind to cannot be identified. Run this from inside the checkout you validated.');
   }
+  // #1116: the SAME declaration reader every other hash site uses. A malformed declaration is a
+  // refusal, not a fallback to [] — recording a hash under a band the operator did not ask for is
+  // exactly the silent narrowing this issue exists to remove.
+  const declared = schema.readValidationTestConsumes(candidateRoot);
+  if (!declared.ok) {
+    return Object.assign(inconclusive('validation_band_malformed',
+      'kaola-workflow/config.json declares `' + schema.VALIDATION_TEST_CONSUMES_CONFIG_KEY + '` but the declaration'
+      + ' cannot be used (' + declared.error + '), so the band this record would bind is unknown and nothing was'
+      + ' recorded. Fix the declaration — exact repo-relative paths, or directory prefixes ending in "/" — or remove'
+      + ' the key entirely to use the default band.'),
+    { candidate_root: candidateRoot });
+  }
   const projectPath = path.join(candidateRoot, 'kaola-workflow', project);
   // The band check needs the resolved root, so it sits here rather than beside the argument checks
   // above — it asks where `--project` POINTS, and that is not knowable from the segment alone. Same
@@ -1471,15 +1542,6 @@ function recordFinalValidation(options) {
     return Object.assign(inconclusive('project_folder_missing', hint),
       { candidate_root: candidateRoot, archived_project_paths: archived });
   }
-  // Read the band from the constant the gate reads, never a literal: the gate substitutes
-  // VALIDATION_TEST_CONSUMES whenever it is handed no array, so the day that constant stops being
-  // empty a hardcoded [] here would silently address a narrower band than the gate does.
-  const hash = schema.computeCodeTreeHash(candidateRoot, project, schema.VALIDATION_TEST_CONSUMES);
-  if (!hash) {
-    return Object.assign(inconclusive('candidate_hash_unresolved',
-      'The code-tree hash over ' + candidateRoot + ' could not be computed (git snapshot failed), so no binding can be recorded. Fix the git failure and re-record.'),
-    { candidate_root: candidateRoot });
-  }
   // The run-state tree is validation-invisible, so writing this file cannot move the hash it records —
   // and when the folder is main-resident the write is not even in the hashed tree.
   const recordPath = path.join(folder.dir, '.cache', FINAL_VALIDATION_FILE);
@@ -1490,12 +1552,38 @@ function recordFinalValidation(options) {
       + ' resolves into the durable archive band (kaola-workflow/archive/**) — an archived run\'s record is closed'
       + ' evidence, never a write target.');
   }
+  // #1116: a declaration that makes THIS record visible turns the binding into a fixed point it can
+  // never satisfy — writing the file moves the hash that was computed just before the write. Refuse
+  // rather than write a record the gate must call stale forever. Only reachable when the record lands
+  // inside the tree being hashed; the main-resident lane writes outside that tree by construction.
+  const recordRel = path.relative(candidateRoot, recordPath);
+  if (recordRel && recordRel !== '..' && !recordRel.startsWith('..' + path.sep) && !path.isAbsolute(recordRel)) {
+    const recordRelPosix = recordRel.split(path.sep).join('/');
+    if (!schema.isValidationInvisible(recordRelPosix, project, declared.paths)) {
+      return Object.assign(inconclusive('validation_band_self_referential',
+        'The declared band makes the record itself visible (' + recordRelPosix + '), so writing it would move the'
+        + ' very hash it binds and the finalize gate could never agree. Declare the specific test-consumed paths,'
+        + ' not the run-state tree that holds this record.'),
+      { candidate_root: candidateRoot, record_path: recordPath });
+    }
+  }
+  // #1116: hash under the REPO'S OWN declaration, through the shared reader and the shared helper —
+  // never a local literal. The declaration is echoed beside the hash below so the gate replays the
+  // identical band instead of assuming one.
+  const hash = schema.computeCodeTreeHash(candidateRoot, project, declared.paths);
+  if (!hash) {
+    return Object.assign(inconclusive('candidate_hash_unresolved',
+      'The code-tree hash over ' + candidateRoot + ' could not be computed (git snapshot failed), so no binding can be recorded. Fix the git failure and re-record.'),
+    { candidate_root: candidateRoot });
+  }
   let existing = '';
   try { existing = fs.readFileSync(recordPath, 'utf8'); } catch (_) { existing = ''; }
   schema.writeFileAtomicReplace(recordPath, renderFinalValidationRecord(existing, {
     verdict,
     validation_command: command,
     validated_candidate_hash: hash,
+    // Omitted when empty: no declaration means the old band and the old record bytes.
+    validation_test_consumes: declared.paths.length ? JSON.stringify(declared.paths) : undefined,
   }));
   const others = otherProjectRoots(candidateRoot, project);
   return Object.assign({}, base, {
@@ -1503,6 +1591,7 @@ function recordFinalValidation(options) {
     candidate_root: candidateRoot,
     other_candidate_roots: others || [],
     validated_candidate_hash: hash,
+    validation_test_consumes: declared.paths,
     record_path: recordPath,
     operator_hint: folder.mainResident
       // The split is the normal worktree lane, not a fault — but it is surprising enough that saying
@@ -1564,6 +1653,15 @@ function usage() {
     '                secret the command echoes are all written out as-is, so choose the destination with that',
     '                in mind. Never overwrites: it refuses if the directory already exists, and refuses again',
     '                at write time if the command created a run-<index>.<stream> of its own while it ran.',
+    '',
+    '  BAND      run and record read the test-consumed band from the repo\'s',
+    '            kaola-workflow/config.json: `validation_test_consumes` is an array of exact',
+    '            repo-relative paths and directory prefixes ending in "/" that the validation',
+    '            READS but the default band hides (docs/**, README.md, CHANGELOG.md,',
+    '            kaola-workflow/**). Absent or empty keeps the default band exactly. There is no',
+    '            widening flag on purpose: a flag would widen only this producer while the finalize',
+    '            gate kept the default band, and the two bands must stay equal (#710). Declare it',
+    '            in the repo so `run`, `record`, the chain producer and the gate all read one list.',
   ].join('\n');
 }
 
@@ -1575,8 +1673,14 @@ async function main(argv) {
   const parsed = parseCli(argv);
   if (parsed.subcommand === 'run') {
     const values = parsed.values;
+    const repoRoot = values.repo_root || process.cwd();
+    // #1116: resolve the declared band HERE so a malformed declaration is a usage refusal at the CLI
+    // boundary, and pass the ONE resolved list down — every digest this run takes uses it. Direct
+    // library callers of runValidation get the same reader; there is no second resolution.
+    const testConsumedPaths = resolveTestConsumedPaths(repoRoot, undefined);
     const result = await runValidation({
-      repo_root: values.repo_root || process.cwd(),
+      repo_root: repoRoot,
+      test_consumed_paths: testConsumedPaths,
       policy: {
         command: values.command,
         cwd: values.cwd || '.',

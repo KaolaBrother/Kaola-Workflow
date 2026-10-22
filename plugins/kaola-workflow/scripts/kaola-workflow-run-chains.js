@@ -72,8 +72,9 @@
 //     "codeTreeHash": "<#547: sha256 of the code-relevant landable tree — the freshness key the",
 //                      // --finalize-check gate recomputes (replaces the headSha pin: a docs-only /
 //                      // workflow-state-only commit no longer forces a re-run). null on git failure.>
-//     "validationTestConsumes": ["<#547: the plan's validation_test_consumes band widening, replayed",
-//                                // by the gate so it computes the identical band; [] when none.>"],
+//     "validationTestConsumes": ["<#1116: the repo-declared validation_test_consumes band widening,",
+//                                // read from kaola-workflow/config.json and replayed by the gate so it",
+//                                // computes the identical band; [] when undeclared.>"],
 //     "startedAt": "<ISO timestamp>",
 //     "completedAt": "<ISO timestamp>",
 //     "scope": {                        // #725 (B1): the finalize-scoped chain-selection decision.
@@ -1176,7 +1177,26 @@ async function main(argv) {
   // so the gate replays the identical list even if the constant later changes. Any failure → null →
   // the gate falls back to the headSha pin (fail-closed).
   const gitTop = getGitTopLevel(cwd);
-  const validationTestConsumes = adaptiveSchema.VALIDATION_TEST_CONSUMES.slice();
+  // #1116: the widening is DECLARED by the repo (`kaola-workflow/config.json`
+  // `validation_test_consumes`) and resolved through the ONE shared reader the finalize gate also
+  // uses — no per-run plan field, no local literal. Absent/empty is the old [] band exactly. A
+  // present-but-malformed declaration REFUSES with no receipt: silently hashing under [] would
+  // produce a receipt the gate cannot compare, and the operator would have been told nothing.
+  const declaredConsumes = adaptiveSchema.readValidationTestConsumes(gitTop);
+  if (!declaredConsumes.ok) {
+    const hint = 'kaola-workflow/config.json declares `' + adaptiveSchema.VALIDATION_TEST_CONSUMES_CONFIG_KEY
+      + '` but the declaration cannot be used (' + declaredConsumes.error + '). The chain receipt binds a'
+      + ' code-tree hash to a band, and an unknown band cannot be recorded. Fix the declaration — exact'
+      + ' repo-relative paths, or directory prefixes ending in "/" — or remove the key to use the default band.';
+    recordOutcome({ result: 'refuse', reason: 'validation_band_malformed' });
+    if (asJson) {
+      process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'validation_band_malformed', operator_hint: hint, errors: [declaredConsumes.error] }) + '\n');
+    } else {
+      process.stderr.write('run-chains: validation_band_malformed — ' + hint + '\n');
+    }
+    return 1;
+  }
+  const validationTestConsumes = declaredConsumes.paths.slice();
   const codeTreeHash = adaptiveSchema.computeCodeTreeHash(gitTop, pathOpts.project || null, validationTestConsumes);
 
   // Ensure .cache directory exists before running chains.

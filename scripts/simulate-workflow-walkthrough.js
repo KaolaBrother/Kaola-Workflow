@@ -137,9 +137,18 @@ function seedAdaptiveFinalizeFixture(root, project, writeSet) {   // eslint-disa
   fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
   const schema = require('./kaola-workflow-adaptive-schema');
   let cand = '';
-  try { cand = schema.computeCodeTreeHash(root, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { cand = ''; }
+  let band = [];
+  // #1116: mirror the real `record` producer — the band is the repo's declared set, and the record
+  // echoes it so the finalize gate replays the identical band. The walkthrough fixtures declare
+  // nothing, so this is `[]` and the seeded record is the same bytes as before.
+  try {
+    const declared = schema.readValidationTestConsumes(root);
+    band = declared.ok ? declared.paths : [];
+    cand = schema.computeCodeTreeHash(root, project, band) || '';
+  } catch (_) { cand = ''; }
   fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
-    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n'
+    + (band.length ? 'validation_test_consumes: ' + JSON.stringify(band) + '\n' : ''));
 }
 
 // The candidate hash a consumer-mode `final-validation.md` must be BOUND to, computed with the
@@ -149,7 +158,10 @@ function seedAdaptiveFinalizeFixture(root, project, writeSet) {   // eslint-disa
 // door's measurements.
 function candidateHashFor(root, project) {
   const schema = require('./kaola-workflow-adaptive-schema');
-  try { return schema.computeCodeTreeHash(root, project, schema.VALIDATION_TEST_CONSUMES) || ''; } catch (_) { return ''; }
+  try {
+    const declared = schema.readValidationTestConsumes(root);
+    return schema.computeCodeTreeHash(root, project, declared.ok ? declared.paths : schema.VALIDATION_TEST_CONSUMES) || '';
+  } catch (_) { return ''; }
 }
 
 // The adaptive routing command + skill, read from the kernel constants the WRITER uses rather than

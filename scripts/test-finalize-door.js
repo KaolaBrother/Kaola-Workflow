@@ -3660,6 +3660,241 @@ function headingSequence(text) {
 })();
 
 // ---------------------------------------------------------------------------
+// T18 (#1116) — A CONSUMER REPO DECLARES ITS TEST-CONSUMED PATHS, AND EVERY HASH SITE READS THE SAME
+// DECLARATION.
+//
+// The defect: the runner's candidate_digest and the finalize freshness key both hid root
+// README/CHANGELOG/docs/** and kaola-workflow/** on the #709 premise that a consumer repo reads no
+// prose. A repo that compiles a generated contract, executes README samples, or checks a generated
+// schema reads exactly those paths, so two receipts with the SAME digest carried OPPOSITE outcomes.
+//
+// The fix under test is a declaration, not a widened default: `kaola-workflow/config.json`
+// `validation_test_consumes` (exact paths + trailing-slash prefixes), read by the runner `run` verb,
+// the `record` verb, the chain producer, and the finalize gate through ONE reader/matcher. What this
+// arm pins, in order:
+//   * absent/empty reproduces the OLD band and the OLD receipt dialect (no echo, no churn);
+//   * an exact declared path moves the runner digest AND the record/gate hash together, while an
+//     undeclared docs edit moves neither;
+//   * a prefix entry admits the whole directory, segment-bounded;
+//   * the declaration is echoed INSIDE the receipt semantic block and beside validated_candidate_hash,
+//     and a band change alone never compares two hashes as equals — it is stale until re-recorded;
+//   * malformed declarations refuse at every producer and at the gate, never hash under [];
+//   * the self-host producer records the declared band it used and the gate replays it.
+// ---------------------------------------------------------------------------
+(function T18_declaredTestConsumedPaths() {
+  console.log('T18: declared validation_test_consumes widens runner, record, producer, and gate bands together');
+  const base = makeBase('t18');
+  let schema = null;
+  let runnerMod = null;
+  try { schema = require(adaptiveSchemaPath); } catch (_) { schema = null; }
+  try { runnerMod = require(validationRunnerScript); } catch (_) { runnerMod = null; }
+  try {
+    assert(schema !== null && runnerMod !== null,
+      'T18: adaptive-schema and validation-runner are both requireable');
+    if (!schema || !runnerMod) return;
+
+    const project = 'issue-1116';
+    const repo = fs.realpathSync(initConsumerRepo(path.join(base, 'repo'), project));
+    const configPath = path.join(repo, 'kaola-workflow', 'config.json');
+    const xPath = path.join(repo, 'docs', 'generated', 'x.json');
+    const guidePath = path.join(repo, 'docs', 'guides', 'a.md');
+    const notesPath = path.join(repo, 'docs', 'notes.md');
+    const cacheDir = path.join(repo, 'kaola-workflow', project, '.cache');
+    const fvPath = path.join(cacheDir, 'final-validation.md');
+    fs.mkdirSync(path.dirname(xPath), { recursive: true });
+    fs.mkdirSync(path.dirname(guidePath), { recursive: true });
+    fs.writeFileSync(xPath, '{"ok":true}\n');
+    fs.writeFileSync(guidePath, 'guide one\n');
+    fs.writeFileSync(notesPath, 'notes one\n');
+    fs.writeFileSync(path.join(repo, 'check.js'),
+      "process.exit(require('./docs/generated/x.json').ok === true ? 0 : 1);\n");
+    G.commitAll(repo, 'feat: consumer fixture with test-consumed docs');
+
+    const gate = () => schema.evaluateChainReceipt(repo, { cacheDir, project });
+    const declaredBand = () => {
+      const read = schema.readValidationTestConsumes(repo);
+      return read.ok ? read.paths : null;
+    };
+    // The runner and finalize families are DIFFERENT algorithms over the same band; equality is not
+    // the property (#710 is equal BANDS). For one edit they must MOVE TOGETHER or stay together.
+    const familyHashes = () => ({
+      runner: runnerMod.computeLandableTreeDigest(repo),
+      finalize: schema.computeCodeTreeHash(repo, project, declaredBand()),
+    });
+    function runVerb() {
+      // spawn-class: cli-contract
+      const r = spawnSync(process.execPath, [validationRunnerScript, 'run',
+        '--command', 'node check.js', '--timeout-minutes', '1'], {
+        cwd: repo, encoding: 'utf8', timeout: 120000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0' }),
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, json: lastJson(r) };
+    }
+
+    // --- no declaration: today's band exactly, today's receipt dialect exactly.
+    let run = runVerb();
+    assert(run.status === 0 && run.json && run.json.outcome === 'pass',
+      'T18a: a consumer run with no declaration passes the first probe; got ' + run.status
+      + ' json=' + JSON.stringify(run.json) + ' stderr=' + String(run.stderr || '').slice(0, 300));
+    assert(!('test_consumed_paths' in run.json),
+      'T18a: no declaration => NO band echo in the receipt semantic block — the pre-#1116 dialect is preserved; got '
+      + JSON.stringify(Object.keys(run.json || {})));
+    const noDeclDigest = run.json.candidate_digest;
+    fs.writeFileSync(xPath, '{"ok":true,"edited":1}\n');
+    run = runVerb();
+    assert(run.json && run.json.candidate_digest === noDeclDigest,
+      'T18a: the issue REPRODUCTION — an undeclared docs/generated edit leaves candidate_digest unmoved; got '
+      + JSON.stringify({ before: noDeclDigest, after: run.json && run.json.candidate_digest }));
+
+    // --- exact declaration: the same edit now moves the digest, and the outcome can differ across two
+    // distinct digests instead of collapsing onto one.
+    fs.writeFileSync(configPath, JSON.stringify({ validation_test_consumes: ['docs/generated/x.json'] }, null, 2) + '\n');
+    fs.writeFileSync(xPath, '{"ok":true}\n');
+    const exactClean = runVerb();
+    assert(exactClean.json && exactClean.json.outcome === 'pass'
+      && Array.isArray(exactClean.json.test_consumed_paths)
+      && exactClean.json.test_consumed_paths.join(',') === 'docs/generated/x.json',
+      'T18b: the receipt echoes the declared exact path inside its semantic block; got '
+      + JSON.stringify(exactClean.json && exactClean.json.test_consumed_paths));
+    fs.writeFileSync(xPath, '{"ok":false}\n');
+    const exactEdited = runVerb();
+    assert(exactEdited.status === 1 && exactEdited.json && exactEdited.json.outcome === 'fail',
+      'T18b: the edited declared file now flips the outcome to fail; got ' + exactEdited.status
+      + ' json=' + JSON.stringify(exactEdited.json));
+    assert(exactEdited.json.candidate_digest !== exactClean.json.candidate_digest,
+      'T18b: pass and fail no longer share one candidate_digest — the defect this issue reports; got '
+      + JSON.stringify({ pass: exactClean.json.candidate_digest, fail: exactEdited.json.candidate_digest }));
+    assert(exactEdited.json.vector_id !== exactClean.json.vector_id,
+      'T18b: vector_id binds the band + result, so the two receipts are different measurements');
+
+    // --- same edge, both families: a declared edit moves BOTH; an undeclared docs edit moves NEITHER.
+    fs.writeFileSync(xPath, '{"ok":true}\n');
+    const familiesBefore = familyHashes();
+    fs.writeFileSync(xPath, '{"ok":true,"v":2}\n');
+    const familiesAfter = familyHashes();
+    assert(familiesBefore.runner !== familiesAfter.runner && familiesBefore.finalize !== familiesAfter.finalize,
+      'T18c (#710): a declared edit moves the runner digest AND the finalize hash — equal bands, not equal values; got '
+      + JSON.stringify({ before: familiesBefore, after: familiesAfter }));
+    fs.writeFileSync(notesPath, 'notes two\n');
+    const familiesUndeclared = familyHashes();
+    assert(familiesUndeclared.runner === familiesAfter.runner && familiesUndeclared.finalize === familiesAfter.finalize,
+      'T18c: an undeclared docs edit still moves neither family — the declaration widens, never replaces, the band');
+
+    // --- record writes the echo beside validated_candidate_hash, and the gate accepts the pair.
+    let rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(rec.status === 0 && rec.json && rec.json.outcome === 'recorded',
+      'T18d: record succeeds under a declaration; got ' + rec.status + ' json=' + JSON.stringify(rec.json)
+      + ' stderr=' + String(rec.stderr || '').slice(0, 300));
+    const recText = fs.readFileSync(fvPath, 'utf8');
+    assert(/^validation_test_consumes: \["docs\/generated\/x\.json"\]$/m.test(recText),
+      'T18d: the record echoes the declaration at column zero, beside the hash it was computed under; got '
+      + JSON.stringify(recText));
+    assert(gate().classification === 'chains_green' && gate().green === true,
+      'T18d: producer and gate reach green over one declaration; got ' + JSON.stringify(gate().classification));
+
+    // --- a declared edit stales the record; an undeclared docs edit does not.
+    fs.writeFileSync(xPath, '{"ok":true,"v":3}\n');
+    assert(gate().classification === 'final_validation_stale',
+      'T18e: a declared edit after recording MUST stale the binding; got ' + JSON.stringify(gate().classification));
+    rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(rec.status === 0 && gate().classification === 'chains_green',
+      'T18e: re-recording over the changed tree repairs it; got ' + JSON.stringify(gate().classification));
+    fs.writeFileSync(notesPath, 'notes three\n');
+    assert(gate().classification === 'chains_green',
+      'T18e: an UNDECLARED docs edit stays invisible to the gate — widening is opt-in; got '
+      + JSON.stringify(gate().classification));
+
+    // --- prefix declaration: the band changes, so the OLD record is stale BEFORE any file edit. A
+    // declaration change must never be compared as if it were the same measurement.
+    fs.writeFileSync(configPath, JSON.stringify({ validation_test_consumes: ['docs/generated/x.json', 'docs/guides/'] }, null, 2) + '\n');
+    let g = gate();
+    assert(g.classification === 'final_validation_stale'
+      && Array.isArray(g.recorded_test_consumes) && g.recorded_test_consumes.join(',') === 'docs/generated/x.json'
+      && Array.isArray(g.declared_test_consumes) && g.declared_test_consumes.join(',') === 'docs/generated/x.json,docs/guides/',
+      'T18f: a declaration change alone is STALE, and both bands are carried so the claim is checkable; got '
+      + JSON.stringify({ classification: g.classification, recorded: g.recorded_test_consumes, declared: g.declared_test_consumes }));
+    rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(rec.status === 0 && gate().classification === 'chains_green',
+      'T18f: re-recording replays the new band and returns green; got ' + JSON.stringify(gate().classification));
+    fs.writeFileSync(guidePath, 'guide two\n');
+    assert(gate().classification === 'final_validation_stale',
+      'T18f: a trailing-slash prefix admits docs/guides/a.md — editing it stales the gate; got '
+      + JSON.stringify(gate().classification));
+    rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(rec.status === 0 && gate().classification === 'chains_green',
+      'T18f: the prefix band re-records and closes the loop');
+
+    // --- a LEGACY record with no echo in a repo that now declares: the band it used cannot be proven,
+    // so it is stale, never silently compared under the wider band.
+    fs.writeFileSync(fvPath, recText.replace(/^validation_test_consumes:.*\n/m, ''));
+    assert(gate().classification === 'final_validation_stale',
+      'T18g: a no-echo record beside a live declaration is stale (its band is unprovable); got '
+      + JSON.stringify(gate().classification));
+    rec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(rec.status === 0 && gate().classification === 'chains_green',
+      'T18g: recording restores the echo and the green binding');
+
+    // --- malformed declarations REFUSE at every producer and at the gate; nothing hashes under [].
+    fs.writeFileSync(configPath, JSON.stringify({ validation_test_consumes: 'docs/generated/x.json' }) + '\n');
+    run = runVerb();
+    assert(run.status === 2 && /validation_test_consumes/.test(String(run.stderr || '')),
+      'T18h: the run verb refuses (usage exit 2) and NAMES the declaration; got status=' + run.status
+      + ' stderr=' + JSON.stringify(String(run.stderr || '').slice(0, 400)));
+    const badRec = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(badRec.status === 1 && badRec.json && Array.isArray(badRec.json.reasons)
+      && badRec.json.reasons.includes('validation_band_malformed'),
+      'T18h: record refuses with a typed reason instead of writing a binding under an unknown band; got '
+      + badRec.status + ' json=' + JSON.stringify(badRec.json));
+    g = gate();
+    assert(g.classification === 'validation_band_malformed' && g.green === false,
+      'T18h: the gate refuses too — a malformed declaration is never hashed as []; got '
+      + JSON.stringify(g.classification));
+
+    // --- a declaration that makes the RECORD ITSELF visible is a fixed point that can never hold.
+    fs.writeFileSync(configPath, JSON.stringify({ validation_test_consumes: ['kaola-workflow/'] }) + '\n');
+    const selfRef = runRecord(repo, ['--project', project, '--verdict', 'pass', '--command', 'node check.js']);
+    assert(selfRef.status === 1 && selfRef.json && Array.isArray(selfRef.json.reasons)
+      && selfRef.json.reasons.includes('validation_band_self_referential'),
+      'T18i: declaring the run-state tree that holds the record is refused — writing the record would move the hash it binds; got '
+      + selfRef.status + ' json=' + JSON.stringify(selfRef.json));
+
+    // --- SELF-HOST producer: the same declaration is recorded in the chain receipt and replayed by
+    // the gate. The producer and gate must agree across the declaration, not only at [].
+    const sh = path.join(base, 'selfhost');
+    initSelfHostRepo(sh);
+    fs.mkdirSync(path.join(sh, 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(path.join(sh, 'kaola-workflow', 'config.json'),
+      JSON.stringify({ validation_test_consumes: ['docs/note.md'] }, null, 2) + '\n');
+    const greenMock = writeGreenChainMock(path.join(base, 'bin'));
+    const produced = produceGreenReceipt(sh, project, greenMock);
+    assert(produced.result.status === 0 && produced.receipt !== null,
+      'T18j: the self-host producer writes a receipt under a declaration; got status='
+      + produced.result.status + ' stderr=' + String(produced.result.stderr || '').slice(0, 300));
+    assert(produced.receipt && Array.isArray(produced.receipt.validationTestConsumes)
+      && produced.receipt.validationTestConsumes.join(',') === 'docs/note.md',
+      'T18j: the chain receipt RECORDS the declared band it hashed under; got '
+      + JSON.stringify(produced.receipt && produced.receipt.validationTestConsumes));
+    const shCache = path.join(sh, 'kaola-workflow', project, '.cache');
+    const shGate = () => schema.evaluateChainReceipt(sh, { cacheDir: shCache, project });
+    assert(shGate().classification === 'chains_green' && shGate().green === true,
+      'T18j: the gate replays the recorded band and agrees with the producer; got '
+      + JSON.stringify(shGate().classification));
+    fs.writeFileSync(path.join(sh, 'docs', 'note.md'), 'edited by a test lane\n');
+    assert(shGate().classification === 'chains_stale',
+      'T18j: the declared path is inside the self-host freshness key — editing it stales the receipt; got '
+      + JSON.stringify(shGate().classification));
+    fs.writeFileSync(path.join(sh, 'kaola-workflow', 'config.json'),
+      JSON.stringify({ validation_test_consumes: 7 }) + '\n');
+    const shRefused = runChains(sh, ['--project', project, '--chains', 'claude', '--mock-chain', 'claude:' + greenMock, '--json']);
+    assert(shRefused.status === 1 && /validation_band_malformed/.test(String(shRefused.stdout || '')),
+      'T18j: the chain producer REFUSES a malformed declaration with no receipt; got status='
+      + shRefused.status + ' stdout=' + JSON.stringify(String(shRefused.stdout || '').slice(0, 300)));
+  } finally {
+    rm(base);
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.
