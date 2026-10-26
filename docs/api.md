@@ -76,6 +76,13 @@ instructions or host safety. Continue inside already-granted authorization; unau
 irreversible or value-laden calls still go to the user. A user-requested feature is not refused for
 lack of a prior observed failure.
 
+Before adding complexity for a speculative or vanishingly unlikely race or security edge
+case, the machine-global contract requires the agent to explain the concrete failure mode,
+likelihood, and complexity cost to the user and get their buy-in. The agent must not silently
+expand scope for theoretical robustness. This rule is authored once in
+`templates/global/kaola-workflow-global.md` and distributed through the existing native
+carrier and compact-recovery renders.
+
 Existing owner-authored instructions require authorization before rewrite. The operation specifies
 outcomes rather than headings, ordering, template fields, canonical bytes, or a target size. A
 subsequent run reads the resulting content and leaves it unchanged when current evidence provides no

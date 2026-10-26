@@ -66,6 +66,11 @@ branch copy.
 | Verifiable delivery | Candidate-bound validation receipts, closure records, archive, and merge/sync or PR/MR delivery |
 | Consistent instructions | A shared global contract, project-specific instructions, and runtime-specific recovery carriers |
 
+The machine-global contract requires agents to explain the concrete failure mode, likelihood, and
+complexity cost and obtain user buy-in before adding complexity for a speculative or vanishingly
+unlikely race or security edge case. Agents must not silently expand scope for theoretical
+robustness.
+
 The agent chooses decomposition and dispatch. The mission ledger preserves those decisions across
 interruptions; it introduces no scheduler or execution graph.
 
