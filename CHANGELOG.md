@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Require user buy-in before speculative robustness expands scope (#1121).** The
+  machine-global workflow contract now requires agents to explain the concrete failure mode,
+  likelihood, and complexity cost before adding complexity for a speculative or vanishingly
+  unlikely race or security edge case. The exact Owner rule is distributed through the
+  existing native carriers and regenerated compact-recovery prompts. No release or version
+  bump is included.
+
 ## [12.5.5] - 2026-10-22
 
 ### Added
