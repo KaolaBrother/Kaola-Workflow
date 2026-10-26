@@ -242,6 +242,30 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1081",
       "observed_at": "2026-09-19T00:00:00Z",
       "claim": "DSH CLI 0.1.5-rc.2 (`dsh` on PATH) answered --version, --profile headless --help, and --profile web --dump-default-config. The dumped headless and web trees include dsh-agent-instructions, dsh-skill-filesystem, dsh-tool-skill, and dsh-tool-subagent (toolName subagent and subagent_fork). A hermetic DSH_HOME install of this edition writes skills plus AGENTS.md and support scripts only; user ~/.dsh/.env, settings.yaml, and credentials were not opened."
+    },
+    "antigravity_cli": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1122",
+      "observed_at": "2026-10-26T00:00:00Z",
+      "claim": "Antigravity CLI 1.4.7 (`agy` on PATH, ~/.local/bin/agy) answered --version and --help: native print/stream-json modes with no Kaola hooks installed by this edition. CLI presence is the measured support boundary; App/IDE/cloud hosts are out of scope."
+    },
+    "antigravity_customization_docs": {
+      "kind": "official_docs",
+      "locator": "~/.gemini/antigravity-cli/builtin/skills/agy-customizations/SKILL.md (agy 1.4.7 shipped guide; summarized in docs/antigravity-edition.md)",
+      "observed_at": "2026-10-26T00:00:00Z",
+      "claim": "Shipped customization guide designates ~/.gemini/config as the global customization root (direct standalone AGENTS.md/GEMINI.md; project .agents) and separates CLI settings at ~/.gemini/antigravity-cli. Rules are cumulative with more-specific directories taking priority; per-rule size and aggregate rule budgets apply."
+    },
+    "antigravity_rules_docs": {
+      "kind": "official_docs",
+      "locator": "https://antigravity.google/docs/rules",
+      "observed_at": "2026-10-26T00:00:00Z",
+      "claim": "Public rules documentation: standalone global instruction files, cumulative rules, more-specific directory precedence. Public skills documentation names a skills root that conflicts with the shipped 1.4.7 guide; the locally measured root is recorded in docs/antigravity-edition.md."
+    },
+    "antigravity_live_probe_20261026": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1122",
+      "observed_at": "2026-10-26T00:00:00Z",
+      "claim": "Live agy 1.4.7 fresh-process probes (2026-10-26, MacBook, issue #1122): M1 — a fresh session in an unrelated git fixture quoted the exact '#1121' robustness sentence carried only by the managed ~/.gemini/config/AGENTS.md region, with tools disallowed (direct automatic global loading). M2 — project AGENTS.md and project GEMINI.md unique-token rules were each obeyed in fresh sessions in that project (both project file names load). M3 — the global skills catalog in an unrelated workspace listed kaola-workflow-finalize, workflow-init, workflow-next beside a probe fixture at ~/.gemini/config/skills (the measured global skills root, resolving the public-docs conflict), and native /probe-fixture-skill invocation returned the fixture's exact token. M4 — fresh-process reread measured; same-session hot reload and post-compaction retention remain unmeasured (recovery is explicit skill re-invocation)."
     }
   },
   "runtimes": {
@@ -677,6 +701,37 @@
         "session": "The always-loaded machine-global carrier in $DSH_HOME/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
         "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for DSH in this scope; recovery is re-invoking the skill, which resumes from the durable mission ledger and workflow state.",
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
+        "stop": "No Kaola Stop hook is installed."
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
+      }
+    },
+    "antigravity": {
+      "runtime": "antigravity",
+      "evidence": [
+        "antigravity_cli",
+        "antigravity_customization_docs",
+        "antigravity_rules_docs",
+        "antigravity_live_probe_20261026"
+      ],
+      "capabilities": {
+        "instruction_loading": "direct",
+        "hook_scope": "none",
+        "delegation_guidance": {
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
+        }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — this edition installs no Antigravity hook, so no prompt-lifecycle compact state exists.",
+        "session": "The machine-global managed-region carrier plus the invoked skill body remain the prompt authority for this adapter.",
+        "reload": "Post-compaction carrier reload is not measured for Antigravity in this scope; recovery is re-invoking the skill, which resumes from the durable mission ledger and workflow state.",
+        "tool": "No Kaola PreToolUse/PostToolUse hook or subprocess is installed for Antigravity.",
         "stop": "No Kaola Stop hook is installed."
       },
       "install_scope": {

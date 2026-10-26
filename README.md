@@ -159,6 +159,7 @@ A research or design request does not authorize implementation. See [Task Qualit
 | Devin CLI | Inline skills | Live host schema | `./install-devin.sh` |
 | Droid CLI | Inline skills | Live host schema | `./install-droid.sh` |
 | DSH (DeepSeek Harness) | Inline skills | Live host schema | `./install-dsh.sh` |
+| Antigravity CLI (`agy`) | Skills and managed global `AGENTS.md` | Live host schema | `./install-antigravity.sh` |
 
 Kaola-Workflow defines no subagent roles, role profiles, model or effort bindings, or dispatch
 policy. The current host schema, its defaults and permissions, and your instructions decide

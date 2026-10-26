@@ -54,3 +54,5 @@ kaola-workflow/issue-55/
 # with "Cannot find module './kaola-workflow-adaptive-schema'". Ignoring them also made a `git pull`
 # of a kernel change leave a stale local copy silently paired with new scripts. Do not re-add them
 # here; regenerate with `npm run sync:editions` instead.
+.antigravity/
+.antigravity-*/

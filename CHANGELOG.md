@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Antigravity (`agy` CLI) is a supported runtime (#1122).** The global-contract registry gains
+  the `antigravity-local` target (managed region at the measured `~/.gemini/config/AGENTS.md`,
+  discovered via the `agy` command), `runtime-capabilities` gains the eleventh family with live
+  2026-10-26 probe evidence (fresh-session global carrier loading, project `AGENTS.md`/`GEMINI.md`
+  loading, global skills catalog discovery and native slash invocation from
+  `~/.gemini/config/skills`), and the edition ships `sync-antigravity-edition.js`,
+  `install-antigravity.sh`, `install-all.sh`/`install.sh` wiring, a dedicated hermetic suite, and
+  the Antigravity edition page. Same-session hot reload and post-compaction retention stay
+  explicitly unmeasured; no hooks or role profiles are installed.
+
 ## [12.5.6] - 2026-10-26
 
 ### Changed

@@ -62,7 +62,7 @@ esac
 
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
-RUNTIMES=(claude opencode codex kimi grok cursor zcode devin droid dsh)
+RUNTIMES=(claude opencode codex kimi grok cursor zcode devin droid dsh antigravity)
 
 # Codex marketplace-plugin convergence inputs.
 # KAOLA_CODEX_BIN is a test seam ONLY (scripts/test-install-all.js points it at a
@@ -116,6 +116,7 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
   8. devin     Devin         (install-devin.sh)
   9. droid     Droid         (install-droid.sh)
   10. dsh      DSH           (install-dsh.sh)
+  11. antigravity Antigravity (install-antigravity.sh)
 
 Options:
   --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
@@ -124,7 +125,7 @@ Options:
   --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default)
   --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
-  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh) — logged loudly
+  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Read-only verification: check each runtime's own global-contract
                                 carrier (one line per runtime), print each runtime command, and
@@ -304,6 +305,23 @@ run_one() {
     # Run the droid installer's own --check so the row grades the Skills Droid loads.
     # A failing check fails the row only when `droid` is on PATH; absent tooling is
     # advisory, never another runtime's detected mismatch.
+    if [[ "$name" == "antigravity" ]]; then
+      local aout arc=0 afirst
+      aout="$("$@" --check 2>&1)" || arc=$?
+      if [[ "$arc" -eq 0 ]]; then
+        note="${note:+$note; }skills CURRENT"
+        echo "    [antigravity] skills CURRENT"
+      elif command -v agy >/dev/null 2>&1; then
+        afirst="$(printf '%s\n' "$aout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        verdict="FAIL"
+        note="${note:+$note; }skills check FAILED (exit $arc)${afirst:+: $afirst}"
+        echo "    [antigravity] skills check FAILED (exit $arc)${afirst:+ — $afirst}"
+      else
+        afirst="$(printf '%s\n' "$aout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        note="${note:+$note; }skills check FAILED (exit $arc)${afirst:+: $afirst} (advisory: agy not on PATH)"
+        echo "    [antigravity] skills check FAILED (exit $arc)${afirst:+ — $afirst} (advisory: agy not on PATH)"
+      fi
+    fi
     if [[ "$name" == "droid" ]]; then
       local dout drc=0 dfirst
       dout="$("$@" --check 2>&1)" || drc=$?
@@ -722,9 +740,9 @@ echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] &&
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
 if [[ "$SCOPE" == "global" ]]; then
-  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            DEVIN_SCOPE=(--global);            DROID_SCOPE=(--global);            DSH_SCOPE=(--global);            CODEX_SCOPE=(--global)
+  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            DEVIN_SCOPE=(--global);            DROID_SCOPE=(--global);            DSH_SCOPE=(--global);            AGY_SCOPE=(--global);            CODEX_SCOPE=(--global)
 else
-  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); DEVIN_SCOPE=(--target "$PROJECT_DIR"); DROID_SCOPE=(--target "$PROJECT_DIR"); DSH_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
+  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); DEVIN_SCOPE=(--target "$PROJECT_DIR"); DROID_SCOPE=(--target "$PROJECT_DIR"); DSH_SCOPE=(--target "$PROJECT_DIR"); AGY_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
 fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
@@ -760,6 +778,9 @@ DROID_CMD=(bash "$ROOT/install-droid.sh" --forge="$FORGE" "${DROID_SCOPE[@]}")
 DSH_CMD=(bash "$ROOT/install-dsh.sh" --forge="$FORGE" "${DSH_SCOPE[@]}")
 [[ "$YES" == "1" ]] && DSH_CMD+=(--yes)
 
+AGY_CMD=(bash "$ROOT/install-antigravity.sh" --forge="$FORGE" "${AGY_SCOPE[@]}")
+[[ "$YES" == "1" ]] && AGY_CMD+=(--yes)
+
 run_one claude   "${CLAUDE_CMD[@]}"
 run_one opencode "${OPENCODE_CMD[@]}"
 run_one codex    "${CODEX_CMD[@]}"
@@ -775,6 +796,7 @@ run_one zcode    "${ZCODE_CMD[@]}"
 run_one devin    "${DEVIN_CMD[@]}"
 run_one droid    "${DROID_CMD[@]}"
 run_one dsh      "${DSH_CMD[@]}"
+run_one antigravity "${AGY_CMD[@]}"
 
 print_summary
 overall=$?

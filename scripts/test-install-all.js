@@ -96,6 +96,7 @@ const KNOWN_INSTALLERS = [
   { runtime: 'devin',    file: 'install-devin.sh',                                             ref: 'install-devin.sh' },
   { runtime: 'droid',    file: 'install-droid.sh',                                             ref: 'install-droid.sh' },
   { runtime: 'dsh',      file: 'install-dsh.sh',                                               ref: 'install-dsh.sh' },
+  { runtime: 'antigravity', file: 'install-antigravity.sh',                                    ref: 'install-antigravity.sh' },
 ];
 
 // ---- tree-derived installer set (so the list above can never go stale) ----
@@ -390,6 +391,7 @@ function stubRoot(opts) {
     devin:    writeStub(root, 'install-devin.sh',       'bash', codes.devin ?? 0, '.ran-devin'),
     droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid', (opts.checkCodes || {}).droid, (opts.checkOutput || {}).droid),
     dsh:      writeStub(root, 'install-dsh.sh',         'bash', codes.dsh ?? 0, '.ran-dsh'),
+    antigravity: writeStub(root, 'install-antigravity.sh', 'bash', codes.antigravity ?? 0, '.ran-antigravity'),
   };
   // #1046: install-all now gates every runtime installer behind one read-only
   // preflight / atomic global-contract transaction. This stub keeps the wrapper

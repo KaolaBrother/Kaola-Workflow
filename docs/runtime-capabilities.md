@@ -163,11 +163,11 @@ profiles with one pinned subagent model; ADR 0029 records what was retired.
 
 ## Adapter inventory
 
-The closed inventory contains ten runtime families and twelve adapter variants:
+The closed inventory contains eleven runtime families and thirteen adapter variants:
 
 - one Claude adapter;
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
-- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH.
+- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, and Antigravity.
 
 Every adapter renders commands or skills, any measured hooks, and the global contract only; none
 installs a Kaola role profile. `scripts/runtime-adapter-facts.js` rejects every retired role,
@@ -368,6 +368,22 @@ re-invoked Skill both emit fresh Skill tool calls after it, and ZCode's AGENTS.m
 compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP exposes no
 `available_commands_update`; a real 1M auto-compact leg was not run and stays unverified.
 
+### Antigravity
+
+- **Live probes (2026-10-26, issue #1122).** Antigravity CLI 1.4.7 (`agy`, MacBook). The shipped
+  `agy-customizations` guide designates `~/.gemini/config` as the global customization root with
+  CLI settings separate under `~/.gemini/antigravity-cli`. Measured: a fresh `agy --print` process
+  in an unrelated git fixture quoted the exact robustness sentence carried only by the managed
+  `~/.gemini/config/AGENTS.md` region (direct automatic global loading, tools disallowed); project
+  `AGENTS.md` and `GEMINI.md` unique-token rules each applied in fresh sessions; the global skills
+  catalog in an unrelated workspace listed the three Kaola skills beside a probe fixture at
+  `~/.gemini/config/skills` — the measured global skills root, resolving the public docs' contrary
+  path — and native `/probe-fixture-skill` slash invocation returned the fixture's exact token.
+  Fresh-process reread is the measured reload boundary: same-session hot reload and
+  post-compaction carrier/skill retention are **not measured**; recovery is explicit skill
+  re-invocation resuming from durable state. This edition installs no hooks and no Kaola role
+  profiles. See [Antigravity edition](antigravity-edition.md).
+
 ## Explicit unknowns
 
 - opencode's hard or advisory AGENTS size limit;
@@ -380,5 +396,9 @@ compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP e
 - any precedence or conflict behavior not stated by the evidence above.
 - Cursor's and ZCode's unpublished Task/Agent JSON call fields; the live runtime schema is the
   authority when present.
+- Antigravity same-session instruction/skill hot reload, post-compaction carrier and skill
+  retention, an explicit global-vs-project precedence conflict outcome, and the alternate global
+  roots the public docs name (`~/.gemini/AGENTS.md`, `~/.gemini/antigravity-cli/skills`) — none
+  provisioned or probed; only the measured `~/.gemini/config` roots are supported.
 
 An unknown stays `unknown`; it is not converted into support by a generated file existing on disk.

@@ -46,6 +46,9 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
   managed global contract, and no hooks or other harness additions.
 - [DSH Edition](dsh-edition.md) — DeepSeek Harness (`dsh`) live host schema (no Kaola role
   profiles), inline skills, managed global contract, and no writes to user DSH config.
+- [Antigravity Edition](antigravity-edition.md) — Antigravity CLI (`agy`) skills at the measured
+  `~/.gemini/config` root, managed global `AGENTS.md`, live host schema (no Kaola role profiles),
+  and dated probe measurements in [runtime capabilities](runtime-capabilities.md).
 
 ## Decisions
 
