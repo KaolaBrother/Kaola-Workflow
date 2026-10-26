@@ -15,7 +15,7 @@ const CLI = path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js');
 const EXPECTED_SURFACES = [
   'claude-local', 'codex-local', 'opencode-local', 'kimi-local', 'grok-local',
   'cursor-cli-local', 'cursor-app-local', 'cursor-cloud', 'devin-local', 'zcode-local',
-  'droid-local', 'dsh-local',
+  'droid-local', 'dsh-local', 'antigravity-local',
 ];
 
 let passed = 0;
@@ -129,9 +129,9 @@ ok(source.split(/\r?\n/).length < 120, 'A1: universal contract stays concise');
 
 const registry = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'));
 same(registry.targets.map(target => target.id), EXPECTED_SURFACES,
-  'A2: live matrix is derived from the closed twelve-surface registry');
-same(new Set(registry.targets.map(target => target.runtime)).size, 10,
-  'A2: twelve surfaces cover ten runtime families');
+  'A2: live matrix is derived from the closed thirteen-surface registry');
+same(new Set(registry.targets.map(target => target.runtime)).size, 11,
+  'A2: thirteen surfaces cover eleven runtime families');
 for (const target of registry.targets) {
   ok(target.discovery && target.carrier && target.precedence && target.reload,
     `A2[${target.id}]: discovery, carrier, precedence, and reload are measured`);
@@ -149,6 +149,7 @@ const reloadPatterns = {
   'zcode-local': /survives compaction.*Skill invocation/s,
   'droid-local': /new session/,
   'dsh-local': /new session/,
+  'antigravity-local': /fresh agy process/,
 };
 for (const target of registry.targets) {
   ok(reloadPatterns[target.id].test(target.reload),
@@ -307,7 +308,7 @@ try {
   const absentRoot = path.join(sandbox, 'not-installed');
   const absentEnv = makeEnvironment(absentRoot, { installed: false });
   const absent = run(['install', '--json', '--nonce', nonce], absentEnv).json;
-  same(absent.targets.filter(row => row.status === 'NOT_INSTALLED').length, 11,
+  same(absent.targets.filter(row => row.status === 'NOT_INSTALLED').length, 12,
     'A8: every absent local surface is reported NOT_INSTALLED');
   same(absent.targets.find(row => row.id === 'cursor-cloud').status, 'REMOTE_REQUIRED',
     'A8: missing local runtimes never erase the Cloud row');

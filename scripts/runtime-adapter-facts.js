@@ -18,7 +18,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADAPTER_SOURCE = 'templates/agents/runtime-capabilities.json';
-const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh']);
+const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh', 'antigravity']);
 const REQUIRED_CAPABILITIES = Object.freeze(['instruction_loading', 'hook_scope', 'delegation_guidance']);
 const GUIDANCE_KEYS = Object.freeze(['native_routes', 'availability']);
 // Capability fields that belonged to the retired Kaola role and profile layer (#1101).

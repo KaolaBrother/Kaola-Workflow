@@ -29,7 +29,7 @@ const RETIRED_ROLE_NAMES = Object.freeze([
   'tdd-guide',
 ]);
 const RUNTIME_NAMES = Object.freeze([
-  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh',
+  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh', 'antigravity',
 ]);
 const SORTED_RUNTIME_NAMES = Object.freeze(sorted(RUNTIME_NAMES));
 // The two sentences the native-only dispatch contract carries (ADR 0029 decision 2).
@@ -337,6 +337,7 @@ function freshRoutingCarriers(topic) {
     grok: require('./sync-grok-edition.js'),
     cursor: require('./sync-cursor-edition.js'),
     zcode: require('./sync-zcode-edition.js'),
+    antigravity: require('./sync-antigravity-edition.js'),
   };
   const carriers = [];
   for (const row of routing.GENERATED_SURFACES.filter(candidate => candidate.topic === topic)) {
@@ -354,7 +355,9 @@ function freshRoutingCarriers(topic) {
         ? edition.renderCommand(content, row.forge, `${runtime}/${row.forge}/${basename}`)
         : runtime === 'zcode'
           ? edition.renderSkill(content, edition.skillNameForCommandBase(basename), row.forge)
-          : edition.renderCommand(content, basename, row.forge);
+          : runtime === 'antigravity'
+            ? edition.renderSkill(content, basename, row.forge)
+            : edition.renderCommand(content, basename, row.forge);
       carriers.push({
         runtime,
         forge: row.forge,
@@ -587,8 +590,8 @@ for (const relativePath of retiredPromptArtifacts) {
 }
 
 const initCarriers = freshRoutingCarriers('init');
-assert(initCarriers.length === 21,
-  `A3[carriers]: all 21 runtime/forge workflow-init renders are covered — got ${initCarriers.length}`);
+assert(initCarriers.length === 24,
+  `A3[carriers]: all 24 runtime/forge workflow-init renders are covered — got ${initCarriers.length}`);
 for (const carrier of initCarriers) {
   const label = `${carrier.runtime}/${carrier.forge} (${carrier.label})`;
   const text = carrier.content;
@@ -691,7 +694,7 @@ assert(adapters && adapters.schema_version === 2,
   'A6: runtime adapter facts are schema_version 2 (native facts only)');
 const declaredRuntimes = sorted(new Set(adapterView.entries.map(entry => entry.runtime).filter(Boolean)));
 assert(JSON.stringify(declaredRuntimes) === JSON.stringify(SORTED_RUNTIME_NAMES),
-  'A6: adapters declare all ten runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
+  'A6: adapters declare all eleven runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
 for (const runtime of RUNTIME_NAMES) {
   const entries = adapterView.entries.filter(entry => entry.runtime === runtime);
   assert(entries.length > 0, `A6[${runtime}]: a declared runtime adapter exists`);
@@ -942,7 +945,7 @@ assert(!/No current file contains that material/.test(provenanceDoc),
   } finally {
     SLOTS['runtime-dispatch-common'] = original;
   }
-  assert(reached.length === 42 && missed.length === 0,
+  assert(reached.length === 48 && missed.length === 0,
     'A9: a shared dispatch-contract mutation reaches every runtime carrier — missed ' + JSON.stringify(missed));
   assert(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode'].every(runtime =>
     reached.some(label => label.startsWith(runtime + '/'))),
@@ -1082,8 +1085,8 @@ if (adapters && typeof adapterFacts.validateRuntimeAdapters === 'function') {
   } catch (error) {
     assert(false, 'A10-delegation/render: fresh next+finalize runtime carriers render — ' + error.message);
   }
-  assert(carriers.length === 42,
-    'A10-delegation/render: next+finalize cover 7 runtimes x 3 forges — got ' + carriers.length);
+  assert(carriers.length === 48,
+    'A10-delegation/render: next+finalize cover 8 runtimes x 3 forges — got ' + carriers.length);
 
   const renderGuidance = adapterFacts.renderRuntimeDelegationGuidance;
   assert(typeof renderGuidance === 'function',
