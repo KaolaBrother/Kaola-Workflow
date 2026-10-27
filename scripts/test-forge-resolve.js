@@ -73,7 +73,7 @@ function runCli(args, opts) {
   const res = spawnSync(process.execPath, [RESOLVER].concat(args), {
     cwd: options.cwd || os.tmpdir(),
     encoding: 'utf8',
-    env: Object.assign({ HOME: CLI_HOME }, process.env, options.env || {}),
+    env: Object.assign({}, process.env, { HOME: CLI_HOME }, options.env || {}),
   });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
@@ -465,6 +465,7 @@ check('CLI --shell prints nothing on refusal and exits 1', () => {
   assert.strictEqual(out.status, 1, out.stdout);
   assert.strictEqual(out.stdout.trim(), '');
   assert(out.stderr.includes('forge_not_installed'), out.stderr);
+  assert(out.stderr.includes('./install.sh --yes --forge=github'), out.stderr);
 });
 
 check('CLI set/unset writes the local marker', () => {
@@ -475,6 +476,21 @@ check('CLI set/unset writes the local marker', () => {
   const unset = runCli(['unset', '--cwd', dir, '--json']);
   assert.strictEqual(unset.status, 0, unset.stderr);
   assert.strictEqual(unset.stdout.includes('"removed":true'), true, unset.stdout);
+});
+
+check('CLI HOME isolation ignores a poisoned process HOME', () => {
+  const poison = temp('kw-fr-poison-home-');
+  writeMachineConfig(poison, { forge_hosts: { 'github.com': 'gitea' } });
+  const savedHome = process.env.HOME;
+  process.env.HOME = poison;
+  try {
+    const dir = repo({ origin: 'https://github.com/Owner/Repo.git' });
+    const out = runCli(['resolve', '--json', '--installed', 'github', '--cwd', dir]);
+    assert.strictEqual(out.status, 0, out.stdout + out.stderr);
+    assert.strictEqual(jsonOf(out).forge, 'github', 'real HOME config leaked into the CLI test');
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+  }
 });
 
 check('CLI help exits 0 without side effects', () => {

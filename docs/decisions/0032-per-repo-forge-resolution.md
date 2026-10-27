@@ -88,7 +88,7 @@ command splices are composed from the existing per-forge values into `case "$KW_
 the entry calls `resolve --shell --installed <csv>` with `--scripts-dir-<forge>`. A per-forge
 uninstall keeps the multi entry and repoints the hook, so a repo that resolves the removed forge
 gets `forge_not_installed`. `install-all.sh --check` reports installed vs expected. The measured
-multi increment is +2,830 estimated tokens for Next+Finalize, under the proposed 3,000-token D5
+multi increment is +2,890 estimated tokens for Next+Finalize, under the proposed 3,000-token D5
 cap (pending owner ratification).
 P3 then resolved the remaining runtimes: Codex keeps both forge plugins installed (namespaced
 skills, separate caches), while the additive runtimes take the explicit single-forge alternative

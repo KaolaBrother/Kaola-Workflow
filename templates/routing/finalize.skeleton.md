@@ -165,6 +165,7 @@ case "$SINK_KIND" in
 esac
 <!-- /REGION -->
 <!-- REGION:multi — one install carries all three editions; the resolved forge picks the command -->
+[ -n "$KW_FORGE" ] || { echo "run this block in the same shell as the resolver above" >&2; exit 1; }
 case "$SINK_KIND" in
   pr|mr)
 <!-- SPLICE:fz-sink-pr-run -->

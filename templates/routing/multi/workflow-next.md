@@ -140,6 +140,7 @@ Run this block in the same shell as the resolver above; `KW_FORGE` and `KAOLA_SC
 If a GitHub, GitLab, or Gitea remote and its authenticated forge CLI (`gh`, `glab`, or `tea`) are available, read each shortlisted issue's body and comments:
 
 ```bash
+[ -n "$KW_FORGE" ] || { echo "run this block in the same shell as the resolver above" >&2; exit 1; }
 case "$KW_FORGE" in
   github)
     gh issue view {N} --json body,comments

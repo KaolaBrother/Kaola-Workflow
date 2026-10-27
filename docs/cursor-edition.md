@@ -337,8 +337,8 @@ use adds 0 Kaola recovery bytes and starts 0 Kaola recovery subprocesses. Projec
 
 **Single-forge.** This edition installs one forge at a time. The native command namespace (`commands/<topic>.md`) is flat: the three topics use
 the same basenames for every forge, so a second install would overwrite the entry rather than add a
-second one. The installer copies the selected forge's support scripts and leaves the previous
-forge's renamed scripts in place. The P1 resolver guard refuses a repository that resolves to a different forge before any
-forge CLI call, so the single-forge posture is safe; reinstall with
+second one. The installer prunes support scripts by receipt: unmodified files recorded in the
+previous install are removed when they are missing from the selected forge's desired set. The P1 resolver guard refuses a repository that resolves to a different forge before any forge CLI call,
+so the single-forge posture is safe; reinstall with
 `--forge=<github|gitlab|gitea>` to switch. The issue #1123 P3 union-scripts + multi-entry layout is
 therefore not used here.

@@ -540,6 +540,7 @@ function main(argv) {
     if (cli.shell) {
       if (!result.ok) {
         process.stderr.write('forge-resolve: ' + result.reason + ' — ' + result.detail + '\n');
+        if (result.operator_hint) process.stderr.write(result.operator_hint + '\n');
         return 1;
       }
       process.stdout.write(shellAssignments(result, {

@@ -23,8 +23,10 @@ const NEXT = fs.readFileSync(path.join(MULTI, 'workflow-next.md'), 'utf8');
 const INIT = fs.readFileSync(path.join(MULTI, 'workflow-init.md'), 'utf8');
 
 function sinkBlock(text) {
-  const start = text.indexOf('case "$SINK_KIND" in');
-  assert(start >= 0, 'multi finalize has no sink case');
+  const sinkCase = text.indexOf('case "$SINK_KIND" in');
+  assert(sinkCase >= 0, 'multi finalize has no sink case');
+  const guard = text.lastIndexOf('[ -n "$KW_FORGE" ]', sinkCase);
+  const start = guard >= 0 ? guard : sinkCase;
   const end = text.indexOf('```', start);
   assert(end > start, 'multi finalize sink case has no closing fence');
   return text.slice(start, end).trimEnd();
@@ -34,36 +36,40 @@ const block = sinkBlock(FINALIZE);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-multi-sink-'));
 const script = path.join(tmp, 'sink.sh');
 
-function runSink(forge, kind) {
+function runSink(forge, kind, opts) {
+  const withForge = !opts || opts.withForge !== false;
   fs.writeFileSync(script, [
     '#!/bin/bash',
     'node(){ printf "%s\\n" "$*"; }',
     block,
   ].join('\n'));
-  // spawn-class: cli-contract
+  const env = Object.assign({}, process.env, {
+    KW_FORGE: forge,
+    SINK_KIND: kind,
+    SINK_BRANCH: 'b',
+    SINK_ISSUE_FLAG: '',
+    SINK_ISSUE_NUMBERS_FLAG: '',
+    SINK_KEEP_OPEN_FLAG: '',
+    SINK_KEEP_OPEN_PR: '',
+    KAOLA_SCRIPTS: '/ks',
+  });
+  if (!withForge) delete env.KW_FORGE;
   // spawn-class: cli-contract
   const res = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     timeout: 30000,
-    env: Object.assign({}, process.env, {
-      KW_FORGE: forge,
-      SINK_KIND: kind,
-      SINK_BRANCH: 'b',
-      SINK_ISSUE_FLAG: '',
-      SINK_ISSUE_NUMBERS_FLAG: '',
-      SINK_KEEP_OPEN_FLAG: '',
-      SINK_KEEP_OPEN_PR: '',
-      KAOLA_SCRIPTS: '/ks',
-    }),
+    env,
   });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
-
 const EXPECTED = {
   github: { pr: 'kaola-workflow-sink-pr.js', mr: 'kaola-workflow-sink-pr.js', merge: 'kaola-workflow-sink-merge.js' },
   gitlab: { pr: 'kaola-gitlab-workflow-sink-mr.js', mr: 'kaola-gitlab-workflow-sink-mr.js', merge: 'kaola-gitlab-workflow-sink-merge.js' },
   gitea: { pr: 'kaola-gitea-workflow-sink-pr.js', mr: 'kaola-gitea-workflow-sink-pr.js', merge: 'kaola-gitea-workflow-sink-merge.js' },
 };
+
+const routeCount = Object.keys(EXPECTED).length
+  * Object.keys(EXPECTED[Object.keys(EXPECTED)[0]]).length;
 
 try {
   assert(/case "\$SINK_KIND" in\s*\n\s*pr\|mr\)/.test(block), 'multi sink case must carry pr|mr');
@@ -80,6 +86,24 @@ try {
       }
     }
   }
+
+  // A fresh shell has no KW_FORGE; the block must refuse rather than silently no-op.
+  const noForge = runSink('github', 'pr', { withForge: false });
+  assert.strictEqual(noForge.status, 1, 'sink block without KW_FORGE must exit 1');
+  assert(noForge.stderr.includes('same shell as the resolver'), noForge.stderr);
+  assert(!noForge.stdout.includes('sink-'), 'sink block ran a sink without KW_FORGE: ' + noForge.stdout);
+
+  const nextGuard = NEXT.indexOf('[ -n "$KW_FORGE" ]');
+  assert(nextGuard >= 0, 'multi next issue-detail block lacks the KW_FORGE guard');
+  assert(NEXT.includes('run this block in the same shell as the resolver above'));
+  const nextFile = path.join(tmp, 'next-issue-detail.sh');
+  fs.writeFileSync(nextFile, NEXT.slice(nextGuard, NEXT.indexOf('```', nextGuard)));
+  const nextEnv = Object.assign({}, process.env);
+  delete nextEnv.KW_FORGE;
+  // spawn-class: cli-contract
+  const nextRun = spawnSync('/bin/bash', [nextFile], { encoding: 'utf8', env: nextEnv, timeout: 30000 });
+  assert.strictEqual(nextRun.status, 1, 'next issue-detail without KW_FORGE must exit 1');
+  assert(nextRun.stderr.includes('same shell as the resolver'), nextRun.stderr);
 
   // fz-sink-pr-run is derived from fz-sink-pr-case; pin that mechanically.
   const { SPLICES } = require(path.join(ROOT, 'templates', 'routing', 'slots.js'));
@@ -114,4 +138,4 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log('OK: test-issue-1123-multi-sink.js — ' + (2 + 9) + ' sink routes + B1/M1/M2 render pins');
+console.log('OK: test-issue-1123-multi-sink.js — ' + routeCount + ' sink routes + B1/M1/M2 render pins');

@@ -245,8 +245,9 @@ or no `origin`; it is never guessed by substring.
 `CLAIM_JS` (the forge's claim filename). `--scripts-dir` is the fallback directory;
 `--scripts-dir-<forge>` selects the directory for the resolved forge and is what the multi entry
 passes, so the neutral resolver never hardcodes an edition path. On a refusal it writes the reason
-to stderr and exits 1 with no stdout; the `forge_unresolved` and `forge_not_installed` bodies carry
-an `operator_hint` naming the three declaration routes and the matching install command. `set`
+to stderr and exits 1 with no stdout; `--shell` appends the same `operator_hint` to stderr. The
+`forge_unresolved` and `forge_not_installed` bodies carry an `operator_hint` naming the three
+declaration routes and the matching install command. `set`
 writes T2 and `unset` removes it idempotently; neither touches a tracked file, and no command prints
 a credential or URL userinfo.
 

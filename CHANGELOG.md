@@ -36,7 +36,7 @@
   `install-all.sh --check` reports `[forge] claude: installed=… expected=…`. Single-forge
   `--forge=github` command entries are byte-identical to the previous render (the support scripts
   carry the resolver and guard). The measured multi increment is
-  +910 tokens for Next, +1,920 for Finalize, +530 for Init: **+2,830 combined Next+Finalize**, under
+  +940 tokens for Next, +1,950 for Finalize, +530 for Init: **+2,890 combined Next+Finalize**, under
   the **proposed 3,000-token D5 cap** (pending owner ratification). Other runtimes were single-forge
   pending the P3 decision;
   P4 remains gated. No release, version bump, or install is implied.
@@ -49,8 +49,8 @@
   flat, so a second install would overwrite the entry; installing another forge replaces the
   selected render, and the P1 guard refuses a repo that resolves to another forge before any forge
   CLI call. Each `docs/<runtime>-edition.md` records the decision, and
-  `install-all.sh --check` now reports the installed forge set for every runtime
-  (`[forge] <runtime>: installed=… expected=…`). The antigravity doc's claim that a reinstall
+  `install-all.sh --check` now reports Claude/Codex installed sets and the additive
+  support-script set (`[forge] <runtime>: scripts=… expected=…`). The antigravity doc's claim that a reinstall
   replaces the support set is corrected: it copies scripts and does not delete the other forge's
   renamed scripts. P4 remains gated. No release, version bump, or install is implied.
 
@@ -60,7 +60,7 @@
   stop the step; multi init gains its own resolver and multi next names the same-shell requirement.
   The guard suite now uses a JavaScript recorder with recorder and `assertNoCalls` positive
   controls, plus the missing GitLab/Codex sink and resume cases; `sink-pr` gains the gh mock seam.
-  D5 is restated as a **proposed** 3,000-token cap for owner ratification, re-measured at 2,830.
+  D5 is restated as a **proposed** 3,000-token cap for owner ratification, re-measured at 2,890 after the round-2 touch-up.
   The ZCode P3 assertions run before its exit gate. No release, version bump, or install is
   implied.
 

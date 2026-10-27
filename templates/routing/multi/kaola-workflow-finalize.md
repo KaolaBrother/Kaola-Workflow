@@ -303,6 +303,7 @@ case "$KW_FORGE" in
     if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
     ;;
 esac
+[ -n "$KW_FORGE" ] || { echo "run this block in the same shell as the resolver above" >&2; exit 1; }
 case "$SINK_KIND" in
   pr|mr)
 case "$KW_FORGE" in

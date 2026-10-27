@@ -38,21 +38,21 @@ excluded. Tokenizer differences and runtime caching require actual usage reports
 ## Multi-forge command entries (#1123 P2)
 
 When two or more Claude forges are installed, `install.sh` installs the `multi` command entries
-instead of one forge's render. Measured 2026-10-27 on the round-1 repair candidate (P1 baseline
+instead of one forge's render. Measured 2026-10-27 on the round-2 touch-up candidate (P1 baseline
 `2fd2f2c6` plus P2/P3 and the review fixes), with the same whitespace and tokens = words × 1.5,
 rounded to the nearest 10:
 
 | Entry | Single words | Multi words | Words added | Single tokens | Multi tokens | Tokens added |
 |---|---:|---:|---:|---:|---:|---:|
-| Next | 1572 | 2181 | +609 | 2360 | 3270 | **+910** |
+| Next | 1572 | 2203 | +631 | 2360 | 3300 | **+940** |
 | Init | 793 | 1145 | +352 | 1190 | 1720 | **+530** |
-| Finalize | 2086 | 3367 | +1281 | 3130 | 5050 | **+1920** |
-| Next + Finalize | 3658 | 5548 | +1890 | 5490 | 8320 | **+2830** |
+| Finalize | 2086 | 3389 | +1303 | 3130 | 5080 | **+1950** |
+| Next + Finalize | 3658 | 5592 | +1934 | 5490 | 8380 | **+2890** |
 
 The multi entry repeats the three-forge resolver block in each self-contained bash step (a shell
 does not keep functions between steps), which is where most of the increment lives. The **proposed**
-D5 cap is **3,000 estimated tokens for the combined Next + Finalize multi entry**, measured at 2,830
-with 170 tokens of headroom. This number is a proposal for owner ratification under issue #1123
+D5 cap is **3,000 estimated tokens for the combined Next + Finalize multi entry**, measured at 2,890
+with 110 tokens of headroom. This number is a proposal for owner ratification under issue #1123
 §5 D5, not a settled limit; if the owner adopts it, a future render above it is a new owner
 decision rather than an invitation to raise the number.
 

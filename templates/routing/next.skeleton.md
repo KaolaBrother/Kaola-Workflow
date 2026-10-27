@@ -75,6 +75,9 @@ node "$CLAIM_JS" list-open
 <!-- REGION:gitea — tea has no porcelain comments view; the installed forge adapter reads comments -->
 <!-- SLOT:nx-scripts-resolver -->
 <!-- /REGION -->
+<!-- REGION:multi — the branch is chosen by the resolver in a previous block, never by the agent -->
+[ -n "$KW_FORGE" ] || { echo "run this block in the same shell as the resolver above" >&2; exit 1; }
+<!-- /REGION -->
 <!-- SPLICE:nx-issue-detail-fetch -->
 ```
 
