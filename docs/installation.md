@@ -97,16 +97,24 @@ single-forge install (`--forge=github`) is byte-identical to earlier releases.
 ### Codex
 
 Codex separates marketplace registration, plugin installation, and hook installation.
-Register the local checkout, then install exactly one forge edition:
+Register the local checkout, then install one or both forge editions:
 
 ```bash
 codex plugin marketplace add ~/kaola-workflow
 
-# Choose exactly one.
+# One edition, or both for a machine that works on both forges.
 codex plugin add kaola-workflow@kaolabrother-kaola-workflow
 # codex plugin add kaola-workflow-gitlab@kaolabrother-kaola-workflow
-# codex plugin add kaola-workflow-gitea@kaolabrother-kaola-workflow
+codex plugin add kaola-workflow-gitea@kaolabrother-kaola-workflow
 ```
+
+Codex is the runtime where both forge plugins are supported at once (#1123 P3): plugin caches are
+separate and each plugin's skills are namespaced by plugin (`kaola-workflow:…` vs
+`kaola-workflow-gitea:…`). Both can stay enabled; a repo still resolves its own forge before the
+first forge call, and the P1 guard refuses a wrong edition with `forge_mismatch`. No script union or
+prune is involved. `install-all.sh --check` reports
+`[forge] codex: installed=… expected=…`; a `--forge` list still converges only the first plugin, so
+install the second plugin with `codex plugin add` as above.
 
 Run the Codex installer from the active plugin root, or run `./install-all.sh --yes` after the
 plugin is present. The entry point keeps its historical name, `install-codex-agent-profiles.js`,
@@ -211,12 +219,15 @@ contract. See [Cursor edition](cursor-edition.md) for the measured CLI/App/Cloud
 
 GitHub is the default. GitLab and Gitea select forge-shaped claim, issue, PR/MR, and closure scripts;
 they do not change role behavior. Pass the same forge to every forge-aware installer. Codex selects
-the forge through one of its three plugin names. Claude accepts a comma list
-(`--forge=github,gitea`) and installs the multi entry described above; the other runtimes keep the
-first forge until the P3 union install, and `install-all.sh` says so when given a list.
+the forge through its plugin names, and both plugins can be installed. Claude accepts a comma list
+(`--forge=github,gitea`) and installs the multi entry described above. Codex can carry both plugins
+at once. The additive runtimes keep the first forge and stay single-forge by design (#1123 P3); the
+P1 resolver guard refuses a repo that resolves to another forge, and `install-all.sh` reports each
+runtime's installed set.
 
-`install-all.sh --check` reports Claude's installed forge set beside the requested one:
-`[forge] claude: installed=github,gitea expected=github,gitea`.
+`install-all.sh --check` reports each runtime's installed forge set beside the requested one, e.g.
+`[forge] claude: installed=github,gitea expected=github,gitea` or
+`[forge] codex: installed=github,gitea expected=github,gitea`.
 
 Authentication and repository permissions remain owned by the native forge tooling. Installation
 does not create credentials or authorize destructive repository operations.

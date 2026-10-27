@@ -142,6 +142,9 @@ function walkFiles(absDir, relDir) {
   const out = [];
   if (!fs.existsSync(absDir)) return out;
   for (const e of fs.readdirSync(absDir, { withFileTypes: true })) {
+    // A user-installed skill may be a symlink to a directory; it is not a generated file,
+    // and following it would make readFileSync fail with EISDIR.
+    if (e.isSymbolicLink()) continue;
     const rel = relDir ? relDir + '/' + e.name : e.name;
     if (e.isDirectory()) out.push(...walkFiles(path.join(absDir, e.name), rel));
     else out.push(rel);
@@ -1892,3 +1895,13 @@ if (failed) {
   process.exit(1);
 }
 console.log('zcode-edition test passed (' + passed + ' assertions).' + driftVerdict);
+
+// #1123 P3: the additive runtime's documented forge posture. The behavioral guard is covered by
+// the shared forge-resolve/guard suites; this suite pins the DECISION and its documentation so a
+// future edit cannot silently imply a union/multi layout this runtime does not ship.
+{
+  const docs = fs.readFileSync(path.join(REPO, 'docs/zcode-edition.md'), 'utf8');
+  assertReal(docs.includes('#1123 P3'), 'zcode: docs record the #1123 P3 forge posture');
+  assertReal(/single-forge/i.test(docs), 'zcode: docs record the single-forge decision');
+  assertReal(/P1 resolver guard/i.test(docs), 'zcode: docs name the P1 guard');
+}

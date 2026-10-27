@@ -268,8 +268,27 @@ committed multi surfaces alongside the 18 per-forge surfaces and the six recover
 The compact hook is one managed entry (`kaola-workflow:compact-context`) pinned to the first
 installed forge; `uninstall.sh --forge=<one>` removes only that support directory and repoints the
 hook at a survivor. If the multi entry was present, it stays (so a repo resolving the removed forge
-gets `forge_not_installed`); removing a forge that was never installed leaves a single-forge install single. All
-other runtimes keep the first forge until the P3 union install.
+gets `forge_not_installed`); removing a forge that was never installed leaves a single-forge
+install single.
+
+### Runtime forge postures (#1123 P3)
+
+Codex keeps both plugins installed. Plugin caches are separate and skill names are namespaced by
+plugin (`kaola-workflow:<skill>` / `kaola-workflow-gitea:<skill>`), so both editions can be enabled
+without a union script tree. Each repo still resolves its own forge and the P1 guard refuses a
+wrong edition.
+
+The additive runtimes (opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, Antigravity) chose
+the issue's explicit single-forge alternative. Their native command/skill namespace is flat: the
+three topics use the same basenames for every forge, so a second install overwrites the entry
+rather than adding a second. Installing another forge replaces the selected render; support scripts
+follow its manifest (some installers prune names outside it, others copy and leave the prior forge's
+renamed scripts). The P1 resolver guard refuses a repo resolving to another forge before any forge
+CLI call, so the single-forge posture is safe. Each `docs/<runtime>-edition.md` records the decision.
+
+`install-all.sh --check` reports every runtime's installed set by probing the forge claim scripts in
+that runtime's support dir: `[forge] <runtime>: installed=… expected=…`. Project-scope installs are
+not visible to this global probe and report the global set only.
 
 ## Claim API — `kaola-workflow-claim.js`
 

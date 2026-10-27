@@ -4197,3 +4197,13 @@ if (failed) {
   process.exit(1);
 }
 console.log('opencode-edition test passed (' + passed + ' assertions).' + driftVerdict);
+
+// #1123 P3: the additive runtime's documented forge posture. The behavioral guard is covered by
+// the shared forge-resolve/guard suites; this suite pins the DECISION and its documentation so a
+// future edit cannot silently imply a union/multi layout this runtime does not ship.
+{
+  const docs = fs.readFileSync(path.join(REPO, 'docs/opencode-edition.md'), 'utf8');
+  assert(docs.includes('#1123 P3'), 'opencode: docs record the #1123 P3 forge posture');
+  assert(/single-forge/i.test(docs), 'opencode: docs record the single-forge decision');
+  assert(/P1 resolver guard/i.test(docs), 'opencode: docs name the P1 guard');
+}

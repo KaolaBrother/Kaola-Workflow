@@ -121,9 +121,9 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
 Options:
   --forge=github|gitlab|gitea|github,gitea
                                 Forge for every forge-aware runtime (default: github). A comma list
-                                installs Claude's multi-forge entry; other runtimes use the first
-                                forge until the P3 union install. Codex selects its forge by
-                                marketplace plugin entry instead.
+                                installs Claude's multi-forge entry; Codex plugins are added with
+                                `codex plugin add`; the additive runtimes use the first forge
+                                (single-forge by design, #1123 P3).
   --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default)
   --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
@@ -216,7 +216,7 @@ if [[ "$FORGE" == *,* ]]; then
   [[ ${#_FORGES[@]} -gt 0 ]] || die_arg "--forge requires at least one forge"
   FORGE="${_FORGES[0]}"
   if [[ ${#_FORGES[@]} -ge 2 ]]; then
-    echo "install-all: --forge=$FORGE_LIST — Claude gets the multi entry; the other runtimes use '$FORGE' until the P3 union install." >&2
+    echo "install-all: --forge=$FORGE_LIST — Claude gets the multi entry; Codex plugins are selected separately; the additive runtimes use '$FORGE' (single-forge, P1 guard)." >&2
   fi
 fi
 case "$FORGE" in github|gitlab|gitea) ;; *) die_arg "unknown forge: $FORGE (github, gitlab, gitea)" ;; esac
@@ -337,6 +337,51 @@ run_one() {
       done
       echo "    [forge] claude: installed=${cf_installed:-none} expected=${FORGE_LIST}"
       note="${note:+$note; }forge installed=${cf_installed:-none} expected=${FORGE_LIST}"
+    elif [[ "$name" == "codex" ]]; then
+      local cx_installed="none"
+      if command -v "$CODEX_BIN" >/dev/null 2>&1; then
+        cx_installed="$("$CODEX_BIN" plugin list --json 2>/dev/null | node -e '
+let s=""; process.stdin.on("data", d => s += d).on("end", () => {
+  try {
+    const rows = (JSON.parse(s).installed || []).filter(r => r && r.enabled);
+    const names = rows.map(r => r.name === "kaola-workflow" ? "github"
+      : r.name === "kaola-workflow-gitlab" ? "gitlab"
+      : r.name === "kaola-workflow-gitea" ? "gitea" : null).filter(Boolean);
+    process.stdout.write(names.length ? names.join(",") : "none");
+  } catch (_) { process.stdout.write("none"); }
+});' 2>/dev/null || true)"
+      fi
+      echo "    [forge] codex: installed=${cx_installed} expected=${FORGE_LIST}"
+      note="${note:+$note; }forge installed=${cx_installed} expected=${FORGE_LIST}"
+    else
+      # #1123 P3: additive runtimes chose the single-forge + P1-guard posture. Report the
+      # forges whose claim scripts are actually present in the runtime's support dir.
+      local af_dir="" af_installed="none" af_forge af_claim
+      case "$name" in
+        opencode) af_dir="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts" ;;
+        kimi) af_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts" ;;
+        grok) af_dir="${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts" ;;
+        cursor) af_dir="${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts" ;;
+        zcode) af_dir="${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/scripts" ;;
+        devin) af_dir="${DEVIN_CONFIG_DIR:-$HOME/.config/devin}/kaola-workflow/scripts" ;;
+        droid) af_dir="${DROID_HOME:-$HOME/.factory}/kaola-workflow/scripts" ;;
+        dsh) af_dir="${DSH_HOME:-$HOME/.dsh}/kaola-workflow/scripts" ;;
+        antigravity) af_dir="$HOME/.gemini/config/kaola-workflow/scripts" ;;
+      esac
+      if [[ -n "$af_dir" && -d "$af_dir" ]]; then
+        for af_forge in github gitlab gitea; do
+          case "$af_forge" in
+            github) af_claim="kaola-workflow-claim.js" ;;
+            gitlab) af_claim="kaola-gitlab-workflow-claim.js" ;;
+            gitea) af_claim="kaola-gitea-workflow-claim.js" ;;
+          esac
+          if [[ -f "$af_dir/$af_claim" ]]; then
+            if [[ "$af_installed" == "none" ]]; then af_installed="$af_forge"; else af_installed="$af_installed,$af_forge"; fi
+          fi
+        done
+      fi
+      echo "    [forge] $name: installed=${af_installed} expected=${FORGE}"
+      note="${note:+$note; }forge installed=${af_installed} expected=${FORGE}"
     fi
     # #1112: the droid carrier check alone cannot see the Skills — they moved to the
     # shared ~/.agents/skills root with an ownership record and a retired-root sweep.

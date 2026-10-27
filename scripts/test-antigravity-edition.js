@@ -324,3 +324,14 @@ assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|
   'claim.js USAGE includes the antigravity runtime');
 
 console.log('antigravity-edition test passed');
+
+// #1123 P3: the additive runtime's documented forge posture. The behavioral guard is covered by
+// the shared forge-resolve/guard suites; this suite pins the DECISION and its documentation so a
+// future edit cannot silently imply a union/multi layout this runtime does not ship.
+{
+  const docs = fs.readFileSync(path.join(REPO, 'docs/antigravity-edition.md'), 'utf8');
+  assert(docs.includes('#1123 P3'), 'antigravity: docs record the #1123 P3 forge posture');
+  assert(/single-forge/i.test(docs), 'antigravity: docs record the single-forge decision');
+  assert(/P1 resolver guard/i.test(docs), 'antigravity: docs name the P1 guard');
+  assert(/does \*\*not\*\* delete/.test(docs), 'antigravity: docs correct the replace-the-support-set claim');
+}

@@ -36,8 +36,21 @@
   `install-all.sh --check` reports `[forge] claude: installed=… expected=…`. Single-forge
   `--forge=github` output is byte-identical to the previous render. The measured multi increment is
   +820 tokens for Next, +1,810 for Finalize, +30 for Init: **+2,630 combined Next+Finalize**, under
-  the recorded **3,000-token D5 cap**. Other runtimes keep the first forge until the P3 union
-  install; P4 remains gated. No release, version bump, or install is implied.
+  the recorded **3,000-token D5 cap**. Other runtimes were single-forge pending the P3 decision;
+  P4 remains gated. No release, version bump, or install is implied.
+
+- **P3 forge coexistence decisions for Codex and the additive runtimes (#1123 P3).** Codex carries
+  both forge plugins at once: plugin caches are separate, each plugin's skills are namespaced
+  (`kaola-workflow:…` / `kaola-workflow-gitea:…`), and the P1 guard still refuses a wrong edition.
+  The additive runtimes (opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, Antigravity)
+  deliberately take the issue's single-forge alternative: their native command/skill namespace is
+  flat, so a second install would overwrite the entry; installing another forge replaces the
+  selected render, and the P1 guard refuses a repo that resolves to another forge before any forge
+  CLI call. Each `docs/<runtime>-edition.md` records the decision, and
+  `install-all.sh --check` now reports the installed forge set for every runtime
+  (`[forge] <runtime>: installed=… expected=…`). The antigravity doc's claim that a reinstall
+  replaces the support set is corrected: it copies scripts and does not delete the other forge's
+  renamed scripts. P4 remains gated. No release, version bump, or install is implied.
 
 ## [12.6.0] - 2026-10-26
 

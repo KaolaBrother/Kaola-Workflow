@@ -332,3 +332,14 @@ that absence by removing only recognized legacy Kaola prompt-hook entries; it pr
 foreign event. There is no compact wrapper, PreToolUse, PostToolUse, or Stop script. Ordinary tool
 use adds 0 Kaola recovery bytes and starts 0 Kaola recovery subprocesses. Project materialization
 (Repo prep) is still the separate fail-closed CLI transaction described above.
+
+## Forge posture (#1123 P3)
+
+**Single-forge.** This edition installs one forge at a time. The native command namespace (`commands/<topic>.md`) is flat: the three topics use
+the same basenames for every forge, so a second install would overwrite the entry rather than add a
+second one. Support scripts follow the selected forge's manifest (where the installer prunes, names
+outside that manifest are removed; where it only copies, the previous forge's renamed scripts
+remain). The P1 resolver guard refuses a repository that resolves to a different forge before any
+forge CLI call, so the single-forge posture is safe; reinstall with
+`--forge=<github|gitlab|gitea>` to switch. The issue #1123 P3 union-scripts + multi-entry layout is
+therefore not used here.

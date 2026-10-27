@@ -186,8 +186,10 @@ Claude Code can carry more than one edition on one machine: `./install.sh --yes
 --forge=github,gitea` installs both support directories, one multi command entry per topic, and one
 compact-recovery hook. Repos then pick their edition without a reinstall;
 `uninstall.sh --forge=gitea` leaves the remaining edition working. The prompt-size increment is
-measured in [Prompt size](docs/prompt-size.md#multi-forge-command-entries-1123-p2). Other runtimes
-keep the first forge until the P3 union install.
+measured in [Prompt size](docs/prompt-size.md#multi-forge-command-entries-1123-p2). Codex can carry
+both forge plugins at once (namespaced skills, separate caches). The additive runtimes stay
+single-forge by design (#1123 P3): a second install replaces the entry, and the P1 resolver guard
+refuses a repo that resolves to another forge.
 
 <details>
 <summary>Cursor CLI startup and resume</summary>

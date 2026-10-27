@@ -89,7 +89,10 @@ the entry calls `resolve --shell --installed <csv>` with `--scripts-dir-<forge>`
 uninstall keeps the multi entry and repoints the hook, so a repo that resolves the removed forge
 gets `forge_not_installed`. `install-all.sh --check` reports installed vs expected. The measured
 multi increment is +2,630 estimated tokens for Next+Finalize, under the recorded 3,000-token D5 cap.
-P3 (union install for the other runtimes, Codex layout) and P4 (tea login binding) remain open.
+P3 then resolved the remaining runtimes: Codex keeps both forge plugins installed (namespaced
+skills, separate caches), while the additive runtimes take the explicit single-forge alternative
+with this guard as the safety net; each edition doc records the choice. P4 (tea login binding)
+remains open.
 
 ## Consequences
 
