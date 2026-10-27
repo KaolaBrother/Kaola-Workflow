@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Per-repo forge resolution and the edition guard (#1123 P1).** A new byte-identical module,
+  `scripts/kaola-workflow-forge-resolve.js`, resolves one repository through T1 tracked
+  `kaola-workflow/config.json#forge`, T2 `git config --local kaola-workflow.forge`, T3 the exact
+  `origin` host mapped through `~/.config/kaola-workflow/config.json#forge_hosts` (then the
+  `github.com`/`gitlab.com`/`gitea.com` built-ins), and T4 the installed set when it has exactly
+  one forge. Invalid T1/T2 declarations refuse rather than falling through; T1 ≠ T2 warns and keeps
+  T1; a decisive T3 against T1/T2 is `forge_conflict`; unresolved multi-forge machines are
+  `forge_unresolved`; a resolved forge outside the installed set is `forge_not_installed`. Output
+  never contains URL userinfo. `resolve --json` reports the four tiers and warnings,
+  `resolve --shell` emits only `KW_FORGE`/`KAOLA_SCRIPTS`/`CLAIM_JS`, and `set`/`unset` maintain the
+  clone-local marker. Every edition's claim `startup`/`resume` and sink entry now runs the guard
+  before the first `gh`/`glab`/`tea` call and refuses a foreign repo as `forge_mismatch`; a non-git
+  root stays fail-open because it has no contrary signal. The resolver is enrolled in the four-tree
+  byte group, `edition-sync` materialization, and the install manifest. `docs/decisions/0032` and
+  `docs/api.md` record the semantics, and `scripts/test-forge-resolve.js` plus
+  `scripts/test-forge-guards.js` cover URL forms, every §3.5 row, the no-userinfo guarantee, and
+  both zero-forge-call mismatch directions. P2/P3 (multi entry, union installs) and the conditional
+  P4 tea login binding are not implemented; P4 remains gated on the unmeasured two-login behavior.
+  No release, version bump, or install is implied.
+
 ## [12.6.0] - 2026-10-26
 
 ### Added

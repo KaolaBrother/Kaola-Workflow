@@ -193,6 +193,65 @@ result from a shelled subprocess.
 the work: a release tag whose receipt does not cover it, an archive that would lose a file, a sink
 step that did not complete. Everything mid-run measures and reports.
 
+## Forge resolution — `kaola-workflow-forge-resolve.js` (#1123)
+
+```
+usage: kaola-workflow-forge-resolve.js resolve [--json|--shell] [--installed a,b]
+                                                [--scripts-dir DIR] [--cwd DIR]
+       kaola-workflow-forge-resolve.js set <github|gitlab|gitea> [--cwd DIR] [--json]
+       kaola-workflow-forge-resolve.js unset [--cwd DIR] [--json]
+```
+
+The module is byte-identical in every edition tree and makes no forge CLI call. It resolves one
+repository through four tiers: tracked `kaola-workflow/config.json#forge` (T1), clone-local
+`git config --local kaola-workflow.forge` (T2), the `origin` host through
+`~/.config/kaola-workflow/config.json#forge_hosts` and the `github.com` / `gitlab.com` / `gitea.com`
+built-ins (T3), and the installed set when it has exactly one member (T4).
+
+`resolve --json` emits:
+
+```json
+{"ok":true,"forge":"gitea","source":"remote","host":"git.example.com:2222",
+ "tiers":[
+   {"tier":"config","value":null,"detail":"forge key absent"},
+   {"tier":"marker","value":null,"detail":"kaola-workflow.forge absent"},
+   {"tier":"remote","value":"gitea","detail":"origin host git.example.com:2222 -> gitea"},
+   {"tier":"default","value":null,"detail":"installed set [gitea]"}],
+ "warnings":[]}
+```
+
+`tiers` is always four entries (`config`, `marker`, `remote`, `default`) with the value each layer
+produced and a detail string. `source` is `config`, `marker`, `remote`, or `default`. A refusal is
+`{ok:false, reason, detail, ...}` with one of:
+
+| reason | meaning |
+|---|---|
+| `forge_config_invalid` | T1 value invalid, or config unreadable/unparseable/non-object; also an invalid `forge_hosts` entry |
+| `forge_marker_invalid` | T2 value is not a forge |
+| `forge_conflict` | T1/T2 decides one forge and a decisive T3 decides another |
+| `forge_unresolved` | no T1–T3 result and the installed set does not have exactly one member |
+| `forge_not_installed` | the resolved forge is outside the installed set |
+| `forge_installed_invalid` | the `--installed` argument names an unknown forge |
+| `not_a_git_repo` | no `git rev-parse --show-toplevel` at the requested cwd |
+
+`--installed` is a comma list; the entry block owns probing the installed set. When omitted, the
+resolver assumes all three forges (so T4 does not fire). T1 wins over a different T2 with warning
+`forge_marker_shadowed`. T3 is unknown for a local path, `file://`, an unmapped self-hosted host,
+or no `origin`; it is never guessed by substring.
+
+`resolve --shell` emits exactly three single-quoted assignments: `KW_FORGE`, `KAOLA_SCRIPTS`, and
+`CLAIM_JS` (the forge's claim filename under `--scripts-dir`). On a refusal it writes the reason to
+stderr and exits 1 with no stdout. `set` writes T2 and `unset` removes it idempotently; neither
+touches a tracked file, and no command prints a credential or URL userinfo.
+
+The P1 edition guard calls this module with `installed: [<this edition's forge>]` at claim
+`startup` / `resume` and at every sink entry, before the first `gh` / `glab` / `tea` call. A
+different resolution is a `refuse` envelope with `reason: "forge_mismatch"`; the other resolver
+reasons pass through. A non-git root passes the guard because there is no repo-scoped declaration or
+origin to contradict the only installed edition. Choosing an installed set at a multi-forge entry,
+and rendering that entry, are P2/P3; tea login binding remains P4 and gated on the unmeasured
+two-login behavior.
+
 ## Claim API — `kaola-workflow-claim.js`
 
 ```

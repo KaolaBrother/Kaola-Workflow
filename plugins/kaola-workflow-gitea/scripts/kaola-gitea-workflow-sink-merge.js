@@ -13,6 +13,8 @@ const { resolveChains } = require('./kaola-gitea-workflow-run-chains');
 // Crash-safe durable write (tmp + fsync + rename) for the sink transaction journals. adaptive-schema
 // is base-named in ALL four trees (the cross-edition byte anchor), so this literal is not forge-renamed.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #1123 P1: per-repo forge resolution + the edition guard (before any forge CLI call).
+const forgeResolve = require('./kaola-workflow-forge-resolve');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -3511,6 +3513,12 @@ function main() {
   if (args.unknownFlags && args.unknownFlags.length) {
     const hint = 'Unrecognized flag(s): ' + args.unknownFlags.join(', ') + '. Refusing with zero side effects — run `--help` for usage.';
     sinkEmit({ result: 'refuse', reason: 'unknown_flag', unknownFlags: args.unknownFlags, operator_hint: hint }, 1); return;
+  }
+  // #1123 P1: refuse a foreign-forge repo before ANY forge CLI call.
+  const forgeGate = forgeResolve.guardEdition('gitea', { cwd: getRoot() });
+  if (forgeGate) {
+    sinkEmit(Object.assign({ result: 'refuse', status: 'refuse' }, forgeGate), 1);
+    return;
   }
   // #429: detect --sink flag before routing to the transaction.
   const isSinkMode = rawArgv.includes('--sink');

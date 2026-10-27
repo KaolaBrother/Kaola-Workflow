@@ -52,6 +52,10 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 
 ## Decisions
 
+- **[0032 — Per-repo forge resolution and the edition guard](decisions/0032-per-repo-forge-resolution.md)**
+  — #1123 P1. T1–T4 resolution, exact `forge_hosts` matching, `set`/`unset`, and a
+  `forge_mismatch` guard before the first forge CLI call. P4 stays gated on the unmeasured
+  two-login behavior.
 - **[0031 — Explicit GitHub singleton keep-open PR](decisions/0031-explicit-github-keep-open-pr.md)**
   — #1113. #1098 D4=(a) stays the historical default. One explicit GitHub singleton may publish a
   request-only PR that does not close the issue.

@@ -82,6 +82,10 @@ const forgeRel = (base, forge) => `plugins/kaola-workflow-${forge}/scripts/${for
 // not via forgeRel (which would rename the base). Forge 'codex' = the plugins/kaola-workflow/ tree.
 const MATERIALIZED_SHARED = [
   { base: 'kaola-workflow-adaptive-schema.js', forges: ['gitlab', 'gitea', 'codex'] },
+  // #1123: the per-repo forge resolver. Forge-neutral, base-named, and required
+  // by every edition's claim/sink entrypoints, so a committed __dirname sibling
+  // must exist in each tree (the Codex/forge install has no post-clone step).
+  { base: 'kaola-workflow-forge-resolve.js', forges: ['gitlab', 'gitea', 'codex'] },
 ];
 const materializedForgeRel = (base, forge) => forge === 'codex'
   ? 'plugins/kaola-workflow/scripts/' + base

@@ -23,6 +23,8 @@ const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, i
   splitNulPaths, defaultBranch, publishTargetRef } = adaptiveSchema;
 // #579: lane classifier (resolveSessionMarker + classifyLane) — imported in-process (no subprocess).
 const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classifier');
+// #1123 P1: per-repo forge resolution + the edition guard, byte-identical in all four trees.
+const forgeResolve = require('./kaola-workflow-forge-resolve');
 // #1089: the mission ledger's path rule and shape rule come from the kernel, so every edition
 // resolves `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` from the same bytes.
 const { ledgerPath, validateLedger, serializeLedger } = adaptiveSchema;
@@ -2230,6 +2232,25 @@ function output(obj, code) {
   if (code) process.exitCode = code;
 }
 
+// #1123 P1: the edition guard. It runs before the first forge CLI call, and the
+// installed set is this edition's own forge (the P1 single-forge posture), so a
+// repo resolving elsewhere refuses as `forge_mismatch` with zero gh/tea calls.
+// Other resolver refusals (invalid config/marker, conflict, unresolved) pass
+// through typed rather than being flattened into a mismatch.
+function enforceEditionForge(editionForge, root) {
+  const gate = forgeResolve.guardEdition(editionForge, { cwd: root });
+  if (!gate) return true;
+  output(Object.assign({
+    verdict: 'refuse',
+    claim: 'none',
+    project: null,
+    issue: null,
+    status: 'refuse',
+    result: 'refuse',
+  }, gate), 1);
+  return false;
+}
+
 // #1052: standalone Cursor CLI/local Workflow startup and resume run Repo role
 // prep through the *installed* helper. Explicit `--product` / `--host` win.
 // When those are omitted, a living ancestor that is CLI-shaped
@@ -2630,6 +2651,8 @@ function cmdStartup() {
     return;
   }
 
+  if (!enforceEditionForge('github', root)) return;
+
   // #775: --codex-dispatch-mode is retired to a WARN-AND-IGNORE shim (v2-task-name is the only
   // mode) — never a refusal, never persisted. Strip it from `args` BEFORE the scalar/bundle claim
   // paths below so codex_dispatch_mode is never written into durable state from this flag.
@@ -2770,6 +2793,7 @@ function detectFinalizeIncomplete(root, project) {
 function cmdResume() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
+  if (!enforceEditionForge('github', root)) return;
   // #503: refuse silently picking folder[0] when multiple active folders exist and --project is absent.
   // Scripts validate+claim, never select under ambiguity (#44).
   // #579: if exactly ONE of the active folders classifies as 'mine' (same session marker), auto-select it

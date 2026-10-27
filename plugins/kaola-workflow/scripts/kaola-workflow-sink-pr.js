@@ -43,6 +43,8 @@ const { execFileSync, spawnSync } = require('child_process');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename) so a sink-block
 // rewrite can never leave a torn workflow-state.md (silently skipped by readActiveFolders).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #1123 P1: per-repo forge resolution + the edition guard (before any forge CLI call).
+const forgeResolve = require('./kaola-workflow-forge-resolve.js');
 // #394: resolve the default branch (origin/HEAD probe chain, offline-safe) so the fallback PR
 // sink targets master/other-default repos correctly — the old hardcoded `--base main` broke them.
 // #1055: defaultBranch moved from claim.js into adaptive-schema.js (claim.js re-exports it), so this
@@ -700,6 +702,14 @@ function publishArchiveWithPr(root, project, branch, projectFolder, prUrl, optio
 }
 function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // #1123 P1: refuse a foreign-forge repo before ANY forge CLI call.
+  const forgeGate = forgeResolve.guardEdition('github', { cwd: process.cwd() });
+  if (forgeGate) {
+    process.stdout.write(JSON.stringify(Object.assign({ result: 'refuse', status: 'refuse' }, forgeGate)) + '\n');
+    process.exitCode = 1;
+    return;
+  }
 
   assert(
     args.branch && args.branch !== 'TBD' &&

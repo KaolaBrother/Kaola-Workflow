@@ -19,6 +19,8 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
+// #1123 P1: per-repo forge resolution + the edition guard (before any forge CLI call).
+const forgeResolve = require('./kaola-workflow-forge-resolve');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #394: resolve the default branch (offline-safe probe chain) so the fallback MR sink targets the
@@ -474,6 +476,13 @@ function maybeAutoMergeFromConfig(mr, configOverride) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  // #1123 P1: refuse a foreign-forge repo before ANY forge CLI call.
+  const forgeGate = forgeResolve.guardEdition('gitlab', { cwd: process.cwd() });
+  if (forgeGate) {
+    process.stdout.write(JSON.stringify(Object.assign({ result: 'refuse', status: 'refuse' }, forgeGate)) + '\n');
+    process.exitCode = 1;
+    return;
+  }
   const mr = ensureMergeRequest(args);
   // #1098 F4: a MERGED MR is never merged again. Auto-merge (and an explicit --merge) apply only to
   // an OPEN request — §2.1-5 — so the already-merged lane returns before either call, exactly as the

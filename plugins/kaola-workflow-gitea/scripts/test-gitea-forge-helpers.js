@@ -107,6 +107,31 @@ const execFileSync = runner(calls, {
 });
 
 assert.strictEqual(forge.discoverProject({ execFileSync }).full_name, 'group/project');
+
+// #1123 P0: `tea api` exits 0 on an HTTP 404 body. discoverProject must refuse an empty
+// resolution instead of returning a project with no full_name.
+{
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const G = require('./test-git-fixture');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-404-'));
+  const previousCwd = process.cwd();
+  try {
+    G.git(tmp, ['init', '-q']);
+    G.remoteAdd(tmp, 'origin', 'https://gitea.example/group/project.git');
+    process.chdir(tmp);
+    const notFound = JSON.stringify({ message: 'not found', url: 'https://gitea.example/api/swagger' });
+    // A non-spawning fake for the injected runner: every tea call returns the 404 body.
+    const errExec = function executable() { return notFound; };
+    assert.throws(() => forge.discoverProject({ execFileSync: errExec }), /returned no repository/,
+      'a 404 body with exit 0 must not become an empty project');
+  } finally {
+    process.chdir(previousCwd);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 assert.strictEqual(forge.listIssues({ execFileSync })[0].issue_iid, 4);
 assert.strictEqual(forge.listIssues({ execFileSync, perPage: 50, state: 'open' })[0].issue_iid, 5);
 assert.strictEqual(forge.listIssues({ execFileSync, state: 'closed', labels: [forge.CLAIM_LABEL] })[0].issue_iid, 7);

@@ -21,6 +21,8 @@ const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #1123 P1: per-repo forge resolution + the edition guard (before any forge CLI call).
+const forgeResolve = require('./kaola-workflow-forge-resolve');
 // #394: resolve the default branch (offline-safe probe chain) so the fallback PR sink targets the
 // real default — the old hardcoded targetBranch:'main' broke master/other-default repos.
 const { getCoordRoot, readActiveFolders, defaultBranch } = require('./kaola-gitea-workflow-claim');
@@ -480,6 +482,13 @@ function maybeAutoMergeFromConfig(pr, project, configOverride) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  // #1123 P1: refuse a foreign-forge repo before ANY forge CLI call.
+  const forgeGate = forgeResolve.guardEdition('gitea', { cwd: process.cwd() });
+  if (forgeGate) {
+    process.stdout.write(JSON.stringify(Object.assign({ result: 'refuse', status: 'refuse' }, forgeGate)) + '\n');
+    process.exitCode = 1;
+    return;
+  }
   const out = ensurePullRequest(args);
   const pr = out.pr;
   const project = out.project;

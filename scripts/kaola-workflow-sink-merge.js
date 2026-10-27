@@ -19,6 +19,8 @@ const { removeWorktree, buildClosureReceipt, checkClosureInvariants, appendClosu
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
+// #1123 P1: per-repo forge resolution + the edition guard (before any forge CLI call).
+const forgeResolve = require('./kaola-workflow-forge-resolve.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
@@ -3732,6 +3734,14 @@ function main() {
   if (args.unknownFlags && args.unknownFlags.length) {
     const hint = 'Unrecognized flag(s): ' + args.unknownFlags.join(', ') + '. Refusing with zero side effects — run `--help` for usage.';
     sinkEmit({ result: 'refuse', reason: 'unknown_flag', unknownFlags: args.unknownFlags, operator_hint: hint }, 1); return;
+  }
+  // #1123 P1: refuse a foreign-forge repo before ANY forge CLI call. The sink is
+  // destructive, so this gate is checked before the branch/project assertions and
+  // before the first gh invocation.
+  const forgeGate = forgeResolve.guardEdition('github', { cwd: process.cwd() });
+  if (forgeGate) {
+    sinkEmit(Object.assign({ result: 'refuse', status: 'refuse' }, forgeGate), 1);
+    return;
   }
   // #429: detect --sink flag before routing to the transaction.
   const isSinkMode = rawArgv.includes('--sink');

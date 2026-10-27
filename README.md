@@ -172,6 +172,15 @@ installed plugin. Instruction loading, compact recovery, and install scope stay 
 See [Runtime Capabilities](docs/runtime-capabilities.md) and the
 [edition guides](docs/README.md#runtime-editions) for setup and dated evidence.
 
+Each edition now resolves the repository before its first forge call (#1123). A repo can declare
+`forge` in tracked `kaola-workflow/config.json`, or a clone-local marker with
+`git config --local kaola-workflow.forge <forge>`; self-hosted hosts are mapped exactly in
+`~/.config/kaola-workflow/config.json#forge_hosts`. With no declaration, the `origin` host decides,
+and a single installed edition is the default. A repo that resolves to a different forge is refused
+as `forge_mismatch` before any `gh` / `glab` / `tea` call. See
+[ADR 0032](docs/decisions/0032-per-repo-forge-resolution.md) and the
+[P0 measurements](docs/investigations/2026-10-27-multi-forge-p0-measurements.md).
+
 <details>
 <summary>Cursor CLI startup and resume</summary>
 

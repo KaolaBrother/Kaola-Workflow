@@ -116,7 +116,15 @@ function discoverProject(opts) {
   const owner = remoteMatch[1];
   const repo = remoteMatch[2];
   const repoRaw = teaExec(['api', '/api/v1/repos/' + owner + '/' + repo], options);
-  return normalizeProject(parseJson(repoRaw, {}));
+  const project = normalizeProject(parseJson(repoRaw, {}));
+  // #1123 P0 fact: `tea api` exits 0 even for an HTTP 404/403 body. An error body has no
+  // full_name, and returning the empty project here used to let callers proceed against an
+  // unresolved repository. Refuse instead of trusting the exit status.
+  if (!project.full_name) {
+    throw new Error('tea api returned no repository for ' + owner + '/' + repo
+      + ' (Gitea error bodies arrive with exit status 0; check the login/host and repository)');
+  }
+  return project;
 }
 
 function normalizeIssue(raw) {

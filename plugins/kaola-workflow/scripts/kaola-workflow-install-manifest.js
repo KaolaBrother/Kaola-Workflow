@@ -66,6 +66,8 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-sink-pr.js',
   'kaola-workflow-classifier.js',
   'kaola-workflow-adaptive-schema.js',
+  // #1123: every edition's claim/sink entrypoints require it before any forge CLI call.
+  'kaola-workflow-forge-resolve.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
   'kaola-workflow-gap-sweep.js',
