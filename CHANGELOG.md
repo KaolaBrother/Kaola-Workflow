@@ -34,9 +34,11 @@
   three committed multi surfaces (27 total) alongside the per-forge registry. `uninstall.sh --forge=<one>` removes only that support directory, repoints the hook at a survivor, and keeps
   the multi entry so a repo that still resolves the removed forge gets `forge_not_installed`;
   `install-all.sh --check` reports `[forge] claude: installed=… expected=…`. Single-forge
-  `--forge=github` output is byte-identical to the previous render. The measured multi increment is
-  +820 tokens for Next, +1,810 for Finalize, +30 for Init: **+2,630 combined Next+Finalize**, under
-  the recorded **3,000-token D5 cap**. Other runtimes were single-forge pending the P3 decision;
+  `--forge=github` command entries are byte-identical to the previous render (the support scripts
+  carry the resolver and guard). The measured multi increment is
+  +910 tokens for Next, +1,920 for Finalize, +530 for Init: **+2,830 combined Next+Finalize**, under
+  the **proposed 3,000-token D5 cap** (pending owner ratification). Other runtimes were single-forge
+  pending the P3 decision;
   P4 remains gated. No release, version bump, or install is implied.
 
 - **P3 forge coexistence decisions for Codex and the additive runtimes (#1123 P3).** Codex carries
@@ -51,6 +53,16 @@
   (`[forge] <runtime>: installed=… expected=…`). The antigravity doc's claim that a reinstall
   replaces the support set is corrected: it copies scripts and does not delete the other forge's
   renamed scripts. P4 remains gated. No release, version bump, or install is implied.
+
+- **#1123 review round 1.** The multi finalize now routes `sink: mr` to the request MR sink instead
+  of the destructive merge sink, with forge × SINK_KIND render/behavior tests; the multi request
+  command is derived from the single-forge arm. Multi resolver refusals print their reason and
+  stop the step; multi init gains its own resolver and multi next names the same-shell requirement.
+  The guard suite now uses a JavaScript recorder with recorder and `assertNoCalls` positive
+  controls, plus the missing GitLab/Codex sink and resume cases; `sink-pr` gains the gh mock seam.
+  D5 is restated as a **proposed** 3,000-token cap for owner ratification, re-measured at 2,830.
+  The ZCode P3 assertions run before its exit gate. No release, version bump, or install is
+  implied.
 
 ## [12.6.0] - 2026-10-26
 

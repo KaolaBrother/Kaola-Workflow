@@ -1889,13 +1889,6 @@ function generatedTreeRelFiles(label) {
   }
 }
 
-if (failed) {
-  console.error('\nzcode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
-    + driftVerdict);
-  process.exit(1);
-}
-console.log('zcode-edition test passed (' + passed + ' assertions).' + driftVerdict);
-
 // #1123 P3: the additive runtime's documented forge posture. The behavioral guard is covered by
 // the shared forge-resolve/guard suites; this suite pins the DECISION and its documentation so a
 // future edit cannot silently imply a union/multi layout this runtime does not ship.
@@ -1905,3 +1898,10 @@ console.log('zcode-edition test passed (' + passed + ' assertions).' + driftVerd
   assertReal(/single-forge/i.test(docs), 'zcode: docs record the single-forge decision');
   assertReal(/P1 resolver guard/i.test(docs), 'zcode: docs name the P1 guard');
 }
+
+if (failed) {
+  console.error('\nzcode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
+    + driftVerdict);
+  process.exit(1);
+}
+console.log('zcode-edition test passed (' + passed + ' assertions).' + driftVerdict);

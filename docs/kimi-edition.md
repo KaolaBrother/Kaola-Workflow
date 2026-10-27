@@ -143,9 +143,7 @@ output.
 
 **Single-forge.** This edition installs one forge at a time. The native skill namespace (`skills/<name>/SKILL.md`) is flat: the three topics use
 the same basenames for every forge, so a second install would overwrite the entry rather than add a
-second one. Support scripts follow the selected forge's manifest (where the installer prunes, names
-outside that manifest are removed; where it only copies, the previous forge's renamed scripts
-remain). The P1 resolver guard refuses a repository that resolves to a different forge before any
+second one. The installer prunes support-script names outside the selected forge's manifest. The P1 resolver guard refuses a repository that resolves to a different forge before any
 forge CLI call, so the single-forge posture is safe; reinstall with
 `--forge=<github|gitlab|gitea>` to switch. The issue #1123 P3 union-scripts + multi-entry layout is
 therefore not used here.

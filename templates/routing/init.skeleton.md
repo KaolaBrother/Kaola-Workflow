@@ -39,6 +39,9 @@ test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
 <!-- SPLICE:in-cmd-002 -->
 
 ```bash
+<!-- REGION:multi — init has no earlier resolver, so the forge branch is chosen here -->
+<!-- SLOT:in-scripts-resolver -->
+<!-- /REGION -->
 <!-- SPLICE:in-cmd-003 -->
 ```
 

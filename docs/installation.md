@@ -92,7 +92,8 @@ pinned to the first installed forge. Repos keep working without a reinstall: a `
 resolves the GitHub scripts and a repo whose mapped host resolves Gitea resolves the Gitea scripts.
 `uninstall.sh --forge=gitea` removes only that support directory; the multi entry stays and a repo
 that still resolves Gitea reports `forge_not_installed` instead of running the wrong edition. The
-single-forge install (`--forge=github`) is byte-identical to earlier releases.
+single-forge install (`--forge=github`) leaves the command entries byte-identical to earlier
+releases; support scripts carry the #1123 resolver and guard.
 
 ### Codex
 

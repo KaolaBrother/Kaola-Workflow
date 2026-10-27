@@ -76,12 +76,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 case "$KW_FORGE" in
   github)
@@ -121,12 +123,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
   --project {project} --verdict "<pass|fail>" --command "<exact command>"
@@ -228,12 +232,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
 if [ ! -f "$SINK_STATE_FILE" ]; then
@@ -298,7 +304,7 @@ case "$KW_FORGE" in
     ;;
 esac
 case "$SINK_KIND" in
-  pr)
+  pr|mr)
 case "$KW_FORGE" in
   github)
     SINK_KEEP_OPEN_PR_FLAG=""
@@ -375,12 +381,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 case "$KW_FORGE" in
   github)

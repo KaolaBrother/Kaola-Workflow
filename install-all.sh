@@ -121,9 +121,10 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
 Options:
   --forge=github|gitlab|gitea|github,gitea
                                 Forge for every forge-aware runtime (default: github). A comma list
-                                installs Claude's multi-forge entry; Codex plugins are added with
-                                `codex plugin add`; the additive runtimes use the first forge
-                                (single-forge by design, #1123 P3).
+                                installs Claude's multi-forge entry; Codex plugins are installed
+                                separately with `codex plugin add` (this wrapper converges only the
+                                first); the additive runtimes use the first forge (single-forge by
+                                design, #1123 P3).
   --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default)
   --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
@@ -380,8 +381,10 @@ let s=""; process.stdin.on("data", d => s += d).on("end", () => {
           fi
         done
       fi
-      echo "    [forge] $name: installed=${af_installed} expected=${FORGE}"
-      note="${note:+$note; }forge installed=${af_installed} expected=${FORGE}"
+      # Copy-only installers can leave a previous forge's renamed scripts behind; the active
+      # entry is still single-forge, so report the support-script set, not "installed".
+      echo "    [forge] $name: scripts=${af_installed} expected=${FORGE}"
+      note="${note:+$note; }forge scripts=${af_installed} expected=${FORGE}"
     fi
     # #1112: the droid carrier check alone cannot see the Skills — they moved to the
     # shared ~/.agents/skills root with an ownership record and a retired-root sweep.

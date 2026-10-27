@@ -115,6 +115,12 @@ function runResolverBlock(block, cwd, home, bin) {
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
 
+function resolvedClaim(stdout) {
+  const line = String(stdout).split('\n').find(l => l.startsWith('CLAIM_JS='));
+  assert(line, 'resolver block did not emit CLAIM_JS: ' + stdout);
+  return line.slice('CLAIM_JS='.length).replace(/^'|'$/g, '');
+}
+
 function writeMock(file, marker) {
   fs.writeFileSync(file, [
     "const fs = require('fs');",
@@ -193,8 +199,11 @@ check('repo A calls only gh, repo B calls only tea, with no reinstall between', 
 
   writeMock(path.join(home, 'a-gh.js'), aGh);
   writeMock(path.join(home, 'a-tea.js'), aTea);
+  // The claim path comes from the resolver block's own CLAIM_JS, not a hardcoded edition path.
+  assert.strictEqual(resolvedClaim(aResolved.stdout),
+    path.join(home, '.claude/kaola-workflow/scripts/kaola-workflow-claim.js'));
   // spawn-class: cli-contract
-  const aRun2 = spawnSync(process.execPath, [path.join(home, '.claude/kaola-workflow/scripts/kaola-workflow-claim.js'), 'list-open'], {
+  const aRun2 = spawnSync(process.execPath, [resolvedClaim(aResolved.stdout), 'list-open'], {
     cwd: repoA, encoding: 'utf8', timeout: 60000,
     env: Object.assign(envFor(home, bin), {
       KAOLA_GH_MOCK_SCRIPT: path.join(home, 'a-gh.js'),
@@ -207,8 +216,10 @@ check('repo A calls only gh, repo B calls only tea, with no reinstall between', 
 
   writeMock(path.join(home, 'b-gh.js'), bGh);
   writeMock(path.join(home, 'b-tea.js'), bTea);
+  assert.strictEqual(resolvedClaim(bResolved.stdout),
+    path.join(home, '.claude/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js'));
   // spawn-class: cli-contract
-  const bRun = spawnSync(process.execPath, [path.join(home, '.claude/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js'), 'list-open'], {
+  const bRun = spawnSync(process.execPath, [resolvedClaim(bResolved.stdout), 'list-open'], {
     cwd: repoB, encoding: 'utf8', timeout: 60000,
     env: Object.assign(envFor(home, bin), {
       KAOLA_GH_MOCK_SCRIPT: path.join(home, 'b-gh.js'),
@@ -258,6 +269,13 @@ check('the compact hook survives and points at the remaining github support dir'
 check('after uninstall, repo B refuses with forge_not_installed and repo A still works', () => {
   const postB = runResolverBlock(block, repoB, home, bin);
   assert(postB.stderr.includes('forge_not_installed'), postB.stderr);
+  // The block must STOP on refusal, not continue with an empty CLAIM_JS.
+  // spawn-class: cli-contract
+  const stopped = spawnSync('/bin/bash', ['-c', 'source "$1"', '_', block], {
+    cwd: repoB, encoding: 'utf8', env: envFor(home, bin), timeout: 60000,
+  });
+  assert.strictEqual(stopped.status, 1, 'resolver refusal did not stop the step: ' + stopped.stdout + stopped.stderr);
+  assert(stopped.stderr.includes('forge_not_installed'), stopped.stderr);
   const postA = runResolverBlock(block, repoA, home, bin);
   assert(postA.stdout.includes('KW_FORGE=github'), postA.stdout + postA.stderr);
 });

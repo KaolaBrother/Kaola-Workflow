@@ -25,6 +25,10 @@ components. This heuristic has not been calibrated against every supported model
 | OpenCode | 1759 | 2100 | 407 | 4266 |
 | ZCode | 1373 | 1714 | 914 | 4001 |
 
+The Claude Next/Finalize values above are the older #1101 baseline (1794/2131); the current
+single-forge counts are 1572/2086, measured in the #1123 section below. The other rows remain at
+their original measured baseline.
+
 No Init, separate compact recovery, project rules, vendor prompts, history,
 tool traffic, reasoning, or model output is counted. The three components need not be freshly
 injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin/Droid/DSH/ZCode is counted in
@@ -34,21 +38,23 @@ excluded. Tokenizer differences and runtime caching require actual usage reports
 ## Multi-forge command entries (#1123 P2)
 
 When two or more Claude forges are installed, `install.sh` installs the `multi` command entries
-instead of one forge's render. Measured 2026-10-27 on the P2 candidate (P1 baseline `2fd2f2c6` plus
-the P2 change set), with the same whitespace and tokens = words × 1.5, rounded to the nearest 10:
+instead of one forge's render. Measured 2026-10-27 on the round-1 repair candidate (P1 baseline
+`2fd2f2c6` plus P2/P3 and the review fixes), with the same whitespace and tokens = words × 1.5,
+rounded to the nearest 10:
 
 | Entry | Single words | Multi words | Words added | Single tokens | Multi tokens | Tokens added |
 |---|---:|---:|---:|---:|---:|---:|
-| Next | 1572 | 2119 | +547 | 2360 | 3180 | **+820** |
-| Init | 793 | 816 | +23 | 1190 | 1220 | **+30** |
-| Finalize | 2086 | 3291 | +1205 | 3130 | 4940 | **+1810** |
-| Next + Finalize | 3658 | 5410 | +1752 | 5490 | 8120 | **+2630** |
+| Next | 1572 | 2181 | +609 | 2360 | 3270 | **+910** |
+| Init | 793 | 1145 | +352 | 1190 | 1720 | **+530** |
+| Finalize | 2086 | 3367 | +1281 | 3130 | 5050 | **+1920** |
+| Next + Finalize | 3658 | 5548 | +1890 | 5490 | 8320 | **+2830** |
 
 The multi entry repeats the three-forge resolver block in each self-contained bash step (a shell
-does not keep functions between steps), which is where most of the increment lives. The D5 cap is
-**3,000 estimated tokens for the combined Next + Finalize multi entry**, measured at 2,630 with 370
-tokens of headroom. A future render that exceeds the cap is a design fork, not an invitation to
-raise the number.
+does not keep functions between steps), which is where most of the increment lives. The **proposed**
+D5 cap is **3,000 estimated tokens for the combined Next + Finalize multi entry**, measured at 2,830
+with 170 tokens of headroom. This number is a proposal for owner ratification under issue #1123
+§5 D5, not a settled limit; if the owner adopts it, a future render above it is a new owner
+decision rather than an invitation to raise the number.
 
 Reproduce with the same word counter over `commands/<entry>.md` and
 `templates/routing/multi/<entry>.md` in this checkout; no generator run is needed because both

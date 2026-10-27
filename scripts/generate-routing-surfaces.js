@@ -167,8 +167,9 @@ const MULTI_SURFACES = [
 // MULTI_CASE_SPLICES — command splices whose per-forge values are composed into
 // `case "$KW_FORGE" in … esac`. Prose splices are NOT here: they must carry an
 // authored neutral `multi` value, because a case of English sentences is not prose.
-// A splice here may still override the composition with its own `multi` value
-// (fz-sink-pr-case does, because its value is itself a `case` arm fragment).
+// A splice here may still override the composition with its own `multi` value;
+// none does today. `fz-sink-pr-case` is single-forge only, and the multi
+// `fz-sink-pr-run` is derived from it in slots.js so the request arm cannot drift.
 const MULTI_CASE_SPLICES = new Set([
   'nx-watch-run',
   'nx-issue-detail-fetch',
@@ -176,7 +177,6 @@ const MULTI_CASE_SPLICES = new Set([
   'fz-runchains-run',
   'fz-sink-issue',
   'fz-keepopen-comment',
-  'fz-sink-pr-case',
   'fz-sink-pr-run',
   'fz-sink-merge-run',
   'fz-closure-audit-run',

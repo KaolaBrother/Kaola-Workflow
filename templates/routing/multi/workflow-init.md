@@ -39,6 +39,37 @@ If this is not a Git repository, ask before running `git init`. If it is a Git r
 If a forge CLI is available and a repository can be inferred from `origin`, inspect open issues:
 
 ```bash
+kaola_script_github(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+kaola_script_gitlab(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+kaola_script_gitea(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+
+_claim_github="$(kaola_script_github kaola-workflow-claim.js)" || _claim_github=""
+_claim_gitlab="$(kaola_script_gitlab kaola-gitlab-workflow-claim.js)" || _claim_gitlab=""
+_claim_gitea="$(kaola_script_gitea kaola-gitea-workflow-claim.js)" || _claim_gitea=""
+_dir_github=""; [ -n "$_claim_github" ] && _dir_github="$(dirname "$_claim_github")"
+_dir_gitlab=""; [ -n "$_claim_gitlab" ] && _dir_gitlab="$(dirname "$_claim_gitlab")"
+_dir_gitea=""; [ -n "$_claim_gitea" ] && _dir_gitea="$(dirname "$_claim_gitea")"
+_installed=""
+[ -n "$_claim_github" ] && _installed="github"
+[ -n "$_claim_gitlab" ] && _installed="${_installed:+$_installed,}gitlab"
+[ -n "$_claim_gitea" ] && _installed="${_installed:+$_installed,}gitea"
+
+_forge_resolver=""
+for _d in "$_dir_github" "$_dir_gitlab" "$_dir_gitea"; do
+  [ -n "$_d" ] && [ -f "$_d/kaola-workflow-forge-resolve.js" ] && { _forge_resolver="$_d/kaola-workflow-forge-resolve.js"; break; }
+done
+if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
+  echo "Kaola-Workflow: no installed forge scripts found" >&2
+  CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
+elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
+    --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
+  eval "$_resolved"
+else
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
+  CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
+fi
 case "$KW_FORGE" in
   github)
     gh issue list --limit 100

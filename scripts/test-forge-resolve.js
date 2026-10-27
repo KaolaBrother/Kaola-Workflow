@@ -63,13 +63,17 @@ function writeMachineConfig(home, value) {
     typeof value === 'string' ? value : JSON.stringify(value));
 }
 
+// Isolated HOME for the CLI cases: a runner's real ~/.config/kaola-workflow must not
+// decide whether these pass.
+const CLI_HOME = temp('kw-fr-cli-home-');
+
 function runCli(args, opts) {
   const options = opts || {};
   // spawn-class: cli-contract
   const res = spawnSync(process.execPath, [RESOLVER].concat(args), {
     cwd: options.cwd || os.tmpdir(),
     encoding: 'utf8',
-    env: Object.assign({}, process.env, options.env || {}),
+    env: Object.assign({ HOME: CLI_HOME }, process.env, options.env || {}),
   });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
@@ -188,6 +192,10 @@ check('unknown host with two installed forges refuses forge_unresolved', () => {
   const res = R.resolveForge({ cwd: dir, home: temp('kw-fr-home-'), installed: ['github', 'gitea'] });
   assert.strictEqual(res.ok, false, JSON.stringify(res));
   assert.strictEqual(res.reason, 'forge_unresolved');
+  assert(res.operator_hint.includes('kaola-workflow/config.json'), res.operator_hint);
+  assert(res.operator_hint.includes('git config --local kaola-workflow.forge'), res.operator_hint);
+  assert(res.operator_hint.includes('forge_hosts'), res.operator_hint);
+  assert(res.operator_hint.includes('./install.sh --yes --forge='), res.operator_hint);
 });
 
 check('local-path origin is unknown, not guessed', () => {
@@ -322,6 +330,7 @@ check('resolved forge outside the installed set refuses forge_not_installed', ()
   assert.strictEqual(res.ok, false, JSON.stringify(res));
   assert.strictEqual(res.reason, 'forge_not_installed');
   assert.strictEqual(res.forge, 'github');
+  assert(res.operator_hint.includes('./install.sh --yes --forge=github'), res.operator_hint);
 });
 
 check('no T1-T3 and installed set empty refuses forge_unresolved', () => {

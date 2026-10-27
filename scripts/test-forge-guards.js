@@ -30,6 +30,9 @@ const SINKS = {
   'sink-pr-github': path.join(ROOT, 'scripts', 'kaola-workflow-sink-pr.js'),
   'sink-pr-gitea': path.join(ROOT, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-pr.js'),
   'sink-mr-gitlab': path.join(ROOT, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-mr.js'),
+  'sink-merge-gitlab': path.join(ROOT, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'),
+  'sink-merge-codex': path.join(ROOT, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'),
+  'sink-pr-codex': path.join(ROOT, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-pr.js'),
 };
 
 let passed = 0;
@@ -79,9 +82,15 @@ function makeHome(forgeHosts) {
 
 function makeRecorder() {
   const dir = temp('kw-fg-bin-');
-  const script = path.join(dir, 'mock.sh');
-  fs.writeFileSync(script, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOCK_MARKER"\nexit 1\n');
-  fs.chmodSync(script, 0o755);
+  // Every seam runs the mock as `node <mock>` (claim/sink/sink-pr), so the recorder
+  // must be JavaScript. A `#!/bin/sh` file here is a SyntaxError under node, which
+  // would leave the marker absent and make assertNoCalls vacuously true.
+  const script = path.join(dir, 'mock.js');
+  fs.writeFileSync(script, [
+    "const fs = require('fs');",
+    "fs.appendFileSync(process.env.MOCK_MARKER, process.argv.slice(2).join(' ') + '\\n');",
+    'process.exit(1);',
+  ].join('\n'));
   return script;
 }
 
@@ -122,6 +131,24 @@ const GITHUB_REPO = 'https://github.com/Owner/Repo.git';
 const GITEA_HOST = 'git.example.com';
 const GITEA_HOSTS = { [GITEA_HOST]: 'gitea' };
 
+// Positive controls: prove BOTH halves of the zero-call evidence — the recorder fires,
+// and assertNoCalls actually rejects a marker. The second control is what mutation A
+// lacked: a recorder that cannot run makes the assertion vacuous even when it is called.
+check('assertNoCalls positive control: a recorded call fails the assertion', () => {
+  const marker = path.join(temp('kw-fg-calls-'), 'calls');
+  fs.writeFileSync(marker, 'issue list\n');
+  assert.throws(() => assertNoCalls({ marker }, 'control'), /forge CLI was invoked/);
+});
+
+// Positive control: prove the recorder actually fires. Without this, a recorder that
+// cannot run (or a seam that never reaches it) makes every zero-call assertion vacuous.
+check('recorder positive control: a real gh call writes the marker', () => {
+  const repo = makeRepo(GITHUB_REPO);
+  const out = run(CLAIMS.github, ['list-open'], { cwd: repo, home: makeHome() });
+  assert(fs.existsSync(out.marker), 'recorder did not fire on a passing github list-open');
+  assert(fs.readFileSync(out.marker, 'utf8').includes('issue list'), fs.readFileSync(out.marker, 'utf8'));
+});
+
 // --- claim: forge editions refuse a github.com repo -------------------------
 
 check('gitea claim startup refuses github.com before tea', () => {
@@ -151,6 +178,21 @@ check('gitea claim resume refuses github.com before tea', () => {
   assert.strictEqual(out.status, 1, out.stdout + out.stderr);
   assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
   assertNoCalls(out, 'gitea claim resume');
+});
+
+check('sink-pr gh seam positive control: a passing github sink writes the marker', () => {
+  const repo = makeRepo(GITHUB_REPO);
+  fs.mkdirSync(path.join(repo, 'kaola-workflow', 'p'), { recursive: true });
+  const out = run(SINKS['sink-pr-github'], ['--branch', 'b', '--project', 'p'], { cwd: repo, home: makeHome() });
+  assert(fs.existsSync(out.marker), 'sink-pr did not reach the gh recorder: ' + out.stdout + out.stderr);
+});
+
+check('gitlab claim resume refuses github.com before glab', () => {
+  const repo = makeRepo(GITHUB_REPO);
+  const out = run(CLAIMS.gitlab, ['resume', '--json'], { cwd: repo, home: makeHome() });
+  assert.strictEqual(out.status, 1, out.stdout + out.stderr);
+  assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
+  assertNoCalls(out, 'gitlab claim resume');
 });
 
 // --- claim: github editions refuse a mapped gitea repo ---------------------
@@ -233,6 +275,30 @@ check('gitlab sink-mr refuses github.com before glab', () => {
   assert.strictEqual(out.status, 1, out.stdout + out.stderr);
   assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
   assertNoCalls(out, 'gitlab sink-mr');
+});
+
+check('gitlab sink-merge refuses github.com before glab', () => {
+  const repo = makeRepo(GITHUB_REPO);
+  const out = run(SINKS['sink-merge-gitlab'], ['--branch', 'b', '--project', 'p', '--sink'], { cwd: repo, home: makeHome() });
+  assert.strictEqual(out.status, 1, out.stdout + out.stderr);
+  assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
+  assertNoCalls(out, 'gitlab sink-merge');
+});
+
+check('codex sink-merge refuses a mapped gitea repo before gh', () => {
+  const repo = makeRepo('https://' + GITEA_HOST + '/Owner/Repo.git');
+  const out = run(SINKS['sink-merge-codex'], ['--branch', 'b', '--project', 'p', '--sink'], { cwd: repo, home: makeHome(GITEA_HOSTS) });
+  assert.strictEqual(out.status, 1, out.stdout + out.stderr);
+  assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
+  assertNoCalls(out, 'codex sink-merge');
+});
+
+check('codex sink-pr refuses a mapped gitea repo before gh', () => {
+  const repo = makeRepo('https://' + GITEA_HOST + '/Owner/Repo.git');
+  const out = run(SINKS['sink-pr-codex'], ['--branch', 'b', '--project', 'p'], { cwd: repo, home: makeHome(GITEA_HOSTS) });
+  assert.strictEqual(out.status, 1, out.stdout + out.stderr);
+  assert.strictEqual(lastJson(out).reason, 'forge_mismatch');
+  assertNoCalls(out, 'codex sink-pr');
 });
 
 // --- help stays a zero-effect answer ---------------------------------------

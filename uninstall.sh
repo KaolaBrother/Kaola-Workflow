@@ -96,7 +96,10 @@ COMMANDS=(
 # gets: a multi install stays multi (so a foreign repo gets forge_not_installed from the
 # resolver), while a single install stays single when the removed forge was absent.
 WAS_MULTI=0
-if [[ -f "$HOME/.claude/commands/workflow-next.md" && -f "$SCRIPT_DIR/templates/routing/multi/workflow-next.md" ]] \
+if [[ -f "$HOME/.claude/commands/workflow-next.md" ]] \
+   && grep -q 'resolve --shell --installed' "$HOME/.claude/commands/workflow-next.md" 2>/dev/null; then
+  WAS_MULTI=1
+elif [[ -f "$HOME/.claude/commands/workflow-next.md" && -f "$SCRIPT_DIR/templates/routing/multi/workflow-next.md" ]] \
    && cmp -s "$HOME/.claude/commands/workflow-next.md" "$SCRIPT_DIR/templates/routing/multi/workflow-next.md"; then
   WAS_MULTI=1
 fi

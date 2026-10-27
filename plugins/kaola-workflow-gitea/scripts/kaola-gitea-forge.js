@@ -118,8 +118,10 @@ function discoverProject(opts) {
   const repoRaw = teaExec(['api', '/api/v1/repos/' + owner + '/' + repo], options);
   const project = normalizeProject(parseJson(repoRaw, {}));
   // #1123 P0 fact: `tea api` exits 0 even for an HTTP 404/403 body. An error body has no
-  // full_name, and returning the empty project here used to let callers proceed against an
-  // unresolved repository. Refuse instead of trusting the exit status.
+  // full_name, so THIS function now throws instead of returning an empty project. Not every
+  // caller is fixed: claim discoverProjectSafe and sink-merge readProjectInfo catch and
+  // degrade, and createIssueComment/listIssueComments still trust exit 0. The sink-pr issue
+  // path and the Next issue-detail fetch get the refusal; ADR 0032 §8 records the rest.
   if (!project.full_name) {
     throw new Error('tea api returned no repository for ' + owner + '/' + repo
       + ' (Gitea error bodies arrive with exit status 0; check the login/host and repository)');

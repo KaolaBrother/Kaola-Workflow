@@ -166,7 +166,7 @@ esac
 <!-- /REGION -->
 <!-- REGION:multi — one install carries all three editions; the resolved forge picks the command -->
 case "$SINK_KIND" in
-  pr)
+  pr|mr)
 <!-- SPLICE:fz-sink-pr-run -->
     ;;
   merge|*)

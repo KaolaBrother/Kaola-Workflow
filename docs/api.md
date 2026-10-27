@@ -245,8 +245,10 @@ or no `origin`; it is never guessed by substring.
 `CLAIM_JS` (the forge's claim filename). `--scripts-dir` is the fallback directory;
 `--scripts-dir-<forge>` selects the directory for the resolved forge and is what the multi entry
 passes, so the neutral resolver never hardcodes an edition path. On a refusal it writes the reason
-to stderr and exits 1 with no stdout. `set` writes T2 and `unset` removes it idempotently; neither
-touches a tracked file, and no command prints a credential or URL userinfo.
+to stderr and exits 1 with no stdout; the `forge_unresolved` and `forge_not_installed` bodies carry
+an `operator_hint` naming the three declaration routes and the matching install command. `set`
+writes T2 and `unset` removes it idempotently; neither touches a tracked file, and no command prints
+a credential or URL userinfo.
 
 The P1 edition guard calls this module with `installed: [<this edition's forge>]` at claim
 `startup` / `resume` and at every sink entry, before the first `gh` / `glab` / `tea` call. A
@@ -286,9 +288,11 @@ follow its manifest (some installers prune names outside it, others copy and lea
 renamed scripts). The P1 resolver guard refuses a repo resolving to another forge before any forge
 CLI call, so the single-forge posture is safe. Each `docs/<runtime>-edition.md` records the decision.
 
-`install-all.sh --check` reports every runtime's installed set by probing the forge claim scripts in
-that runtime's support dir: `[forge] <runtime>: installed=… expected=…`. Project-scope installs are
-not visible to this global probe and report the global set only.
+`install-all.sh --check` reports Claude/Codex installed sets and, for the additive runtimes, the
+support-script set found in that runtime's dir: `[forge] <runtime>: scripts=… expected=…`. The
+additive label is `scripts`, not `installed`, because copy-only installers can leave a previous
+forge's renamed scripts behind while the active entry remains single-forge. Project-scope installs
+are not visible to this global probe and report the global set only.
 
 ## Claim API — `kaola-workflow-claim.js`
 

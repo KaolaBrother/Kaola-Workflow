@@ -88,7 +88,8 @@ command splices are composed from the existing per-forge values into `case "$KW_
 the entry calls `resolve --shell --installed <csv>` with `--scripts-dir-<forge>`. A per-forge
 uninstall keeps the multi entry and repoints the hook, so a repo that resolves the removed forge
 gets `forge_not_installed`. `install-all.sh --check` reports installed vs expected. The measured
-multi increment is +2,630 estimated tokens for Next+Finalize, under the recorded 3,000-token D5 cap.
+multi increment is +2,830 estimated tokens for Next+Finalize, under the proposed 3,000-token D5
+cap (pending owner ratification).
 P3 then resolved the remaining runtimes: Codex keeps both forge plugins installed (namespaced
 skills, separate caches), while the additive runtimes take the explicit single-forge alternative
 with this guard as the safety net; each edition doc records the choice. P4 (tea login binding)
@@ -103,7 +104,8 @@ remains open.
 - A repo that truthfully belongs to another forge now fails before any `gh`/`glab`/`tea` call,
   which is the safety the design asked for. A self-hosted host must be mapped explicitly in
   `~/.config/kaola-workflow/config.json#forge_hosts`; SSH and host aliases are not assumed equal.
-- Multi-forge machines still need P2/P3: this ADR does not render a `multi` entry, does not install
-  a union of forge scripts, and does not change the installer's single-forge selection.
+- P2 rendered the Claude `multi` entry; P3 added Codex's two-plugin coexistence and recorded the
+  additive runtimes' single-forge posture. No additive runtime installs a union of forge scripts;
+  the P1 guard is their safety net.
 - The P0 measurement record is
   [2026-10-27-multi-forge-p0-measurements.md](../investigations/2026-10-27-multi-forge-p0-measurements.md).

@@ -6,7 +6,7 @@
 // The additive runtimes chose the issue's explicit "single forge, P1 guard" alternative. This
 // suite ties each edition to that decision without pretending a union layout exists:
 //   - every docs/<runtime>-edition.md records the single-forge posture;
-//   - every runtime's gitea install manifest carries the guarded gitea claim;
+//   - the shared gitea install manifest (consumed by every runtime) carries the guarded claim;
 //   - the guarded gitea claim refuses a github.com repo with forge_mismatch before tea runs.
 // The full install/prune path is deliberately not claimed here; that path is the single-forge
 // replacement documented in each edition doc.
@@ -71,4 +71,4 @@ try {
   fs.rmSync(repo, { recursive: true, force: true });
 }
 
-console.log('OK: test-issue-1123-additive-guard.js — ' + RUNTIMES.length + ' single-forge decisions + guard');
+console.log('OK: test-issue-1123-additive-guard.js — ' + RUNTIMES.length + ' runtime decisions; shared manifest + guard');

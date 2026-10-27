@@ -375,6 +375,11 @@ function resolveForge(options) {
         ok: false, reason: 'forge_unresolved',
         detail: 'no config, marker, or origin mapping decided the forge; installed set ['
           + installed.join(',') + '] has ' + installed.length + ' members',
+        operator_hint: 'Declare the repo forge in one of three ways: kaola-workflow/config.json '
+          + 'with "forge": "<github|gitlab|gitea>"; git config --local kaola-workflow.forge '
+          + '<github|gitlab|gitea>; or map a self-hosted origin under '
+          + '~/.config/kaola-workflow/config.json#forge_hosts. Then install that edition with '
+          + './install.sh --yes --forge=<github|gitlab|gitea>.',
         host,
         tiers: tierList(Object.assign({ config: configForge, configDetail, marker: markerForge, markerDetail }, remoteTier)),
         warnings,
@@ -386,6 +391,9 @@ function resolveForge(options) {
     return {
       ok: false, reason: 'forge_not_installed',
       detail: 'resolved ' + forge + ' is not in the installed set [' + installed.join(',') + ']',
+      operator_hint: 'Install the resolved edition with ./install.sh --yes --forge=' + forge
+        + ' (or the matching runtime installer), or include it in a multi-forge install: '
+        + './install.sh --yes --forge=' + installed.join(',') + ',' + forge + '.',
       forge, host,
       tiers: tierList(Object.assign({ config: configForge, configDetail, marker: markerForge, markerDetail }, remoteTier)),
       warnings,

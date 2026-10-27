@@ -70,6 +70,8 @@ function isSafeName(name) {
 
 function ghExec(args) {
   if (OFFLINE) return '';
+  const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], { encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }).trim();
   return execFileSync('gh', args, { encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }).trim();
 }
 

@@ -146,18 +146,24 @@ function buildMultiResolver(commandValue) {
     'if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then',
     '  echo "Kaola-Workflow: no installed forge scripts found" >&2',
     '  CLAIM_JS=""',
+    '  return 1 2>/dev/null || exit 1',
     'elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \\',
     '    --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then',
     '  eval "$_resolved"',
     'else',
-    '  echo "Kaola-Workflow: forge resolution refused" >&2',
+    '  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2',
     '  CLAIM_JS=""',
+    '  return 1 2>/dev/null || exit 1',
     'fi');
   return lines.join('\n');
 }
 
 SLOTS['nx-scripts-resolver'].command.multi = buildMultiResolver(SLOTS['nx-scripts-resolver'].command);
 SLOTS['fz-scripts-resolver'].command.multi = buildMultiResolver(SLOTS['fz-scripts-resolver'].command);
+// Init has no resolver of its own before the forge-issue sync; multi needs one there or
+// the composed `case "$KW_FORGE"` is dead code (the branch must be chosen by bash).
+SLOTS['in-scripts-resolver'] = { command: Object.assign({}, SLOTS['nx-scripts-resolver'].command) };
+SLOTS['in-scripts-resolver'].command.multi = buildMultiResolver(SLOTS['nx-scripts-resolver'].command);
 SLOTS['in-frontmatter'].command.multi = [
   '---',
   'description: Initialize a project for Kaola-Workflow with AGENTS.md guidance, docs structure, and Git forge issue conventions.',
@@ -166,7 +172,7 @@ SLOTS['in-frontmatter'].command.multi = [
 ].join('\n');
 
 SPLICES['nx-issue-fetch'].multi =
-  'If a GitHub, GitLab, or Gitea remote and its authenticated forge CLI (`gh`, `glab`, or `tea`) are available, read each shortlisted issue\'s body and comments:';
+  'Run this block in the same shell as the resolver above; `KW_FORGE` and `KAOLA_SCRIPTS` are already set — do not choose the branch yourself.\n\nIf a GitHub, GitLab, or Gitea remote and its authenticated forge CLI (`gh`, `glab`, or `tea`) are available, read each shortlisted issue\'s body and comments:';
 SPLICES['in-cmd-001'].multi =
   'If this is not a Git repository, ask before running `git init`. If it is a Git repository without a remote, record that forge issue sync is pending until a remote exists.';
 SPLICES['in-cmd-002'].multi =
@@ -176,17 +182,21 @@ SPLICES['in-cmd-004'].multi =
 SPLICES['fz-issue-closure'].multi =
   'If the project links issues, every claimed issue closes on the merge and PR/MR sinks alike,';
 
-// Multi-only: the commands inside the shared `pr)` arm. The arm and the
-// `case "$KW_FORGE"` wrapper live in finalize.skeleton.md (REGION:multi), so this
-// splice stays within the variant-line budget and the renderer can compose it.
-SPLICES['fz-sink-pr-run'] = {
-  github: [
-    'SINK_KEEP_OPEN_PR_FLAG=""',
-    'if [ "$SINK_KEEP_OPEN_PR" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG="--keep-open-pr explicit_singleton"; fi',
-    'node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}',
-  ].join('\n'),
-  gitlab: 'node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}',
-  gitea: 'node "$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}',
-};
+// Multi-only: the commands inside the shared `pr|mr)` arm, DERIVED from the
+// single-forge `fz-sink-pr-case` arm so the two can never disagree about which
+// forge script a request sink runs. The arm labels (`pr)` / `mr|pr)`) are dropped
+// and the four-space command indentation is removed; the `case "$KW_FORGE"` wrapper
+// and the arm itself live in finalize.skeleton.md (REGION:multi).
+function sinkPrRunFromCase(value) {
+  const lines = String(value).split('\n');
+  if (!/^\s{2}(?:mr\|)?pr\)$/.test(lines[0])) {
+    throw new Error('fz-sink-pr-case: unexpected arm label: ' + lines[0]);
+  }
+  return lines.slice(1).map(line => line.replace(/^ {4}/, '')).join('\n');
+}
+SPLICES['fz-sink-pr-run'] = {};
+for (const forge of ['github', 'gitlab', 'gitea']) {
+  SPLICES['fz-sink-pr-run'][forge] = sinkPrRunFromCase(SPLICES['fz-sink-pr-case'][forge]);
+}
 
 module.exports = { SLOTS, SPLICES, GLOBAL_WORKFLOW_CONTRACT_SOURCE };

@@ -112,12 +112,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 node "$CLAIM_JS" list-open
 case "$KW_FORGE" in
@@ -132,6 +134,8 @@ case "$KW_FORGE" in
     ;;
 esac
 ```
+
+Run this block in the same shell as the resolver above; `KW_FORGE` and `KAOLA_SCRIPTS` are already set — do not choose the branch yourself.
 
 If a GitHub, GitLab, or Gitea remote and its authenticated forge CLI (`gh`, `glab`, or `tea`) are available, read each shortlisted issue's body and comments:
 
@@ -177,12 +181,14 @@ done
 if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then
   echo "Kaola-Workflow: no installed forge scripts found" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \
     --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then
   eval "$_resolved"
 else
-  echo "Kaola-Workflow: forge resolution refused" >&2
+  echo "Kaola-Workflow: forge resolution refused — the reason is on stderr above" >&2
   CLAIM_JS=""
+  return 1 2>/dev/null || exit 1
 fi
 node "$CLAIM_JS" startup --runtime claude --target-issues "$KAOLA_TARGET_ISSUES"
 ```

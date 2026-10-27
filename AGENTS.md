@@ -14,9 +14,13 @@ design records, and `kaola-workflow/.roadmap/_rules.md` is the only optional loc
 - `scripts/kaola-workflow-run-chains.js` runs validation chains and writes candidate-bound receipts.
 - `scripts/kaola-workflow-sink-merge.js` owns the merge sink and reports the branch state it found.
 - `scripts/kaola-workflow-adaptive-schema.js` contains forge-neutral constants and shared helpers.
+- `scripts/kaola-workflow-forge-resolve.js` resolves T1 tracked config, T2 clone-local marker,
+  T3 exact host mapping, and T4 the installed set; the same byte-identical copy is the edition
+  guard.
 - `scripts/simulate-workflow-walkthrough.js` is the integration walkthrough.
 - `templates/routing/` is the authoring source for generated command and skill surfaces. Edit the
-  skeleton or slot, then regenerate; never hand-edit a rendered surface.
+  skeleton or slot, then regenerate; never hand-edit a rendered surface. `templates/routing/multi/`
+  holds the generated multi-forge command entries (also do not hand-edit).
 - `templates/agents/runtime-capabilities.json` is the measured runtime-adapter fact authority
   (instruction loading, compact recovery, install scope). Its rendered delegation guidance does not
   name subagent type catalogs, models, nesting, or concurrency counts; dated route measurements
