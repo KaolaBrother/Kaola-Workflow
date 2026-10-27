@@ -167,9 +167,10 @@ subagent use. Installing no Kaola profile never means the host lacks that capabi
 measurements are in [Runtime Capabilities](docs/runtime-capabilities.md); they are not prompt
 instructions.
 
-All forge-aware installers accept `--forge=github|gitlab|gitea`; Codex selects its forge through the
-installed plugin. Instruction loading, compact recovery, and install scope stay per runtime.
-See [Runtime Capabilities](docs/runtime-capabilities.md) and the
+All forge-aware installers accept `--forge=github|gitlab|gitea`; Claude also accepts a comma list
+(see below). Codex selects its forge through the installed plugin. Instruction loading, compact
+recovery, and install scope stay per runtime. See
+[Runtime Capabilities](docs/runtime-capabilities.md) and the
 [edition guides](docs/README.md#runtime-editions) for setup and dated evidence.
 
 Each edition now resolves the repository before its first forge call (#1123). A repo can declare
@@ -180,6 +181,13 @@ and a single installed edition is the default. A repo that resolves to a differe
 as `forge_mismatch` before any `gh` / `glab` / `tea` call. See
 [ADR 0032](docs/decisions/0032-per-repo-forge-resolution.md) and the
 [P0 measurements](docs/investigations/2026-10-27-multi-forge-p0-measurements.md).
+
+Claude Code can carry more than one edition on one machine: `./install.sh --yes
+--forge=github,gitea` installs both support directories, one multi command entry per topic, and one
+compact-recovery hook. Repos then pick their edition without a reinstall;
+`uninstall.sh --forge=gitea` leaves the remaining edition working. The prompt-size increment is
+measured in [Prompt size](docs/prompt-size.md#multi-forge-command-entries-1123-p2). Other runtimes
+keep the first forge until the P3 union install.
 
 <details>
 <summary>Cursor CLI startup and resume</summary>

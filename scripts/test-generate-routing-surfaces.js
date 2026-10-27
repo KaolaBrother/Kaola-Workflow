@@ -16,8 +16,8 @@
 // hand-edited, against a disposable copy so the real tree is never mutated.
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
-const { GENERATED_SURFACES, RUNTIME_RECOVERY_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
-const ALL_GENERATED_SURFACES = [...GENERATED_SURFACES, ...RUNTIME_RECOVERY_SURFACES];
+const { GENERATED_SURFACES, MULTI_SURFACES, RUNTIME_RECOVERY_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
+const ALL_GENERATED_SURFACES = [...GENERATED_SURFACES, ...MULTI_SURFACES, ...RUNTIME_RECOVERY_SURFACES];
 // The runtime adapter facts own the declared data source slots.js renders the adapter section from.
 const { ADAPTER_SOURCE } = require('./runtime-adapter-facts.js');
 // Retired ADR 0017 vocabulary. It used to live in the role-profile generator (retired by #1101,
@@ -277,6 +277,12 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   const topics = Object.keys(TOPICS).sort();
   eq(topics.join(','), 'finalize,init,next', 'registry carries exactly the three generated topics');
   eq(GENERATED_SURFACES.length, 18, 'registry derives 18 surfaces (3 topics x 6)');
+  eq(MULTI_SURFACES.length, 3, 'multi registry derives one command entry per topic');
+  for (const row of MULTI_SURFACES) {
+    eq(row.path, 'templates/routing/multi/' + TOPICS[row.topic].command_basename + '.md',
+      `${row.topic}: multi path derives from the command basename`);
+    eq(row.skeleton, TOPICS[row.topic].skeleton, `${row.topic}: multi reuses the canonical skeleton`);
+  }
   eq(RUNTIME_RECOVERY_SURFACES.length, 6,
     'compact-recovery registry derives six tracked Claude/Codex prompt artifacts');
   eq(RUNTIME_RECOVERY_SURFACES.filter(r => r.runtime === 'claude').length, 3,
@@ -886,7 +892,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // message is unchanged.
     eq(clean.status, 0, 'mutation proof: sandbox baseline --check exits 0'
       + (clean.stderr ? `\n    sandbox stderr: ${clean.stderr.trim().split('\n').slice(0, 5).join('\n      ')}` : ''));
-    assert(/all 24 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 24 surfaces');
+    assert(/all 27 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 27 surfaces');
 
     // Every topic is covered on BOTH render shapes, and the FORGE twins as well as the canonical
     // github surface, because the forge editions are exactly the copies a hand-edit historically

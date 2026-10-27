@@ -153,6 +153,50 @@ const FORGES = (() => {
   return Object.freeze(cmd.slice());
 })();
 
+// MULTI_SURFACES — the Claude command entries installed when MORE THAN ONE forge is
+// installed (#1123 P2). `multi` is a render MODE, not a fourth forge: it never joins
+// FORGES, never has a skill row (Codex selects one plugin per forge), and is built
+// mechanically from the same skeleton + per-forge values. The committed files are what
+// install.sh copies, so --check polices them like every other surface.
+const MULTI_SURFACES = [
+  { topic: 'next', path: 'templates/routing/multi/workflow-next.md', skeleton: 'next.skeleton.md' },
+  { topic: 'init', path: 'templates/routing/multi/workflow-init.md', skeleton: 'init.skeleton.md' },
+  { topic: 'finalize', path: 'templates/routing/multi/kaola-workflow-finalize.md', skeleton: 'finalize.skeleton.md' },
+];
+
+// MULTI_CASE_SPLICES — command splices whose per-forge values are composed into
+// `case "$KW_FORGE" in … esac`. Prose splices are NOT here: they must carry an
+// authored neutral `multi` value, because a case of English sentences is not prose.
+// A splice here may still override the composition with its own `multi` value
+// (fz-sink-pr-case does, because its value is itself a `case` arm fragment).
+const MULTI_CASE_SPLICES = new Set([
+  'nx-watch-run',
+  'nx-issue-detail-fetch',
+  'in-cmd-003',
+  'fz-runchains-run',
+  'fz-sink-issue',
+  'fz-keepopen-comment',
+  'fz-sink-pr-case',
+  'fz-sink-pr-run',
+  'fz-sink-merge-run',
+  'fz-closure-audit-run',
+]);
+
+function multiCase(value) {
+  const out = ['case "$KW_FORGE" in'];
+  for (const forge of FORGES) {
+    const branch = value[forge];
+    if (typeof branch !== 'string') {
+      throw new Error('multi case splice has no ' + forge + ' branch');
+    }
+    out.push('  ' + forge + ')');
+    for (const line of branch.split('\n')) out.push(line ? '    ' + line : '');
+    out.push('    ;;');
+  }
+  out.push('esac');
+  return out.join('\n');
+}
+
 // commandSurfacesForForge — the command-surface rows for ONE forge, in topic
 // order. This is the forge axis as a CONSUMABLE api: a downstream runtime
 // edition (opencode / Kimi Code) renders its own tree FROM these rows instead of
@@ -194,6 +238,16 @@ function condMatches(cond, ctx) {
 // the self-test and --check surface immediately).
 function resolveKeyed(value, ctx, kind, name) {
   if (value === undefined) throw new Error(`${kind}:${name} is not defined`);
+  // Multi command splices are composed from the same per-forge values, unless the
+  // author supplied an explicit `multi` override (then the normal descent takes it).
+  if (ctx.forge === 'multi' && kind === 'SPLICE' && MULTI_CASE_SPLICES.has(name)) {
+    const scoped = value && Object.prototype.hasOwnProperty.call(value, ctx.surface_type)
+      ? value[ctx.surface_type] : value;
+    if (scoped && typeof scoped === 'object' && !Array.isArray(scoped)
+        && !Object.prototype.hasOwnProperty.call(scoped, 'multi')) {
+      return multiCase(scoped);
+    }
+  }
   let v = value;
   while (v && typeof v === 'object' && !Array.isArray(v)) {
     if (Object.prototype.hasOwnProperty.call(v, ctx.surface_type)) v = v[ctx.surface_type];
@@ -261,7 +315,11 @@ function renderSkeleton(skeletonText, ctx, ir) {
   const lines = skeletonText.split('\n');
   const out = [];
   renderLines(lines, ctx, ir, out);
-  return applyRenames(out.join('\n'), ctx.forge);
+  const rendered = out.join('\n');
+  // `multi` has no forge-noun namespace of its own: its prose is authored neutral and
+  // its command branches carry the per-forge values verbatim, so renaming would corrupt
+  // the branch that names a different forge on purpose.
+  return ctx.forge === 'multi' ? rendered : applyRenames(rendered, ctx.forge);
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +444,13 @@ function minimalDiff(committed, rendered, limit = 40) {
   return out.join('\n');
 }
 
+function renderMultiSurface(row, ir) {
+  return renderSkeleton(
+    loadSkeleton(row.skeleton, row.topic),
+    { surface_type: 'command', forge: 'multi' },
+    ir);
+}
+
 function cmdCheck(ir) {
   let mismatches = 0;
   for (const row of GENERATED_SURFACES) {
@@ -399,6 +464,21 @@ function cmdCheck(ir) {
     const rendered = renderSurface(row, ir);
     if (committed !== rendered) {
       console.error(`DRIFT: ${row.path} (${row.topic}/${row.surface_type}/${row.forge})`);
+      console.error(minimalDiff(committed, rendered));
+      mismatches++;
+    }
+  }
+  for (const row of MULTI_SURFACES) {
+    const abs = path.join(REPO, row.path);
+    if (!fs.existsSync(abs)) {
+      console.error(`MISSING: ${row.path} (${row.topic}/command/multi)`);
+      mismatches++;
+      continue;
+    }
+    const committed = fs.readFileSync(abs, 'utf8');
+    const rendered = renderMultiSurface(row, ir);
+    if (committed !== rendered) {
+      console.error(`DRIFT: ${row.path} (${row.topic}/command/multi)`);
       console.error(minimalDiff(committed, rendered));
       mismatches++;
     }
@@ -422,7 +502,7 @@ function cmdCheck(ir) {
     console.error(`\ngenerate-routing-surfaces --check: ${mismatches} surface(s) drifted from the skeleton.`);
     process.exit(1);
   }
-  console.log(`generate-routing-surfaces --check: all ${GENERATED_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces byte-match the skeleton.`);
+  console.log(`generate-routing-surfaces --check: all ${GENERATED_SURFACES.length + MULTI_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces byte-match the skeleton.`);
 }
 
 // The additive runtime editions render FROM the surfaces above, so until this ran the mandated
@@ -459,12 +539,17 @@ function cmdWrite(ir) {
     const rendered = renderSurface(row, ir);
     fs.writeFileSync(abs, rendered);
   }
+  for (const row of MULTI_SURFACES) {
+    const abs = path.join(REPO, row.path);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, renderMultiSurface(row, ir));
+  }
   for (const row of RUNTIME_RECOVERY_SURFACES) {
     const abs = path.join(REPO, row.path);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, renderRuntimeRecoverySurface(row));
   }
-  console.log(`generate-routing-surfaces --write: rendered ${GENERATED_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces.`);
+  console.log(`generate-routing-surfaces --write: rendered ${GENERATED_SURFACES.length + MULTI_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces.`);
   if (refreshPresentEditionTrees() > 0) process.exit(1);
 }
 
@@ -486,10 +571,14 @@ if (require.main === module) main();
 
 module.exports = {
   GENERATED_SURFACES,
+  MULTI_SURFACES,
+  MULTI_CASE_SPLICES,
   RUNTIME_RECOVERY_SURFACES,
   RECOVERY_FULL_DISPATCH_RUNTIMES,
   renderCompactRecoveryPrompt,
   renderSkeleton,
+  renderMultiSurface,
+  multiCase,
   condMatches,
   resolveKeyed,
   loadSkeleton,

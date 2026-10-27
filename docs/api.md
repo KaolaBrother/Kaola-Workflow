@@ -197,7 +197,9 @@ step that did not complete. Everything mid-run measures and reports.
 
 ```
 usage: kaola-workflow-forge-resolve.js resolve [--json|--shell] [--installed a,b]
-                                                [--scripts-dir DIR] [--cwd DIR]
+                                                [--scripts-dir DIR]
+                                                [--scripts-dir-github DIR] [--scripts-dir-gitlab DIR]
+                                                [--scripts-dir-gitea DIR] [--cwd DIR]
        kaola-workflow-forge-resolve.js set <github|gitlab|gitea> [--cwd DIR] [--json]
        kaola-workflow-forge-resolve.js unset [--cwd DIR] [--json]
 ```
@@ -240,17 +242,34 @@ resolver assumes all three forges (so T4 does not fire). T1 wins over a differen
 or no `origin`; it is never guessed by substring.
 
 `resolve --shell` emits exactly three single-quoted assignments: `KW_FORGE`, `KAOLA_SCRIPTS`, and
-`CLAIM_JS` (the forge's claim filename under `--scripts-dir`). On a refusal it writes the reason to
-stderr and exits 1 with no stdout. `set` writes T2 and `unset` removes it idempotently; neither
+`CLAIM_JS` (the forge's claim filename). `--scripts-dir` is the fallback directory;
+`--scripts-dir-<forge>` selects the directory for the resolved forge and is what the multi entry
+passes, so the neutral resolver never hardcodes an edition path. On a refusal it writes the reason
+to stderr and exits 1 with no stdout. `set` writes T2 and `unset` removes it idempotently; neither
 touches a tracked file, and no command prints a credential or URL userinfo.
 
 The P1 edition guard calls this module with `installed: [<this edition's forge>]` at claim
 `startup` / `resume` and at every sink entry, before the first `gh` / `glab` / `tea` call. A
 different resolution is a `refuse` envelope with `reason: "forge_mismatch"`; the other resolver
 reasons pass through. A non-git root passes the guard because there is no repo-scoped declaration or
-origin to contradict the only installed edition. Choosing an installed set at a multi-forge entry,
-and rendering that entry, are P2/P3; tea login binding remains P4 and gated on the unmeasured
-two-login behavior.
+origin to contradict the only installed edition. The P2 Claude multi entry probes every installed
+forge, calls `resolve --shell --installed <csv>` with all three script directories, and evals the
+result; tea login binding remains P4 and gated on the unmeasured two-login behavior.
+
+### Multi-forge command entries (#1123 P2)
+
+`install.sh --forge=github,gitea` installs each forge's support directory, then the three committed
+`templates/routing/multi/*.md` entries over `~/.claude/commands/`. The generator renders `multi` as
+a render MODE (`forge: 'multi'`, never a member of `FORGES`): command splices are composed into
+`case "$KW_FORGE"` blocks from the existing per-forge values, prose is authored neutral, and the
+resolver slot carries the three probes plus one `resolve --shell`. `--check` polices the three
+committed multi surfaces alongside the 18 per-forge surfaces and the six recovery prompts.
+
+The compact hook is one managed entry (`kaola-workflow:compact-context`) pinned to the first
+installed forge; `uninstall.sh --forge=<one>` removes only that support directory and repoints the
+hook at a survivor. If the multi entry was present, it stays (so a repo resolving the removed forge
+gets `forge_not_installed`); removing a forge that was never installed leaves a single-forge install single. All
+other runtimes keep the first forge until the P3 union install.
 
 ## Claim API — `kaola-workflow-claim.js`
 

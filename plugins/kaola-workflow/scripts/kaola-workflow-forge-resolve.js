@@ -452,7 +452,11 @@ function shellQuote(value) {
 }
 
 function shellAssignments(result, scriptsDir) {
-  const dir = path.resolve(scriptsDir || __dirname);
+  let configured = scriptsDir;
+  if (configured && typeof configured === 'object') {
+    configured = configured[result.forge] || configured.default;
+  }
+  const dir = path.resolve(configured || __dirname);
   return [
     'KW_FORGE=' + shellQuote(result.forge),
     'KAOLA_SCRIPTS=' + shellQuote(dir),
@@ -484,12 +488,16 @@ function unsetForge(options) {
   return { ok: false, reason: 'forge_marker_unset_failed', detail: 'git config --local --unset failed' };
 }
 
-const USAGE = 'usage: kaola-workflow-forge-resolve.js resolve [--json|--shell] [--installed a,b] [--scripts-dir DIR] [--cwd DIR]\n'
+const USAGE = 'usage: kaola-workflow-forge-resolve.js resolve [--json|--shell] [--installed a,b]\n'
+  + '                                                [--scripts-dir DIR]\n'
+  + '                                                [--scripts-dir-github DIR --scripts-dir-gitlab DIR --scripts-dir-gitea DIR]\n'
+  + '                                                [--cwd DIR]\n'
   + '       kaola-workflow-forge-resolve.js set <github|gitlab|gitea> [--cwd DIR] [--json]\n'
   + '       kaola-workflow-forge-resolve.js unset [--cwd DIR] [--json]\n';
 
 function parseCli(argv) {
-  const out = { mode: null, json: false, shell: false, installed: null, scriptsDir: null, cwd: null, forge: null };
+  const out = { mode: null, json: false, shell: false, installed: null, scriptsDir: null,
+    scriptsDirGithub: null, scriptsDirGitlab: null, scriptsDirGitea: null, cwd: null, forge: null };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -499,6 +507,12 @@ function parseCli(argv) {
     else if (arg.startsWith('--installed=')) out.installed = arg.slice('--installed='.length);
     else if (arg === '--scripts-dir') out.scriptsDir = argv[++i];
     else if (arg.startsWith('--scripts-dir=')) out.scriptsDir = arg.slice('--scripts-dir='.length);
+    else if (arg === '--scripts-dir-github') out.scriptsDirGithub = argv[++i];
+    else if (arg.startsWith('--scripts-dir-github=')) out.scriptsDirGithub = arg.slice('--scripts-dir-github='.length);
+    else if (arg === '--scripts-dir-gitlab') out.scriptsDirGitlab = argv[++i];
+    else if (arg.startsWith('--scripts-dir-gitlab=')) out.scriptsDirGitlab = arg.slice('--scripts-dir-gitlab='.length);
+    else if (arg === '--scripts-dir-gitea') out.scriptsDirGitea = argv[++i];
+    else if (arg.startsWith('--scripts-dir-gitea=')) out.scriptsDirGitea = arg.slice('--scripts-dir-gitea='.length);
     else if (arg === '--cwd') out.cwd = argv[++i];
     else if (arg.startsWith('--cwd=')) out.cwd = arg.slice('--cwd='.length);
     else if (arg === '--help' || arg === '-h') out.mode = 'help';
@@ -520,7 +534,12 @@ function main(argv) {
         process.stderr.write('forge-resolve: ' + result.reason + ' — ' + result.detail + '\n');
         return 1;
       }
-      process.stdout.write(shellAssignments(result, cli.scriptsDir) + '\n');
+      process.stdout.write(shellAssignments(result, {
+        github: cli.scriptsDirGithub,
+        gitlab: cli.scriptsDirGitlab,
+        gitea: cli.scriptsDirGitea,
+        default: cli.scriptsDir,
+      }) + '\n');
       return 0;
     }
     process.stdout.write(JSON.stringify(result) + '\n');

@@ -79,6 +79,18 @@ binding stays P4 and remains gated on the unmeasured two-login behavior.
    is still unmeasured. The `tea api` 404 finding above means any future gitea error path must
    inspect the response body/status rather than the exit code.
 
+## Update — P2 (2026-10-27)
+
+P2 implements the Claude multi-forge path on top of this guard. `--forge` accepts a comma list;
+two or more forges install their support directories plus three committed `multi` command entries,
+and one compact hook pinned to the first forge. `multi` is a render mode, not a fourth forge:
+command splices are composed from the existing per-forge values into `case "$KW_FORGE"` blocks, and
+the entry calls `resolve --shell --installed <csv>` with `--scripts-dir-<forge>`. A per-forge
+uninstall keeps the multi entry and repoints the hook, so a repo that resolves the removed forge
+gets `forge_not_installed`. `install-all.sh --check` reports installed vs expected. The measured
+multi increment is +2,630 estimated tokens for Next+Finalize, under the recorded 3,000-token D5 cap.
+P3 (union install for the other runtimes, Codex layout) and P4 (tea login binding) remain open.
+
 ## Consequences
 
 - Existing single-edition behavior is unchanged when there is no contrary signal: a `github.com`

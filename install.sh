@@ -52,7 +52,7 @@ FORGE=github
 MERGE_SETTINGS=1
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea|github,gitea] [--no-settings-merge]"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -67,7 +67,7 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --forge)
       if [[ -z "${2:-}" ]]; then
-        echo "--forge requires github, gitlab, or gitea" >&2
+        echo "--forge requires one or more of github, gitlab, gitea (comma-separated)" >&2
         usage >&2
         exit 2
       fi
@@ -94,6 +94,63 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
+
+# #1123 P2: --forge accepts a comma list. A single forge keeps the historical path below
+# byte-for-byte. Two or more install each forge's support directory, then install the multi
+# command entries; the FIRST forge is re-run last so its compact hook is the one settings entry
+# that survives (the prompt bytes are identical across forges).
+FORGE_LIST="$FORGE"
+if [[ "$FORGE" == *,* ]]; then
+  FORGES=()
+  IFS=',' read -r -a _FORGE_ITEMS <<< "$FORGE"
+  for _item in "${_FORGE_ITEMS[@]}"; do
+    _item="${_item//[[:space:]]/}"
+    [[ -n "$_item" ]] || continue
+    case "$_item" in
+      github|gitlab|gitea) ;;
+      *) echo "Unknown forge: $_item" >&2; usage >&2; exit 2 ;;
+    esac
+    _dup=0
+    if [[ ${#FORGES[@]} -gt 0 ]]; then
+      for _seen in "${FORGES[@]}"; do [[ "$_seen" == "$_item" ]] && _dup=1; done
+    fi
+    [[ "$_dup" -eq 1 ]] || FORGES+=("$_item")
+  done
+  if [[ ${#FORGES[@]} -eq 0 ]]; then
+    echo "--forge requires at least one of github, gitlab, gitea" >&2
+    usage >&2
+    exit 2
+  fi
+  if [[ ${#FORGES[@]} -ge 2 ]]; then
+    _INNER_FLAGS=()
+    [[ "$YES" -eq 1 ]] && _INNER_FLAGS+=(--yes)
+    [[ "$MERGE_SETTINGS" -eq 0 ]] && _INNER_FLAGS+=(--no-settings-merge)
+    for _f in "${FORGES[@]}"; do
+      echo ""
+      echo ">>> [forge] installing $_f (multi-forge set: ${FORGES[*]})"
+      bash "${BASH_SOURCE[0]}" --forge="$_f" ${_INNER_FLAGS[@]+"${_INNER_FLAGS[@]}"}
+    done
+    echo ""
+    echo ">>> [forge] pinning the one compact hook to ${FORGES[0]}"
+    bash "${BASH_SOURCE[0]}" --forge="${FORGES[0]}" ${_INNER_FLAGS[@]+"${_INNER_FLAGS[@]}"}
+    mkdir -p "$COMMANDS_DIR"
+    _multi_installed=0
+    for _m in "$SCRIPT_DIR/templates/routing/multi"/*.md; do
+      [[ -f "$_m" ]] || continue
+      cp "$_m" "$COMMANDS_DIR/$(basename "$_m")"
+      _multi_installed=$((_multi_installed + 1))
+      echo "Installed multi-forge command: $COMMANDS_DIR/$(basename "$_m")"
+    done
+    if [[ "$_multi_installed" -ne 3 ]]; then
+      echo "Install error: expected 3 multi-forge command entries, installed $_multi_installed" >&2
+      exit 1
+    fi
+    echo ""
+    echo "Kaola-Workflow multi-forge install complete: ${FORGES[*]}"
+    exit 0
+  fi
+  FORGE="${FORGES[0]}"
+fi
 
 case "$FORGE" in
   github)

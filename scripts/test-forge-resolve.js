@@ -405,6 +405,31 @@ check('shell output has exactly the three whitelisted assignments and escapes', 
   assert(lines[2].includes('kaola-gitea-workflow-claim.js'), lines[2]);
 });
 
+check('shell output selects the resolved forge per-forge directory', () => {
+  const dir = repo();
+  const result = R.resolveForge({ cwd: dir, home: temp('kw-fr-home-'), installed: ['gitea'] });
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  const shell = R.shellAssignments(result, {
+    github: '/tmp/gh-scripts',
+    gitlab: '/tmp/gl-scripts',
+    gitea: '/tmp/gt-scripts',
+  });
+  const lines = shell.split('\n');
+  assert(lines[1].includes("'/tmp/gt-scripts'"), lines[1]);
+  assert(lines[2].includes('/tmp/gt-scripts/kaola-gitea-workflow-claim.js'), lines[2]);
+});
+
+check('CLI --shell accepts per-forge scripts dirs', () => {
+  const dir = repo({ origin: 'https://github.com/Owner/Repo.git' });
+  const out = runCli(['resolve', '--shell', '--installed', 'github', '--cwd', dir,
+    '--scripts-dir-github', '/tmp/gh-scripts',
+    '--scripts-dir-gitlab', '/tmp/gl-scripts',
+    '--scripts-dir-gitea', '/tmp/gt-scripts']);
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert(out.stdout.includes("KAOLA_SCRIPTS='/tmp/gh-scripts'"), out.stdout);
+  assert(out.stdout.includes("CLAIM_JS='/tmp/gh-scripts/kaola-workflow-claim.js'"), out.stdout);
+});
+
 // --- CLI contract ------------------------------------------------------------
 
 check('CLI resolve exits 0 and emits JSON for a passing repo', () => {

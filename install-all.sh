@@ -119,9 +119,11 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
   11. antigravity Antigravity (install-antigravity.sh)
 
 Options:
-  --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
-                                Threaded to Claude, opencode, Kimi Code, Grok CLI, Cursor, ZCode, Devin, Droid, and DSH. Codex
-                                selects its forge by marketplace plugin entry instead.
+  --forge=github|gitlab|gitea|github,gitea
+                                Forge for every forge-aware runtime (default: github). A comma list
+                                installs Claude's multi-forge entry; other runtimes use the first
+                                forge until the P3 union install. Codex selects its forge by
+                                marketplace plugin entry instead.
   --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default)
   --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
@@ -183,7 +185,7 @@ die_arg() { echo "install-all: $1" >&2; usage >&2; exit 2; }
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --forge=*) FORGE="${1#--forge=}"; shift ;;
-    --forge) [[ -n "${2:-}" ]] || die_arg "--forge requires github, gitlab, or gitea"; FORGE="$2"; shift 2 ;;
+    --forge) [[ -n "${2:-}" ]] || die_arg "--forge requires one or more of github, gitlab, gitea"; FORGE="$2"; shift 2 ;;
     --global) SCOPE="global"; PROJECT_DIR=""; shift ;;
     --project) SCOPE="project"; PROJECT_DIR="$PWD"; shift ;;
     --project=*) SCOPE="project"; PROJECT_DIR="${1#--project=}"; shift ;;
@@ -197,6 +199,26 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
+# #1123 P2: Claude accepts a forge list and installs the multi command entry. Other
+# runtimes do not yet install a union (P3), so they keep the first forge until then.
+FORGE_LIST="$FORGE"
+if [[ "$FORGE" == *,* ]]; then
+  _FORGES=()
+  IFS=',' read -r -a _FORGE_ITEMS <<< "$FORGE"
+  for _item in "${_FORGE_ITEMS[@]}"; do
+    _item="${_item//[[:space:]]/}"
+    [[ -n "$_item" ]] || continue
+    case "$_item" in github|gitlab|gitea) ;; *) die_arg "unknown forge: $_item (github, gitlab, gitea)" ;; esac
+    _dup=0
+    if [[ ${#_FORGES[@]} -gt 0 ]]; then for _seen in "${_FORGES[@]}"; do [[ "$_seen" == "$_item" ]] && _dup=1; done; fi
+    [[ "$_dup" -eq 1 ]] || _FORGES+=("$_item")
+  done
+  [[ ${#_FORGES[@]} -gt 0 ]] || die_arg "--forge requires at least one forge"
+  FORGE="${_FORGES[0]}"
+  if [[ ${#_FORGES[@]} -ge 2 ]]; then
+    echo "install-all: --forge=$FORGE_LIST — Claude gets the multi entry; the other runtimes use '$FORGE' until the P3 union install." >&2
+  fi
+fi
 case "$FORGE" in github|gitlab|gitea) ;; *) die_arg "unknown forge: $FORGE (github, gitlab, gitea)" ;; esac
 
 # Forge-derived Codex plugin manifest. The plugin NAME is read out of it below
@@ -300,6 +322,22 @@ run_one() {
     local verdict note
     IFS=$'\t' read -r verdict note < <(carrier_state "$name")
     echo "    [global-contract] $name: $note"
+    # #1123 P2: report Claude's installed forge set against the requested set. This is a
+    # comparison, not a repair: a mismatch is named in the row so the operator can re-run
+    # the installer with the intended list.
+    if [[ "$name" == "claude" ]]; then
+      local cf cfdir cf_installed=""
+      for cf in github gitlab gitea; do
+        case "$cf" in
+          github) cfdir="$HOME/.claude/kaola-workflow" ;;
+          gitlab) cfdir="$HOME/.claude/kaola-workflow-gitlab" ;;
+          gitea)  cfdir="$HOME/.claude/kaola-workflow-gitea" ;;
+        esac
+        [[ -d "$cfdir" ]] && cf_installed="${cf_installed:+$cf_installed,}$cf"
+      done
+      echo "    [forge] claude: installed=${cf_installed:-none} expected=${FORGE_LIST}"
+      note="${note:+$note; }forge installed=${cf_installed:-none} expected=${FORGE_LIST}"
+    fi
     # #1112: the droid carrier check alone cannot see the Skills — they moved to the
     # shared ~/.agents/skills root with an ownership record and a retired-root sweep.
     # Run the droid installer's own --check so the row grades the Skills Droid loads.
@@ -747,7 +785,7 @@ fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
 # optional flags are appended conditionally, never expanded from an empty array).
-CLAUDE_CMD=(bash "$ROOT/install.sh" --forge="$FORGE")
+CLAUDE_CMD=(bash "$ROOT/install.sh" --forge="$FORGE_LIST")
 [[ "$YES" == "1" ]] && CLAUDE_CMD+=(--yes)
 
 OPENCODE_CMD=(bash "$ROOT/install-opencode.sh" --forge="$FORGE" "${OC_SCOPE[@]}")

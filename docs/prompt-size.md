@@ -31,6 +31,29 @@ injected together on every turn. The global dispatch guidance on Cursor/Grok/Dev
 its global carrier; it is not added again to their command columns. GitLab and Gitea copies are
 excluded. Tokenizer differences and runtime caching require actual usage reports for cost analysis.
 
+## Multi-forge command entries (#1123 P2)
+
+When two or more Claude forges are installed, `install.sh` installs the `multi` command entries
+instead of one forge's render. Measured 2026-10-27 on the P2 candidate (P1 baseline `2fd2f2c6` plus
+the P2 change set), with the same whitespace and tokens = words × 1.5, rounded to the nearest 10:
+
+| Entry | Single words | Multi words | Words added | Single tokens | Multi tokens | Tokens added |
+|---|---:|---:|---:|---:|---:|---:|
+| Next | 1572 | 2119 | +547 | 2360 | 3180 | **+820** |
+| Init | 793 | 816 | +23 | 1190 | 1220 | **+30** |
+| Finalize | 2086 | 3291 | +1205 | 3130 | 4940 | **+1810** |
+| Next + Finalize | 3658 | 5410 | +1752 | 5490 | 8120 | **+2630** |
+
+The multi entry repeats the three-forge resolver block in each self-contained bash step (a shell
+does not keep functions between steps), which is where most of the increment lives. The D5 cap is
+**3,000 estimated tokens for the combined Next + Finalize multi entry**, measured at 2,630 with 370
+tokens of headroom. A future render that exceeds the cap is a design fork, not an invitation to
+raise the number.
+
+Reproduce with the same word counter over `commands/<entry>.md` and
+`templates/routing/multi/<entry>.md` in this checkout; no generator run is needed because both
+sets are committed.
+
 ## Reproduce
 
 Use a disposable independent clone at the baseline revision, because rendering writes generated files.

@@ -80,7 +80,19 @@ The installer deploys commands, support scripts, and the compact-recovery hook. 
 subagent profile and retires the ones earlier releases installed (see
 [Upgrading from earlier releases](#upgrading-from-releases-that-installed-kaola-role-profiles)).
 Restart Claude Code after install or update. Choose `--forge=gitlab` or `--forge=gitea` for those
-editions.
+editions, or pass a comma list to install more than one edition at once:
+
+```bash
+./install.sh --yes --forge=github,gitea
+```
+
+A comma list installs each edition's support directory, the multi command entry (one file per
+topic that dispatches on the repository's resolved forge), and exactly one compact-recovery hook
+pinned to the first installed forge. Repos keep working without a reinstall: a `github.com` repo
+resolves the GitHub scripts and a repo whose mapped host resolves Gitea resolves the Gitea scripts.
+`uninstall.sh --forge=gitea` removes only that support directory; the multi entry stays and a repo
+that still resolves Gitea reports `forge_not_installed` instead of running the wrong edition. The
+single-forge install (`--forge=github`) is byte-identical to earlier releases.
 
 ### Codex
 
@@ -199,7 +211,12 @@ contract. See [Cursor edition](cursor-edition.md) for the measured CLI/App/Cloud
 
 GitHub is the default. GitLab and Gitea select forge-shaped claim, issue, PR/MR, and closure scripts;
 they do not change role behavior. Pass the same forge to every forge-aware installer. Codex selects
-the forge through one of its three plugin names.
+the forge through one of its three plugin names. Claude accepts a comma list
+(`--forge=github,gitea`) and installs the multi entry described above; the other runtimes keep the
+first forge until the P3 union install, and `install-all.sh` says so when given a list.
+
+`install-all.sh --check` reports Claude's installed forge set beside the requested one:
+`[forge] claude: installed=github,gitea expected=github,gitea`.
 
 Authentication and repository permissions remain owned by the native forge tooling. Installation
 does not create credentials or authorize destructive repository operations.

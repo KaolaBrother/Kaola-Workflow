@@ -24,6 +24,21 @@
   P4 tea login binding are not implemented; P4 remains gated on the unmeasured two-login behavior.
   No release, version bump, or install is implied.
 
+- **Claude Code can install GitHub and Gitea side by side (#1123 P2).** `install.sh --forge=` now
+  accepts a comma list. With two or more forges it installs each support directory, replaces the
+  three command entries with the `multi` render from `generate-routing-surfaces.js`, and keeps one
+  compact-recovery hook pinned to the first installed forge. The `multi` mode is not a fourth
+  forge: command splices are composed into `case "$KW_FORGE"` blocks from the existing per-forge
+  values, prose is neutral, and the resolver slot probes each installed forge then evals one
+  `resolve --shell` with `--scripts-dir-<forge>`. `generate-routing-surfaces --check` polices the
+  three committed multi surfaces (27 total) alongside the per-forge registry. `uninstall.sh --forge=<one>` removes only that support directory, repoints the hook at a survivor, and keeps
+  the multi entry so a repo that still resolves the removed forge gets `forge_not_installed`;
+  `install-all.sh --check` reports `[forge] claude: installed=… expected=…`. Single-forge
+  `--forge=github` output is byte-identical to the previous render. The measured multi increment is
+  +820 tokens for Next, +1,810 for Finalize, +30 for Init: **+2,630 combined Next+Finalize**, under
+  the recorded **3,000-token D5 cap**. Other runtimes keep the first forge until the P3 union
+  install; P4 remains gated. No release, version bump, or install is implied.
+
 ## [12.6.0] - 2026-10-26
 
 ### Added

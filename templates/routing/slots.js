@@ -107,4 +107,86 @@ const SPLICES = {
   "fz-closure-audit-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped"},
 };
 
+// ---------------------------------------------------------------------------
+// #1123 P2 — `multi` values. `multi` is a render MODE, not a forge. Prose is authored
+// neutral here; command splices are composed into `case "$KW_FORGE"` by the renderer
+// from the SAME per-forge values (generate-routing-surfaces.js MULTI_CASE_SPLICES).
+// ---------------------------------------------------------------------------
+
+// Compose the three existing probes side by side, then let the neutral resolver pick
+// one and emit KAOLA_SCRIPTS/CLAIM_JS for the RESOLVED forge. The per-forge dirs are
+// passed explicitly because the resolver never hardcodes an install path.
+function buildMultiResolver(commandValue) {
+  const lines = [];
+  for (const forge of ['github', 'gitlab', 'gitea']) {
+    const value = String(commandValue[forge] || '');
+    const fn = value.split('\n')[0];
+    if (fn.indexOf('kaola_script(){') !== 0) {
+      throw new Error('multi resolver: unexpected ' + forge + ' resolver shape');
+    }
+    lines.push(fn.replace('kaola_script(){', 'kaola_script_' + forge + '(){'));
+  }
+  lines.push(
+    '',
+    '_claim_github="$(kaola_script_github kaola-workflow-claim.js)" || _claim_github=""',
+    '_claim_gitlab="$(kaola_script_gitlab kaola-gitlab-workflow-claim.js)" || _claim_gitlab=""',
+    '_claim_gitea="$(kaola_script_gitea kaola-gitea-workflow-claim.js)" || _claim_gitea=""',
+    '_dir_github=""; [ -n "$_claim_github" ] && _dir_github="$(dirname "$_claim_github")"',
+    '_dir_gitlab=""; [ -n "$_claim_gitlab" ] && _dir_gitlab="$(dirname "$_claim_gitlab")"',
+    '_dir_gitea=""; [ -n "$_claim_gitea" ] && _dir_gitea="$(dirname "$_claim_gitea")"',
+    '_installed=""',
+    '[ -n "$_claim_github" ] && _installed="github"',
+    '[ -n "$_claim_gitlab" ] && _installed="${_installed:+$_installed,}gitlab"',
+    '[ -n "$_claim_gitea" ] && _installed="${_installed:+$_installed,}gitea"',
+    '',
+    '_forge_resolver=""',
+    'for _d in "$_dir_github" "$_dir_gitlab" "$_dir_gitea"; do',
+    '  [ -n "$_d" ] && [ -f "$_d/kaola-workflow-forge-resolve.js" ] && { _forge_resolver="$_d/kaola-workflow-forge-resolve.js"; break; }',
+    'done',
+    'if [ -z "$_installed" ] || [ -z "$_forge_resolver" ]; then',
+    '  echo "Kaola-Workflow: no installed forge scripts found" >&2',
+    '  CLAIM_JS=""',
+    'elif _resolved="$(node "$_forge_resolver" resolve --shell --installed "$_installed" \\',
+    '    --scripts-dir-github "$_dir_github" --scripts-dir-gitlab "$_dir_gitlab" --scripts-dir-gitea "$_dir_gitea")"; then',
+    '  eval "$_resolved"',
+    'else',
+    '  echo "Kaola-Workflow: forge resolution refused" >&2',
+    '  CLAIM_JS=""',
+    'fi');
+  return lines.join('\n');
+}
+
+SLOTS['nx-scripts-resolver'].command.multi = buildMultiResolver(SLOTS['nx-scripts-resolver'].command);
+SLOTS['fz-scripts-resolver'].command.multi = buildMultiResolver(SLOTS['fz-scripts-resolver'].command);
+SLOTS['in-frontmatter'].command.multi = [
+  '---',
+  'description: Initialize a project for Kaola-Workflow with AGENTS.md guidance, docs structure, and Git forge issue conventions.',
+  'argument-hint: (optional project context)',
+  '---',
+].join('\n');
+
+SPLICES['nx-issue-fetch'].multi =
+  'If a GitHub, GitLab, or Gitea remote and its authenticated forge CLI (`gh`, `glab`, or `tea`) are available, read each shortlisted issue\'s body and comments:';
+SPLICES['in-cmd-001'].multi =
+  'If this is not a Git repository, ask before running `git init`. If it is a Git repository without a remote, record that forge issue sync is pending until a remote exists.';
+SPLICES['in-cmd-002'].multi =
+  'If a forge CLI is available and a repository can be inferred from `origin`, inspect open issues:';
+SPLICES['in-cmd-004'].multi =
+  'If there is no matching remote, or if the forge CLI is unavailable or unauthenticated, skip issue fetching immediately and note that forge issue sync is pending. Do not spend time retrying forge calls during init.';
+SPLICES['fz-issue-closure'].multi =
+  'If the project links issues, every claimed issue closes on the merge and PR/MR sinks alike,';
+
+// Multi-only: the commands inside the shared `pr)` arm. The arm and the
+// `case "$KW_FORGE"` wrapper live in finalize.skeleton.md (REGION:multi), so this
+// splice stays within the variant-line budget and the renderer can compose it.
+SPLICES['fz-sink-pr-run'] = {
+  github: [
+    'SINK_KEEP_OPEN_PR_FLAG=""',
+    'if [ "$SINK_KEEP_OPEN_PR" = explicit_singleton ]; then SINK_KEEP_OPEN_PR_FLAG="--keep-open-pr explicit_singleton"; fi',
+    'node "$KAOLA_SCRIPTS/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_PR_FLAG --project {project}',
+  ].join('\n'),
+  gitlab: 'node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}',
+  gitea: 'node "$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}',
+};
+
 module.exports = { SLOTS, SPLICES, GLOBAL_WORKFLOW_CONTRACT_SOURCE };

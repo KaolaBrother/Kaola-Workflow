@@ -155,6 +155,7 @@ The archive still fails loudly if it would lose a file. Every run file must land
 
 ```bash
 <!-- SPLICE:fz-keepopen-comment -->
+<!-- REGION:github,gitlab,gitea — a single-forge install invokes its own edition directly -->
 case "$SINK_KIND" in
 <!-- SPLICE:fz-sink-pr-case -->
     ;;
@@ -162,6 +163,17 @@ case "$SINK_KIND" in
 <!-- SPLICE:fz-sink-merge-run -->
     ;;
 esac
+<!-- /REGION -->
+<!-- REGION:multi — one install carries all three editions; the resolved forge picks the command -->
+case "$SINK_KIND" in
+  pr)
+<!-- SPLICE:fz-sink-pr-run -->
+    ;;
+  merge|*)
+<!-- SPLICE:fz-sink-merge-run -->
+    ;;
+esac
+<!-- /REGION -->
 ```
 
 <!-- PIN: sink-reports-orchestrator-owns -->

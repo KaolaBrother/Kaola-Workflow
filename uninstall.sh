@@ -92,6 +92,15 @@ COMMANDS=(
   "$HOME/.claude/commands/workflow-init.md"
 )
 
+# Whether the entry being replaced was the multi render decides what a surviving set
+# gets: a multi install stays multi (so a foreign repo gets forge_not_installed from the
+# resolver), while a single install stays single when the removed forge was absent.
+WAS_MULTI=0
+if [[ -f "$HOME/.claude/commands/workflow-next.md" && -f "$SCRIPT_DIR/templates/routing/multi/workflow-next.md" ]] \
+   && cmp -s "$HOME/.claude/commands/workflow-next.md" "$SCRIPT_DIR/templates/routing/multi/workflow-next.md"; then
+  WAS_MULTI=1
+fi
+
 for dest in "${COMMANDS[@]}"; do
   if [[ -f "$dest" ]]; then
     rm "$dest"
@@ -99,6 +108,46 @@ for dest in "${COMMANDS[@]}"; do
     removed=$((removed + 1))
   fi
 done
+
+# #1123 P2: a per-forge uninstall must not destroy the entry the REMAINING forges still
+# need. Work out what survives before removing the target support directory, then restore
+# the right command set (single-forge render for one survivor, multi render for two).
+TARGET_FORGES=()
+case "$FORGE" in
+  all) TARGET_FORGES=(github gitlab gitea) ;;
+  *)   TARGET_FORGES=("$FORGE") ;;
+esac
+REMAINING_FORGES=()
+for _f in github gitlab gitea; do
+  _target=0
+  for _t in "${TARGET_FORGES[@]}"; do [[ "$_f" == "$_t" ]] && _target=1; done
+  [[ "$_target" -eq 1 ]] && continue
+  case "$_f" in
+    github) _dir="$HOME/.claude/kaola-workflow" ;;
+    gitlab) _dir="$HOME/.claude/kaola-workflow-gitlab" ;;
+    gitea)  _dir="$HOME/.claude/kaola-workflow-gitea" ;;
+  esac
+  [[ -d "$_dir" ]] && REMAINING_FORGES+=("$_f")
+done
+
+if [[ ${#REMAINING_FORGES[@]} -gt 0 ]]; then
+  if [[ "$WAS_MULTI" -eq 1 || ${#REMAINING_FORGES[@]} -ge 2 ]]; then
+    _commands_src="$SCRIPT_DIR/templates/routing/multi"
+  else
+    case "${REMAINING_FORGES[0]}" in
+      github) _commands_src="$SCRIPT_DIR/commands" ;;
+      gitlab) _commands_src="$SCRIPT_DIR/plugins/kaola-workflow-gitlab/commands" ;;
+      gitea)  _commands_src="$SCRIPT_DIR/plugins/kaola-workflow-gitea/commands" ;;
+    esac
+  fi
+  if [[ -d "$_commands_src" ]]; then
+    for _cmd in "$_commands_src"/*.md; do
+      [[ -f "$_cmd" ]] || continue
+      cp "$_cmd" "$HOME/.claude/commands/$(basename "$_cmd")"
+      echo "Restored remaining-forge command: $HOME/.claude/commands/$(basename "$_cmd")"
+    done
+  fi
+fi
 
 remove_dir() {
   local dir="$1"
@@ -128,11 +177,23 @@ fi
 # (id prefix "kaola-workflow:" or command path containing "kaola-workflow") so
 # we only touch entries we own.
 SETTINGS_FILE="$HOME/.claude/settings.json"
+# #1123 P2: one compact hook survives a per-forge uninstall, repointed at the first
+# surviving support directory. With no survivor it is removed like any managed entry.
+KEEP_HOOK_DIR=""
+if [[ ${#REMAINING_FORGES[@]} -gt 0 ]]; then
+  case "${REMAINING_FORGES[0]}" in
+    github) KEEP_HOOK_DIR="$HOME/.claude/kaola-workflow" ;;
+    gitlab) KEEP_HOOK_DIR="$HOME/.claude/kaola-workflow-gitlab" ;;
+    gitea)  KEEP_HOOK_DIR="$HOME/.claude/kaola-workflow-gitea" ;;
+  esac
+  [[ -f "$KEEP_HOOK_DIR/hooks/kaola-workflow-compact-recovery.md" ]] || KEEP_HOOK_DIR=""
+fi
 if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
   SETTINGS_BACKUP_DIR="$HOME/.claude/backups"
-  if python3 - "$SETTINGS_FILE" "$SETTINGS_BACKUP_DIR" <<'PY'; then
+  if python3 - "$SETTINGS_FILE" "$SETTINGS_BACKUP_DIR" "$KEEP_HOOK_DIR" <<'PY'; then
 import json, os, sys, time
 settings_path, backup_dir = sys.argv[1], sys.argv[2]
+keep_hook_dir = sys.argv[3] if len(sys.argv) > 3 else ""
 
 try:
     with open(settings_path) as f:
@@ -163,16 +224,33 @@ def is_managed_subagent_statusline(entry):
 changed = False
 hooks = settings.get("hooks")
 if isinstance(hooks, dict):
-    for event, entries in list(hooks.items()):
-        if not isinstance(entries, list):
-            continue
-        cleaned = [e for e in entries if not is_managed(e)]
-        if len(cleaned) != len(entries):
-            changed = True
-            if cleaned:
-                hooks[event] = cleaned
-            else:
-                del hooks[event]
+    if keep_hook_dir:
+        # One forge survives: keep the managed compact entry, repoint it at the survivor.
+        compact_path = os.path.join(keep_hook_dir, "hooks", "kaola-workflow-compact-recovery.md")
+        for event, entries in hooks.items():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not is_managed(entry):
+                    continue
+                for inner in entry.get("hooks", []) or []:
+                    cmd = inner.get("command", "") if isinstance(inner, dict) else ""
+                    if isinstance(cmd, str) and "kaola-workflow-compact-recovery.md" in cmd:
+                        replacement = 'cat "' + compact_path + '"'
+                        if cmd != replacement:
+                            inner["command"] = replacement
+                            changed = True
+    else:
+        for event, entries in list(hooks.items()):
+            if not isinstance(entries, list):
+                continue
+            cleaned = [e for e in entries if not is_managed(e)]
+            if len(cleaned) != len(entries):
+                changed = True
+                if cleaned:
+                    hooks[event] = cleaned
+                else:
+                    del hooks[event]
 
     if not hooks:
         settings.pop("hooks", None)
@@ -190,7 +268,10 @@ if changed:
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
         f.write("\n")
-    print(f"Removed Kaola-Workflow settings entries from {settings_path}")
+    if keep_hook_dir:
+        print(f"Kept the Kaola-Workflow compact hook, repointed to {keep_hook_dir}")
+    else:
+        print(f"Removed Kaola-Workflow settings entries from {settings_path}")
     print(f"Backup: {backup_path}", file=sys.stderr)
 PY
     :
