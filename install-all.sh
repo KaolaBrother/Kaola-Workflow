@@ -299,7 +299,11 @@ carrier_state() {
     local active
     active="$(tr -d '[:space:]' < "$HOME/.hermes/active_profile")"
     if [[ -n "$active" && "$active" != "default" ]]; then
-      printf 'FAIL\tsticky profile %s is active but HERMES_HOME is unset; set HERMES_HOME explicitly\n' "$active"
+      if command -v hermes >/dev/null 2>&1; then
+        printf 'FAIL\tsticky profile %s is active but HERMES_HOME is unset; set HERMES_HOME explicitly\n' "$active"
+      else
+        printf 'ADVISORY\tsticky profile %s is active but hermes is not on PATH; absent-runtime semantics, not graded against the default home\n' "$active"
+      fi
       return 0
     fi
   fi
@@ -928,8 +932,8 @@ run_one dsh      "${DSH_CMD[@]}"
 run_one antigravity "${AGY_CMD[@]}"
 if [[ "$CHECK" != "1" ]] && ! is_skipped hermes && ! hermes_identity_ready; then
   echo ""
-  echo ">>> [hermes] SKIPPED (SOUL.md identity slot missing/empty; run hermes once first)"
-  R_STATUS+=("SKIP"); R_CODE+=("-"); R_NOTE+=("identity slot missing/empty; run hermes once or create SOUL.md")
+  echo ">>> [hermes] SKIPPED (SOUL.md identity slot missing/empty; if missing run hermes once; if empty delete it or write an identity)"
+  R_STATUS+=("SKIP"); R_CODE+=("-"); R_NOTE+=("identity slot missing/empty; missing: run hermes once; empty: delete it or write an identity")
 else
   run_one hermes   "${HERMES_CMD[@]}"
 fi

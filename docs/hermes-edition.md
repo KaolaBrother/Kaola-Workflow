@@ -109,9 +109,11 @@ The issue #1123 P3 union-scripts + multi-entry layout is therefore not used here
 
 - **SOUL.md is required before install.** The installer refuses a missing, empty, or whitespace-only
   `SOUL.md`; it never creates or seeds the identity slot. Hermes seeds its own default identity only
-  while the file is missing or a known legacy template. Run `hermes` once (or write an owner
-  identity), then rerun the installer. This prevents KW from replacing the default persona or
-  minting an identity marker for a mistyped/new profile.
+  while the file is missing or a known legacy template; an existing empty file does not
+  trigger seeding. If `SOUL.md` is missing, run `hermes` once so Hermes seeds its default
+  identity. If it exists but is empty/whitespace-only, delete it (then run `hermes` once) or
+  write an owner identity. Then rerun the installer. This prevents KW from replacing the
+  default persona or minting an identity marker for a mistyped/new profile.
 - **Owner edits and uninstall.** A changed managed region is refused. Uninstall now exits non-zero
   when the carrier is left in place; it does not report success over a refused owner conflict. The
   installer writes the carrier last by design, so a conflict discovered at that step means skills and

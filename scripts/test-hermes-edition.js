@@ -42,6 +42,10 @@ for (const id of hermes.evidence) {
   assert((source || adapters.evidence[id].locator.includes('/Kaola-Workflow/issues/1124'))
     && adapters.evidence[id].observed_at.startsWith('2026-10-28'),
     'Hermes evidence ' + id + ' is anchored to its source/#1124 on 2026-10-28');
+  if (source) {
+    assert(adapters.evidence[id].locator.includes('bf0203a794a0'),
+      'Hermes source observation identifies upstream commit bf0203a794a0');
+  }
 }
 assert(hermes.capabilities.instruction_loading === 'direct',
   'Hermes instruction_loading is direct (P0 M1)');
@@ -400,6 +404,11 @@ for (const state of ['missing', 'empty', 'whitespace']) {
     assert.notStrictEqual(r.status, 0, 'B1 ' + state + ': install is refused');
     assert(/identity slot|SOUL\.md/i.test(r.stderr + r.stdout),
       'B1 ' + state + ': refusal names the identity slot: ' + r.stderr + r.stdout);
+    if (state !== 'missing') {
+      assert(/delete it|delete .*SOUL\.md/i.test(r.stderr + r.stdout)
+        && !/let Hermes seed/i.test(r.stderr + r.stdout),
+        'B1 ' + state + ': guidance says delete the empty file or write identity (Hermes does not reseed it)');
+    }
     if (state === 'missing') {
       assert(!fs.existsSync(carrier), 'B1 missing: installer did not create SOUL.md');
     } else {
@@ -488,7 +497,8 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
       '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
       { cwd: REPO, env, encoding: 'utf8', timeout: 180000 });
     assert.strictEqual(r.status, 0, 'B1 install-all: wrapper stays green: ' + r.stdout + r.stderr);
-    assert(/\[hermes\] SKIPPED/.test(r.stdout) && /identity slot missing\/empty/.test(r.stdout),
+    assert(/\[hermes\] SKIPPED/.test(r.stdout) && /identity slot missing\/empty/.test(r.stdout)
+      && /if empty delete it or write an identity/.test(r.stdout),
       'B1 install-all: Hermes is skipped with the identity-slot reason: ' + r.stdout);
     assert(!fs.existsSync(path.join(home, '.hermes', 'SOUL.md')),
       'B1 install-all: no SOUL.md is created');
@@ -512,6 +522,22 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
     assert.notStrictEqual(r.status, 0, 'm10: sticky-profile check is not green');
     assert(/sticky profile .*active but HERMES_HOME is unset/.test(r.stdout + r.stderr),
       'm10: --check names the sticky-profile refusal: ' + r.stdout + r.stderr);
+
+    // n4: when hermes is not on PATH, keep absent-runtime semantics (PLAN/advisory),
+    // not a sticky-profile FAIL against the default home.
+    const noHermesPath = path.dirname(process.execPath) + path.delimiter + '/usr/bin' + path.delimiter + '/bin';
+    const absentEnv = { ...process.env, HOME: home, PATH: noHermesPath };
+    delete absentEnv.HERMES_HOME;
+    // spawn-class: cli-contract
+    const absent = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--check',
+      '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
+      { cwd: REPO, env: absentEnv, encoding: 'utf8', timeout: 180000 });
+    assert.strictEqual(absent.status, 0,
+      'n4: absent hermes keeps --check green: ' + absent.stdout + absent.stderr);
+    assert(/absent-runtime semantics/.test(absent.stdout + absent.stderr),
+      'n4: absent hermes reports advisory semantics: ' + absent.stdout + absent.stderr);
+    assert(/hermes\s+PLAN/.test(absent.stdout) && !/hermes\s+FAIL/.test(absent.stdout),
+      'n4: absent hermes is PLAN, not FAIL');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

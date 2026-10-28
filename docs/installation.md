@@ -185,8 +185,9 @@ Each additive installer accepts a forge and non-interactive mode; every edition 
 ```
 
 Hermes owns its `SOUL.md` identity slot. The installer refuses a missing, empty, or
-whitespace-only file instead of creating it; run `hermes` once (or write an owner identity) before
-installing the Kaola-Workflow region.
+whitespace-only file instead of creating it. If `SOUL.md` is missing, run `hermes` once so it
+seeds the default identity; if it is empty/whitespace-only, delete it (then run `hermes` once) or
+write an owner identity. Then install the Kaola-Workflow region.
 
 For project scope, use `--target /absolute/repository/path` (Devin, Droid, and DSH use
 `--project[=DIR]`). Cursor intentionally requires explicit

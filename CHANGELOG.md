@@ -18,8 +18,10 @@
   skill body being summarized away (recovery is re-invocation). ACP-driven runs remain P3; this
   edition ships no ACP client, adapter, plugin, hook, role, or model binding. The claim USAGE now
   names `hermes`, and the GitLab/Gitea ports backfill the missing `antigravity` name. The installer
-  refuses a missing, empty, or whitespace-only `SOUL.md` instead of creating the Hermes identity slot
-  (Hermes seeds its own default identity); `install-all` skips Hermes in that case.
+  refuses a missing, empty, or whitespace-only `SOUL.md` instead of creating the Hermes identity slot.
+  A missing file can be seeded by running `hermes` once; an existing empty/whitespace-only file must be
+  deleted (then run `hermes` once) or filled with an owner identity, because Hermes does not reseed an
+  existing file. `install-all` skips Hermes in that case.
 
 - **Per-repo forge resolution and the edition guard (#1123 P1).** A new byte-identical module,
   `scripts/kaola-workflow-forge-resolve.js`, resolves one repository through T1 tracked

@@ -67,8 +67,9 @@ owner to trust the repository in Hermes' skills.trusted_project_dirs, and this
 installer never writes the owner's config. --project/--target is refused.
 
 Hermes owns its identity slot: SOUL.md must already exist and have non-whitespace
-content. If it is absent or empty, run `hermes` once (or write your identity), then
-rerun this installer. Kaola-Workflow never creates or seeds SOUL.md.
+content. If it is absent, run `hermes` once so Hermes seeds its default identity; if it
+exists but is empty/whitespace-only, delete it (then run `hermes` once) or write an owner
+identity. Kaola-Workflow never creates or seeds SOUL.md.
 
 Uninstall removes ONLY Kaola-deployed artifacts: the deployed skills (by source-tree
 directory name — never a blind rm of a dir), the support scripts (by manifest name),
@@ -173,10 +174,11 @@ preflight_symlinks() {
   done
 }
 
-# B1 (#1124 round-1 review): Hermes owns its identity slot. A missing or
-# whitespace-only SOUL.md is what lets Hermes seed its own default identity on the
-# next run; creating it here would replace that identity and could mint a phantom
-# live profile. The installer refuses instead of creating the file.
+# B1 (#1124 round-1 review): Hermes owns its identity slot. A missing SOUL.md is
+# what lets Hermes seed its own default identity on the next run; an existing empty
+# file makes Hermes fall back but never reseeds it. Creating or leaving a KW-written
+# file here could replace that identity and mint a phantom live profile. The
+# installer refuses instead of creating the file.
 preflight_identity() {
   local carrier="$HOME_ROOT/SOUL.md"
   if [[ ! -e "$carrier" ]]; then
@@ -188,7 +190,7 @@ preflight_identity() {
     exit 2
   fi
   if ! grep -q '[^[:space:]]' "$carrier"; then
-    echo "Install error: $carrier is empty. Hermes owns this identity slot; let Hermes seed its default identity (or write an owner identity) before installing the Kaola-Workflow region. Kaola-Workflow does not create SOUL.md." >&2
+    echo "Install error: $carrier is empty. Hermes does not reseed an existing empty SOUL.md; delete it (then run \`hermes\` once to seed the default identity) or write an owner identity, then rerun this installer. Kaola-Workflow does not create SOUL.md." >&2
     exit 2
   fi
 }

@@ -311,7 +311,7 @@
     },
     "hermes_source_v0225": {
       "kind": "official_source",
-      "locator": "~/.hermes/hermes-agent (v0.22.5): agent/prompt_builder.py:140-147,1618-1633,1748-1771; hermes_cli/config_defaults.py:1760; agent/shell_hooks.py; agent/system_prompt.py:556; hermes_cli/config.py:526-538; hermes_cli/service_manager.py:282-288",
+      "locator": "~/.hermes/hermes-agent @ bf0203a794a0 (Hermes v0.22.5): agent/prompt_builder.py:140-147,1618-1633,1748-1771; hermes_cli/config_defaults.py:1760; agent/shell_hooks.py; agent/system_prompt.py:556; hermes_cli/config.py:526-538; hermes_cli/service_manager.py:282-288",
       "observed_at": "2026-10-28T00:00:00Z",
       "version_floor": "0.22.5",
       "claim": "Source observation (not a live probe): prompt_builder.py implements one project-context type, first found (`.hermes.md`/`HERMES.md` walking up to the git root, then the AGENTS.md chain, then CLAUDE.md only when no AGENTS.md exists, then .cursorrules), with SOUL.md independent; config_defaults.py defines `hooks: {}` and shell_hooks.py/plugin hooks are the host hook surface; system_prompt.py replaces DEFAULT_AGENT_IDENTITY when SOUL.md is non-empty; config.py seeds DEFAULT_SOUL_MD only when SOUL.md is missing or a known legacy template; service_manager.py treats SOUL.md as a live-profile identity marker; the bundled/optional v0.22.5 skill tree contains none of workflow-init, workflow-next, or kaola-workflow-finalize."
