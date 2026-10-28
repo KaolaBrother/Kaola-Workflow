@@ -6,9 +6,9 @@ loaded and validated by `scripts/runtime-adapter-facts.js`. The authority record
 loading, hook scope, compact-recovery carriers, and install scope. Rendered delegation guidance
 does not name type catalogs, models, nesting, or concurrency counts (#1111).
 
-The capability map below is a dated measurement through 2026-09-19. It was not re-probed on
-2026-09-28. It is evidence, not an instruction to call those tools or types. The live host schema
-wins.
+The capability map below is a dated measurement through 2026-09-19, with Hermes measured on
+2026-10-28 by #1124 P0. It is evidence, not an instruction to call those tools or types. The live
+host schema wins.
 
 ## One repository authority
 
@@ -26,7 +26,8 @@ providers or telemetry disabled, which do not fetch the feature flag; the first 
 install or upgrade; or the `claude-md` / `managed-only` project-instructions setting) may keep an
 owner-chosen `CLAUDE.md` containing `@AGENTS.md` as a stated exception. The workflow states that
 environment requirement and does not provision or maintain the file. Codex, opencode, Kimi Code,
-Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
+Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support. Hermes also loads
+`AGENTS.md` directly, but a present `.hermes.md`/`HERMES.md` shadows it (measured, #1124 M1).
 
 ## Capability map (measurement through 2026-09-19)
 
@@ -45,6 +46,7 @@ observed then. They are not copied into Next, Finalization, or compact recovery.
 | Devin CLI | Live schema: `run_subagent` / `read_subagent` with the session-start profile catalog, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and user-owned profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; the host router owns the model |
 | Droid CLI | Live `Task` schema | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | A spawned route resolves its model from the invoking route and the parent's complexity routing and inherits the parent when unpinned; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
 | DSH | Live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background, depth, and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
+| Hermes Agent | Live `delegate_task` schema: `action` (`spawn` default, `list`, `steer`, `stop`), `message`, `subagent_id`, `tasks` (required) | `tasks` spawns up to 10 parallel children; `list`/`steer`/`stop` control running children | Child model and effort follow Hermes/provider config and the user; this edition installs no profile, role, or model binding. Host hook scope is user-only (`config.yaml`), and KW installs no hook. ACP terminal tool calls did not raise `session/request_permission` in P0; that is a runner/seat policy gap, not a KW approval claim |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. The rows above are the
 measurement through 2026-09-19. Rendered adapter facts do not name those routes, types, or counts
@@ -76,6 +78,7 @@ carriers. Unknown stays `unknown`; a documented path is not a live PASS.
 | ZCode | `${ZCODE_HOME:-~/.zcode}` | no | no | documented |
 | Droid CLI | `${DROID_HOME:-~/.factory}` | no | no | documented; Droid 0.220.0 direct-load probe |
 | DSH | `${DSH_HOME:-~/.dsh}` | no | no | documented; DSH 0.1.5-rc.2 CLI/dump-config probe |
+| Hermes Agent | `${HERMES_HOME:-~/.hermes}` | no | no (global-only, D4) | measured; Hermes 0.22.5 P0 live, 2026-10-28 |
 | Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/commands` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim) | live CLI Task catalog, 2026-08-27 |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live App Task catalog, 2026-08-27 |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live saved-Build Task catalog from a new same-repository parent, 2026-08-28 |
@@ -141,6 +144,7 @@ the native-boundary contract. No runtime needs Kaola context before or after eve
 | ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. Under #1079 the `${ZCODE_HOME:-~/.zcode}/AGENTS.md` managed region renders the full compact-recovery prompt (its prefix survives compaction, KPR #75), and recovery re-invokes `/kaola-workflow-next` or `/kaola-workflow-finalize` as a native Skill tool call (ZCode 3.12.3 + KPR ACP 0.3.3). |
 | Devin CLI | One `UserPromptSubmit` command hook injects a short pointer to the managed global carrier only when V2 is absent. This carrier is used because measured compaction drops AGENTS/rules and `PostCompaction` does not inject `additionalContext`. |
 | Droid CLI | No Kaola prompt-lifecycle hook is installed. The personal `~/.factory/AGENTS.md` carrier and invoked skill are the authority; post-compaction reload is unmeasured, so recovery re-invokes the skill and resumes from durable state. |
+| Hermes Agent | No Kaola prompt-lifecycle hook is installed. The `SOUL.md` managed region and project `AGENTS.md` survived a measured 54→12 message compaction, but the invoked skill body did not; recovery re-invokes `/workflow-next` or `/kaola-workflow-finalize` and resumes from the durable ledger and workflow state. |
 
 Across all families, ordinary tool use adds 0 Kaola recovery bytes and starts 0 Kaola recovery
 subprocesses. Recovery-enabled runtimes receive an already-generated artifact, reread durable state,
@@ -163,11 +167,11 @@ profiles with one pinned subagent model; ADR 0029 records what was retired.
 
 ## Adapter inventory
 
-The closed inventory contains eleven runtime families and thirteen adapter variants:
+The closed inventory contains twelve runtime families and fourteen adapter variants:
 
 - one Claude adapter;
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
-- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, and Antigravity.
+- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, Antigravity, and Hermes.
 
 Every adapter renders commands or skills, any measured hooks, and the global contract only; none
 installs a Kaola role profile. `scripts/runtime-adapter-facts.js` rejects every retired role,
@@ -384,6 +388,34 @@ compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP e
   re-invocation resuming from durable state. This edition installs no hooks and no Kaola role
   profiles. See [Antigravity edition](antigravity-edition.md).
 
+### Hermes
+
+- **Live probes (2026-10-28, issue #1124).** Hermes Agent 0.22.5 (MacBook). M1: project `AGENTS.md`
+  loaded directly; the git-root-to-cwd chain loaded both files; **`HERMES.md` shadowed `AGENTS.md`**;
+  `CLAUDE.md` was not read while `AGENTS.md` existed; the real KW worktree instructions loaded
+  without a `BLOCKED` marker. M2: a managed region in `SOUL.md` entered `-z` and chat sessions;
+  `--ignore-rules` and `--safe-mode` skipped it; a user-authored line matching an injection rule
+  warned and loaded anyway. The probe was restored byte-identically (SHA-256 unchanged). M3: flat
+  `$HERMES_HOME/skills/<name>/SKILL.md` was discovered; `name`/`description` were not mandatory;
+  `/skill-name` expanded in CLI and ACP; same-name copies within one tier were ambiguous. M4:
+  copied skills were unmanaged and not auto-staled; `hermes update` seeds/updates only bundled
+  skills. M5: `/compress` reduced 54→12 messages; `SOUL.md` and project `AGENTS.md` survived, the
+  invoked skill body did not, and re-invocation recovered it. M9: `config path`, `profile list`
+  (`◆`), and `active_profile` identify the effective home/profile; an unset `HERMES_HOME` with a
+  non-default sticky profile is refused by the installer rather than guessed.
+- **ACP (same issue, P0).** `hermes acp` initialize returned protocolVersion 1,
+  `loadSession`/`fork`/`list`/`resume`, and auth methods `deepseek` + `hermes-setup`; the first
+  `session/new` started a per-`HERMES_HOME` gateway. ACP cwd drove `AGENTS.md` discovery; the KW
+  worktree cwd returned `KW=YES;BLOCKED=NO`; an install-tree cwd skipped project context.
+  `/p0-probe` expanded over ACP while an uninstalled `/workflow-next` returned an explicit
+  unknown-command error; skills were not advertised in `available_commands_update`. Edits went
+  through `session/request_permission`; terminal commands did not. `deepseek:deepseek-flash` read
+  back as `deepseek-flash`/`deepseek`. A viewer closed after `tool_call` left the gateway turn
+  running, and `kaola-acp.py list` returned no holder row (runner-side integration required).
+  `session/cancel` returned `cancelled`; `session/load` restored history and the fixture
+  ledger/workflow-state remained readable. ACP-driven KW runs remain P3; this edition ships no ACP
+  client. See [Hermes edition](hermes-edition.md).
+
 ## Explicit unknowns
 
 - opencode's hard or advisory AGENTS size limit;
@@ -400,5 +432,8 @@ compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP e
   retention, an explicit global-vs-project precedence conflict outcome, and the alternate global
   roots the public docs name (`~/.gemini/AGENTS.md`, `~/.gemini/antigravity-cli/skills`) — none
   provisioned or probed; only the measured `~/.gemini/config` roots are supported.
+- Hermes same-session SOUL/skill hot reload; the interactive CLI approval UI (P0 TTY probing timed
+  out twice); ACP terminal-command approval coverage; and KPR holder-row visibility for a raw
+  gateway session. Mini and Studio remain unmeasured for Hermes.
 
 An unknown stays `unknown`; it is not converted into support by a generated file existing on disk.

@@ -22,7 +22,7 @@
 //     install.sh consumes.
 //
 // Neither of those sources is modified by this module: it reads them. The
-// additive runtime editions (opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH) and their
+// additive runtime editions (opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, Antigravity, Hermes) and their
 // installers consume it, so adding a forge or a topic is a zero-edit change here.
 //
 // CLI (used by the installers, which cannot require() a node module inline):

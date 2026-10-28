@@ -285,6 +285,7 @@ const devinSync = require('./sync-devin-edition.js');
 const droidSync = require('./sync-droid-edition.js');
 const dshSync = require('./sync-dsh-edition.js');
 const agySync = require('./sync-antigravity-edition.js');
+const hermesSync = require('./sync-hermes-edition.js');
 const {
   FORGES: ROUTING_FORGES,
   GENERATED_SURFACES: ROUTING_SURFACES,
@@ -333,6 +334,10 @@ const RUNTIME_EDITIONS = [
   {
     id: 'antigravity',
     surfaceFor: forge => base => agySync.skillRel(base, forge),
+  },
+  {
+    id: 'hermes',
+    surfaceFor: forge => base => hermesSync.skillRel(base, forge),
   },
 ];
 
@@ -430,6 +435,7 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(droidSync.skillRel(base, forge), droidSync.renderSkill(canon, base, forge));
       map.set(dshSync.skillRel(base, forge), dshSync.renderSkill(canon, base, forge));
       map.set(agySync.skillRel(base, forge), agySync.renderSkill(canon, base, forge));
+      map.set(hermesSync.skillRel(base, forge), hermesSync.renderSkill(canon, base, forge));
     }
   }
   return map;
@@ -680,8 +686,8 @@ function checkGlobalContract({ blocks, globalContract }) {
     const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
     assert(!error && files.length === everyTree,
       `INIT-CARRIER: carrier must reach all ${everyTree} init surfaces, got ${files.length}${error ? ' (' + error + ')' : ''}`);
-    assert(files.length === 33,
-      `INIT-CARRIER: expected 33 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
+    assert(files.length === 36,
+      `INIT-CARRIER: expected 36 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
 
     const duplicated = [];
     for (const file of files) {
@@ -844,7 +850,7 @@ function checkGlobalContract({ blocks, globalContract }) {
     //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
     //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
     //     move the number — never to move the number first.
-    const NEXT_SURFACES = 33;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode + devin + droid + dsh + antigravity)
+    const NEXT_SURFACES = 36;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode + devin + droid + dsh + antigravity + hermes)
     assert(files.length === NEXT_SURFACES,
       `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
       + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `

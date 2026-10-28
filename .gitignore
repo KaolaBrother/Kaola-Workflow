@@ -56,3 +56,7 @@ kaola-workflow/issue-55/
 # here; regenerate with `npm run sync:editions` instead.
 .antigravity/
 .antigravity-*/
+
+# Hermes edition build trees (KW build names, never the native <repo>/.hermes root).
+.kw-hermes/
+.kw-hermes-*/

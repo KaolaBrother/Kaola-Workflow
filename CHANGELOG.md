@@ -4,6 +4,21 @@
 
 ### Added
 
+- **Hermes Agent edition (#1124 P1).** Kaola-Workflow now renders a `hermes` runtime
+  edition from the routing surfaces: three native skills under `${HERMES_HOME:-~/.hermes}/skills/`,
+  forge-selected support scripts (including the #1123 resolver guard), and the machine-global
+  contract in a managed region of `${HERMES_HOME:-~/.hermes}/SOUL.md`. D1–D5 are implemented as
+  owner-settled: KW-native delivery, G-a SOUL carrier, single forge + guard, global-only install,
+  and `.kw-hermes[-<forge>]` build trees. `install-hermes.sh` is wired into `install-all.sh`
+  (including `--check` and `--skip=hermes`), `package.json`, `.gitignore`, the routing refresh, and
+  a dedicated `scripts/test-hermes-edition.js`. The measured P0 facts are recorded in
+  `templates/agents/runtime-capabilities.json` and `docs/runtime-capabilities.md`: `AGENTS.md`
+  direct while `HERMES.md` shadows it, SOUL.md managed-region loading and compaction survival,
+  flat-skill discovery with same-tier ambiguity, curator-unmanaged copied skills, and the invoked
+  skill body being summarized away (recovery is re-invocation). ACP-driven runs remain P3; this
+  edition ships no ACP client, adapter, plugin, hook, role, or model binding. The claim USAGE now
+  names `hermes`, and the GitLab/Gitea ports backfill the missing `antigravity` name.
+
 - **Per-repo forge resolution and the edition guard (#1123 P1).** A new byte-identical module,
   `scripts/kaola-workflow-forge-resolve.js`, resolves one repository through T1 tracked
   `kaola-workflow/config.json#forge`, T2 `git config --local kaola-workflow.forge`, T3 the exact

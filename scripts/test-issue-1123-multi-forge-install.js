@@ -233,7 +233,7 @@ check('repo A calls only gh, repo B calls only tea, with no reinstall between', 
 
 check('install-all --check reports Claude installed vs expected forge sets', () => {
   const out = runBash(path.join(ROOT, 'install-all.sh'),
-    ['--check', '--forge=github,gitea', '--skip=opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
+    ['--check', '--forge=github,gitea', '--skip=opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity,hermes'],
     { home, bin });
   assert(out.stdout.includes('[forge] claude: installed=github,gitea expected=github,gitea'),
     out.stdout + out.stderr);

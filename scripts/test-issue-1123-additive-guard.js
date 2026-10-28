@@ -18,7 +18,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const RUNTIMES = ['opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh', 'antigravity'];
+const RUNTIMES = ['opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh', 'antigravity', 'hermes'];
 const GITEA_CLAIM = path.join(ROOT, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js');
 
 for (const runtime of RUNTIMES) {

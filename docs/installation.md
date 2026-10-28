@@ -168,9 +168,9 @@ numeric V2 fields only when those fields are present. `dispatch_posture` stays n
 not a refusal and not a session tool inventory. Multi-agent configuration in `config.toml` stays
 user-owned.
 
-### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH
+### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, Droid, DSH, and Hermes
 
-Each additive installer accepts a forge, global or project scope, and non-interactive mode. The established OpenCode, Kimi, Grok, Cursor, ZCode, and Droid installers also expose removal; Devin removal is not yet a standalone installer mode:
+Each additive installer accepts a forge and non-interactive mode; every edition here except Hermes (global-only in P1) also accepts global or project scope. The established OpenCode, Kimi, Grok, Cursor, ZCode, Droid, and Hermes installers also expose removal; Devin removal is not yet a standalone installer mode:
 
 ```bash
 ./install-opencode.sh --global --yes --forge=github
@@ -181,12 +181,14 @@ Each additive installer accepts a forge, global or project scope, and non-intera
 ./install-devin.sh    --global --yes --forge=github
 ./install-droid.sh    --global --yes --forge=github
 ./install-dsh.sh      --global --yes --forge=github
+./install-hermes.sh   --global --yes --forge=github   # global only (D4)
 ```
 
 For project scope, use `--target /absolute/repository/path` (Devin, Droid, and DSH use
 `--project[=DIR]`). Cursor intentionally requires explicit
-`--target` for project materialization. Start a fresh runtime session after installation so native
-commands and skills are rediscovered.
+`--target` for project materialization. Hermes is global-only in P1 (#1124 D4): its installer
+refuses `--project`/`--target` rather than guessing a trusted project root. Start a fresh runtime
+session after installation so native commands and skills are rediscovered.
 
 Carrier, configuration, hook, scope, precedence, and upgrade details:
 
@@ -198,6 +200,7 @@ Carrier, configuration, hook, scope, precedence, and upgrade details:
 - [Devin edition](devin-edition.md)
 - [Droid edition](droid-edition.md)
 - [DSH edition](dsh-edition.md)
+- [Hermes edition](hermes-edition.md)
 
 ## Cursor Cloud
 

@@ -324,6 +324,32 @@
         "project AGENTS.md",
         "project GEMINI.md"
       ]
+    },
+    {
+      "id": "hermes-local",
+      "runtime": "hermes",
+      "host": "local",
+      "discovery": {
+        "kind": "command",
+        "commands": [
+          "hermes"
+        ]
+      },
+      "carrier_group": "hermes-global-soul",
+      "carrier": {
+        "kind": "managed_region",
+        "format": "markdown",
+        "root_env": "HERMES_HOME",
+        "default_root": ".hermes",
+        "relative_path": "SOUL.md"
+      },
+      "precedence": "SOUL.md is loaded independently and always. One project-instruction type loads first: .hermes.md/HERMES.md walking up to the git root, then the AGENTS.md chain from git root to cwd, then CLAUDE.md only when no AGENTS.md exists, then .cursorrules. A HERMES.md therefore shadows AGENTS.md.",
+      "reload": "A new session loads SOUL.md; measured 2026-10-28 (#1124 M5): the SOUL.md managed region and project AGENTS.md survived a 54→12 message compaction, while the invoked skill body did not. Recovery re-invokes /workflow-next or /kaola-workflow-finalize and resumes from the durable ledger/workflow state.",
+      "compatibility_reads": [
+        "project AGENTS.md",
+        "project CLAUDE.md (only when no AGENTS.md exists)",
+        "project .cursorrules"
+      ]
     }
   ]
 }

@@ -49,6 +49,9 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 - [Antigravity Edition](antigravity-edition.md) — Antigravity CLI (`agy`) skills at the measured
   `~/.gemini/config` root, managed global `AGENTS.md`, live host schema (no Kaola role profiles),
   and dated probe measurements in [runtime capabilities](runtime-capabilities.md).
+- [Hermes Edition](hermes-edition.md) — Hermes Agent (`hermes`) skills under the measured
+  `$HERMES_HOME/skills` root, managed global `SOUL.md` region, global-only install, live
+  `delegate_task` schema, and the measured `HERMES.md` shadowing / skill-collision facts.
 
 ## Decisions
 

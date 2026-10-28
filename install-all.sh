@@ -62,7 +62,7 @@ esac
 
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
-RUNTIMES=(claude opencode codex kimi grok cursor zcode devin droid dsh antigravity)
+RUNTIMES=(claude opencode codex kimi grok cursor zcode devin droid dsh antigravity hermes)
 
 # Codex marketplace-plugin convergence inputs.
 # KAOLA_CODEX_BIN is a test seam ONLY (scripts/test-install-all.js points it at a
@@ -117,6 +117,7 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
   9. droid     Droid         (install-droid.sh)
   10. dsh      DSH           (install-dsh.sh)
   11. antigravity Antigravity (install-antigravity.sh)
+  12. hermes     Hermes Agent (install-hermes.sh, global-only)
 
 Options:
   --forge=github|gitlab|gitea|github,gitea
@@ -125,10 +126,10 @@ Options:
                                 separately with `codex plugin add` (this wrapper converges only the
                                 first); the additive runtimes use the first forge (single-forge by
                                 design, #1123 P3).
-  --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default)
-  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD)
+  --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default); Hermes is always global
+  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD); Hermes is not installed in project scope
   --yes                         Non-interactive; forward -y to every interactive installer
-  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity) — logged loudly
+  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity,hermes) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Read-only verification: check each runtime's own global-contract
                                 carrier (one line per runtime), print each runtime command, and
@@ -140,7 +141,9 @@ Cloud, an environment-setup Agent uses the Cursor installer directly for that
 remote machine and selected repository, then asks the user to Save the Build.
 
 The Claude installer (install.sh) has no global/project concept — it installs
-its plugin regardless of scope; --global/--project apply to the other nine.
+its plugin regardless of scope. Hermes is global-only in P1 (#1124 D4), so
+--global/--project does not change its scope; --global/--project applies to the
+remaining additive runtimes.
 The Codex installer accepts neither --yes nor --forge, so those are
 not forwarded to it; Codex picks its forge by which marketplace plugin entry
 you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtime failed
@@ -368,6 +371,7 @@ let s=""; process.stdin.on("data", d => s += d).on("end", () => {
         droid) af_dir="${DROID_HOME:-$HOME/.factory}/kaola-workflow/scripts" ;;
         dsh) af_dir="${DSH_HOME:-$HOME/.dsh}/kaola-workflow/scripts" ;;
         antigravity) af_dir="$HOME/.gemini/config/kaola-workflow/scripts" ;;
+        hermes) af_dir="${HERMES_HOME:-$HOME/.hermes}/kaola-workflow/scripts" ;;
       esac
       if [[ -n "$af_dir" && -d "$af_dir" ]]; then
         for af_forge in github gitlab gitea; do
@@ -406,6 +410,23 @@ let s=""; process.stdin.on("data", d => s += d).on("end", () => {
         afirst="$(printf '%s\n' "$aout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
         note="${note:+$note; }skills check FAILED (exit $arc)${afirst:+: $afirst} (advisory: agy not on PATH)"
         echo "    [antigravity] skills check FAILED (exit $arc)${afirst:+ — $afirst} (advisory: agy not on PATH)"
+      fi
+    fi
+    if [[ "$name" == "hermes" ]]; then
+      local hout hrc=0 hfirst
+      hout="$( "$@" --check 2>&1 )" || hrc=$?
+      if [[ "$hrc" -eq 0 ]]; then
+        note="${note:+$note; }skills CURRENT"
+        echo "    [hermes] skills CURRENT"
+      elif command -v hermes >/dev/null 2>&1; then
+        hfirst="$(printf '%s\n' "$hout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        verdict="FAIL"
+        note="${note:+$note; }skills check FAILED (exit $hrc)${hfirst:+: $hfirst}"
+        echo "    [hermes] skills check FAILED (exit $hrc)${hfirst:+ — $hfirst}"
+      else
+        hfirst="$(printf '%s\n' "$hout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
+        note="${note:+$note; }skills check FAILED (exit $hrc)${hfirst:+: $hfirst} (advisory: hermes not on PATH)"
+        echo "    [hermes] skills check FAILED (exit $hrc)${hfirst:+ — $hfirst} (advisory: hermes not on PATH)"
       fi
     fi
     if [[ "$name" == "droid" ]]; then
@@ -826,9 +847,9 @@ echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] &&
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
 if [[ "$SCOPE" == "global" ]]; then
-  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            DEVIN_SCOPE=(--global);            DROID_SCOPE=(--global);            DSH_SCOPE=(--global);            AGY_SCOPE=(--global);            CODEX_SCOPE=(--global)
+  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            DEVIN_SCOPE=(--global);            DROID_SCOPE=(--global);            DSH_SCOPE=(--global);            AGY_SCOPE=(--global);            HERMES_SCOPE=(--global);          CODEX_SCOPE=(--global)
 else
-  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); DEVIN_SCOPE=(--target "$PROJECT_DIR"); DROID_SCOPE=(--target "$PROJECT_DIR"); DSH_SCOPE=(--target "$PROJECT_DIR"); AGY_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
+  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); DEVIN_SCOPE=(--target "$PROJECT_DIR"); DROID_SCOPE=(--target "$PROJECT_DIR"); DSH_SCOPE=(--target "$PROJECT_DIR"); AGY_SCOPE=(--target "$PROJECT_DIR"); HERMES_SCOPE=(--global); CODEX_SCOPE=("$PROJECT_DIR")
 fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
@@ -867,6 +888,10 @@ DSH_CMD=(bash "$ROOT/install-dsh.sh" --forge="$FORGE" "${DSH_SCOPE[@]}")
 AGY_CMD=(bash "$ROOT/install-antigravity.sh" --forge="$FORGE" "${AGY_SCOPE[@]}")
 [[ "$YES" == "1" ]] && AGY_CMD+=(--yes)
 
+# #1124 D4: Hermes is global-only in P1; never forward --project/--target.
+HERMES_CMD=(bash "$ROOT/install-hermes.sh" --forge="$FORGE" "${HERMES_SCOPE[@]}")
+[[ "$YES" == "1" ]] && HERMES_CMD+=(--yes)
+
 run_one claude   "${CLAUDE_CMD[@]}"
 run_one opencode "${OPENCODE_CMD[@]}"
 run_one codex    "${CODEX_CMD[@]}"
@@ -883,6 +908,7 @@ run_one devin    "${DEVIN_CMD[@]}"
 run_one droid    "${DROID_CMD[@]}"
 run_one dsh      "${DSH_CMD[@]}"
 run_one antigravity "${AGY_CMD[@]}"
+run_one hermes   "${HERMES_CMD[@]}"
 
 print_summary
 overall=$?

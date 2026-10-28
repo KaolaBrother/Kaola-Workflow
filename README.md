@@ -107,7 +107,7 @@ validation evidence, supervises finalization, and stops that session when finish
 
 Runner reports CLI observations; the agent decides whether the task is complete. Starting Runner
 alone does not install or invoke Workflow. Runner currently provides **seven target CLI Skills**;
-Workflow additionally supports **ZCode, Droid, and DSH** as native CLI editions. Transport and recovery
+Workflow additionally supports **ZCode, Droid, DSH, and Hermes Agent** as native CLI editions. Transport and recovery
 capabilities vary by target.
 See [Runner setup and support](https://github.com/KaolaBrother/kaola-project-runner#agent-runtime-support).
 The projects have [separate licenses](https://github.com/KaolaBrother/kaola-project-runner#license-and-use).
@@ -160,6 +160,7 @@ A research or design request does not authorize implementation. See [Task Qualit
 | Droid CLI | Inline skills | Live host schema | `./install-droid.sh` |
 | DSH (DeepSeek Harness) | Inline skills | Live host schema | `./install-dsh.sh` |
 | Antigravity CLI (`agy`) | Skills and managed global `AGENTS.md` | Live host schema | `./install-antigravity.sh` |
+| Hermes Agent (`hermes`) | Skills and managed global `SOUL.md` region | Live host schema (`delegate_task`) | `./install-hermes.sh` (global only) |
 
 Kaola-Workflow defines no subagent roles, role profiles, model or effort bindings, or dispatch
 policy. The current host schema, its defaults and permissions, and your instructions decide

@@ -36,7 +36,7 @@ const EDITIONS = {
   gitlab: { dir: path.join(REPO, 'plugins/kaola-workflow-gitlab/scripts'), claim: 'kaola-gitlab-workflow-claim.js' },
   gitea: { dir: path.join(REPO, 'plugins/kaola-workflow-gitea/scripts'), claim: 'kaola-gitea-workflow-claim.js' },
 };
-const RUNTIMES = ['antigravity', 'claude', 'codex', 'cursor', 'grok', 'opencode', 'kimi', 'zcode', 'devin', 'droid', 'dsh'];
+const RUNTIMES = ['antigravity', 'claude', 'codex', 'cursor', 'grok', 'opencode', 'kimi', 'zcode', 'devin', 'droid', 'dsh', 'hermes'];
 const SENTENCE = 'A `blocked` line may get one more write before finalize: the hand-over to an open '
   + 'issue (`handed-over: #M`). A `done` or `failed` line is immutable.';
 
@@ -121,7 +121,7 @@ function runCli(ed, args, cwd) {
   const registry = JSON.parse(read(REGISTRY));
   const families = Array.from(new Set(registry.targets.map(target => target.runtime))).sort();
   check(JSON.stringify(families) === JSON.stringify([...RUNTIMES].sort()),
-    'carriers: the registry covers exactly the eleven owner-named runtime families, got ' + JSON.stringify(families));
+    'carriers: the registry covers exactly the twelve owner-named runtime families, got ' + JSON.stringify(families));
   const contract = require('./kaola-workflow-global-contract.js');
   for (const target of registry.targets) {
     const rendered = contract.renderContract({ source, target, nonce: '' }).toString('utf8');

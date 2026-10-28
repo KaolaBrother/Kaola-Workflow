@@ -75,7 +75,7 @@ try {
   // spawn-class: environment
   const check = spawnSync('bash', [path.join(ROOT, 'install-all.sh'), '--check',
     '--forge=github,gitea',
-    '--skip=claude,opencode,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'], {
+    '--skip=claude,opencode,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity,hermes'], {
     cwd: ROOT, encoding: 'utf8', timeout: 180000,
     env: Object.assign({}, process.env, env),
   });

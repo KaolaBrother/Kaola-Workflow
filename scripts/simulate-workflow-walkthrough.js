@@ -12808,6 +12808,7 @@ function testAxiomBlockByteIdentity() {
   const droidSync = require('./sync-droid-edition.js');
   const dshSync = require('./sync-dsh-edition.js');
     const agySync = require('./sync-antigravity-edition.js');
+    const hermesSync = require('./sync-hermes-edition.js');
 
   assert(!fs.existsSync(path.join(repoRoot, 'templates', 'axioms.md')),
     'templates/axioms.md is not an active policy source');
@@ -12861,6 +12862,8 @@ function testAxiomBlockByteIdentity() {
       body: dshSync.renderSkill(canonical, basename, forge) });
     surfaces.push({ id: agySync.skillRel(basename, forge),
       body: agySync.renderSkill(canonical, basename, forge) });
+    surfaces.push({ id: hermesSync.skillRel(basename, forge),
+      body: hermesSync.renderSkill(canonical, basename, forge) });
   }
 
   for (const relativePath of ['AGENTS.md', 'README.md']) {

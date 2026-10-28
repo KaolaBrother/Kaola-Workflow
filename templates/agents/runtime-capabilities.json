@@ -266,6 +266,55 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1122",
       "observed_at": "2026-10-26T00:00:00Z",
       "claim": "Live agy 1.4.7 fresh-process probes (2026-10-26, MacBook, issue #1122): M1 — a fresh session in an unrelated git fixture quoted the exact '#1121' robustness sentence carried only by the managed ~/.gemini/config/AGENTS.md region, with tools disallowed (direct automatic global loading). M2 — project AGENTS.md and project GEMINI.md unique-token rules were each obeyed in fresh sessions in that project (both project file names load). M3 — the global skills catalog in an unrelated workspace listed kaola-workflow-finalize, workflow-init, workflow-next beside a probe fixture at ~/.gemini/config/skills (the measured global skills root, resolving the public-docs conflict), and native /probe-fixture-skill invocation returned the fixture's exact token. M4 — fresh-process reread measured; same-session hot reload and post-compaction retention remain unmeasured (recovery is explicit skill re-invocation)."
+    },
+    "hermes_cli": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Hermes Agent v0.22.5 (2026.9.24, stable, local bf0203a794a0) on PATH as `hermes` plus `hermes-acp`; `hermes --version`, `hermes acp --version` (0.22.5), and `hermes-acp --check` (`Hermes ACP check OK`) succeeded. Install method git, Python 3.14.9, install tree ~/.hermes/hermes-agent."
+    },
+    "hermes_instructions": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Live MacBook probes 2026-10-28 (#1124 M1): a fresh `hermes -z` session loaded project AGENTS.md directly; the git-root-to-cwd AGENTS.md chain loaded both root and nested files; a present HERMES.md shadowed AGENTS.md; CLAUDE.md was not read while AGENTS.md existed; the real KW worktree AGENTS.md was visible and not replaced by a BLOCKED marker."
+    },
+    "hermes_soul": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Live MacBook probes 2026-10-28 (#1124 M2): a managed region appended to SOUL.md entered both `hermes -z` and `hermes chat -q` system prompts; `--ignore-rules` and `--safe-mode` skipped it; a user-authored SOUL.md line matching an injection rule produced a warning and was loaded anyway because SOUL.md is the user's own file in HERMES_HOME. The probe file was restored byte-identically."
+    },
+    "hermes_skills": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Live MacBook probes 2026-10-28 (#1124 M3): a flat $HERMES_HOME/skills/<name>/SKILL.md was discovered by `hermes skills list`; name and description frontmatter are not mandatory (directory name falls back); `/skill-name` expanded in `-z` and over ACP; same-name copies within one tier were ambiguous and the slash command was unavailable; a trusted project's .agents/skills and .hermes/skills same-name copies were also ambiguous and skill_view refused them."
+    },
+    "hermes_curator_update": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Live MacBook probes 2026-10-28 (#1124 M4): `hermes curator status` reported no curator-managed skills and `hermes curator list-unmanaged` listed the copied probe skills as unmanaged, never auto-staled or archived. `hermes update --plan` was read-only and reported code-swap only; the installed source seeds/updates only bundled-manifest skills, so a non-bundled KW skill is not reseeded or pruned."
+    },
+    "hermes_compaction": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Live MacBook probe 2026-10-28 (#1124 M5): `/compress` reduced a 54-message session to 12 messages. The SOUL.md managed-region token and project AGENTS.md token remained visible; the invoked skill body did not survive verbatim (it was folded into the compaction summary) and the model re-loaded the skill to quote it. Recovery is skill re-invocation from the durable ledger/workflow state."
+    },
+    "hermes_live_probe_20261028": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "MacBook P0 live matrix 2026-10-28 (#1124): `hermes acp` initialize returned protocolVersion 1, loadSession/fork/list/resume, and auth methods deepseek + hermes-setup; the first session/new started a per-HERMES_HOME shared gateway. ACP cwd drove AGENTS.md discovery and the KW worktree cwd returned KW=YES/BLOCKED=NO; an install-tree cwd skipped project context; /p0-probe expanded over ACP while an uninstalled /workflow-next returned an explicit unknown-command error; edits went through session/request_permission while terminal commands did not; deepseek:deepseek-flash read back as model deepseek-flash/provider deepseek; a viewer closed after tool_call left the gateway turn running; session/cancel returned cancelled and session/load resumed with the fixture ledger/workflow-state readable. Mini was not reachable and remains N/A."
     }
   },
   "runtimes": {
@@ -739,6 +788,40 @@
         "required_project_materialization": "no",
         "ambient_repository_write": false,
         "evidence_status": "documented"
+      }
+    },
+    "hermes": {
+      "runtime": "hermes",
+      "evidence": [
+        "hermes_cli",
+        "hermes_instructions",
+        "hermes_soul",
+        "hermes_skills",
+        "hermes_curator_update",
+        "hermes_compaction",
+        "hermes_live_probe_20261028"
+      ],
+      "capabilities": {
+        "instruction_loading": "direct",
+        "hook_scope": "user_only",
+        "delegation_guidance": {
+          "native_routes": "Follow the running host's current subagent tool and the schema it exposes now. This adapter does not name types, models, nesting, or a concurrency count.",
+          "availability": "Availability follows that live schema, the host's permissions, and the user's instructions. A missing config field is not evidence the host lacks a tool."
+        }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — this edition installs no Hermes hook, so no prompt-lifecycle compact state exists.",
+        "session": "The machine-global SOUL.md managed region plus the invoked skill body remain the prompt authority for this adapter.",
+        "reload": "Measured 2026-10-28 (#1124 M5): SOUL.md and project AGENTS.md survived a 54→12 message compaction; the invoked skill body did not and was recoverable only by re-invoking the skill. Recovery resumes from the durable mission ledger and workflow state.",
+        "tool": "No Kaola PreToolUse/PostToolUse hook or subprocess is installed for Hermes.",
+        "stop": "No Kaola Stop hook is installed."
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "measured"
       }
     }
   }
