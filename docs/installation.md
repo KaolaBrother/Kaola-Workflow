@@ -184,6 +184,10 @@ Each additive installer accepts a forge and non-interactive mode; every edition 
 ./install-hermes.sh   --global --yes --forge=github   # global only (D4)
 ```
 
+Hermes owns its `SOUL.md` identity slot. The installer refuses a missing, empty, or
+whitespace-only file instead of creating it; run `hermes` once (or write an owner identity) before
+installing the Kaola-Workflow region.
+
 For project scope, use `--target /absolute/repository/path` (Devin, Droid, and DSH use
 `--project[=DIR]`). Cursor intentionally requires explicit
 `--target` for project materialization. Hermes is global-only in P1 (#1124 D4): its installer

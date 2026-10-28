@@ -27,7 +27,9 @@ install or upgrade; or the `claude-md` / `managed-only` project-instructions set
 owner-chosen `CLAUDE.md` containing `@AGENTS.md` as a stated exception. The workflow states that
 environment requirement and does not provision or maintain the file. Codex, opencode, Kimi Code,
 Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support. Hermes also loads
-`AGENTS.md` directly, but a present `.hermes.md`/`HERMES.md` shadows it (measured, #1124 M1).
+`AGENTS.md` directly. P0 measured the `HERMES.md` shadowing case (#1124 M1c); the `.hermes.md`
+name, its walk-to-git-root order, the `CLAUDE.md` fallback, and `.cursorrules` are source observations
+(v0.22.5 `agent/prompt_builder.py:140-147,1618-1633,1748-1771`), not separately probed.
 
 ## Capability map (measurement through 2026-09-19)
 
@@ -46,7 +48,7 @@ observed then. They are not copied into Next, Finalization, or compact recovery.
 | Devin CLI | Live schema: `run_subagent` / `read_subagent` with the session-start profile catalog, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and user-owned profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; the host router owns the model |
 | Droid CLI | Live `Task` schema | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | A spawned route resolves its model from the invoking route and the parent's complexity routing and inherits the parent when unpinned; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
 | DSH | Live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background, depth, and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
-| Hermes Agent | Live `delegate_task` schema: `action` (`spawn` default, `list`, `steer`, `stop`), `message`, `subagent_id`, `tasks` (required) | `tasks` spawns up to 10 parallel children; `list`/`steer`/`stop` control running children | Child model and effort follow Hermes/provider config and the user; this edition installs no profile, role, or model binding. Host hook scope is user-only (`config.yaml`), and KW installs no hook. ACP terminal tool calls did not raise `session/request_permission` in P0; that is a runner/seat policy gap, not a KW approval claim |
+| Hermes Agent | Live `delegate_task` schema: `action` (`spawn` default, `list`, `steer`, `stop`), `message`, `subagent_id`, `tasks` (required) | `tasks` spawns up to 10 parallel children; `list`/`steer`/`stop` control running children | Child model and effort follow Hermes/provider config and the user; this edition installs no profile, role, or model binding. Host hook scope is user-only (source observation: v0.22.5 `hermes_cli/config_defaults.py:1760` and `agent/shell_hooks.py`; P0 did not probe hooks), and KW installs no hook. ACP terminal tool calls did not raise `session/request_permission` in P0; that is a runner/seat policy gap, not a KW approval claim |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. The rows above are the
 measurement through 2026-09-19. Rendered adapter facts do not name those routes, types, or counts

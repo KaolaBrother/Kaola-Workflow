@@ -17,7 +17,9 @@
   flat-skill discovery with same-tier ambiguity, curator-unmanaged copied skills, and the invoked
   skill body being summarized away (recovery is re-invocation). ACP-driven runs remain P3; this
   edition ships no ACP client, adapter, plugin, hook, role, or model binding. The claim USAGE now
-  names `hermes`, and the GitLab/Gitea ports backfill the missing `antigravity` name.
+  names `hermes`, and the GitLab/Gitea ports backfill the missing `antigravity` name. The installer
+  refuses a missing, empty, or whitespace-only `SOUL.md` instead of creating the Hermes identity slot
+  (Hermes seeds its own default identity); `install-all` skips Hermes in that case.
 
 - **Per-repo forge resolution and the edition guard (#1123 P1).** A new byte-identical module,
   `scripts/kaola-workflow-forge-resolve.js`, resolves one repository through T1 tracked

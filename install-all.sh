@@ -127,7 +127,7 @@ Options:
                                 first); the additive runtimes use the first forge (single-forge by
                                 design, #1123 P3).
   --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH globally (default); Hermes is always global
-  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD); Hermes is not installed in project scope
+  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin/Droid/DSH into a project dir (default: CWD); Hermes always installs globally (skipped if SOUL.md is absent/empty)
   --yes                         Non-interactive; forward -y to every interactive installer
   --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity,hermes) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
@@ -279,12 +279,30 @@ print_summary() {
   return "$any_fail"
 }
 
+# B1 (#1124 round-1): Hermes owns its SOUL.md identity slot. Do not invoke the
+# installer when the slot is missing/empty; it would refuse, and install-all must not
+# create the slot on Hermes' behalf.
+hermes_identity_ready() {
+  local root="${HERMES_HOME:-$HOME/.hermes}"
+  [[ -f "$root/SOUL.md" ]] && grep -q '[^[:space:]]' "$root/SOUL.md"
+}
+
 # One runtime's own carrier state from the per-target global-contract check (#1087).
 # Prints "VERDICT<TAB>note" where VERDICT is OK, ADVISORY, or FAIL. Only a runtime that is
 # detected on PATH can FAIL: a runtime that is not detected keeps its ownership record as
 # DORMANT and its carrier state is reported as advisory, never as another runtime's failure.
 carrier_state() {
   local name="$1" output rc=0
+  # m10: the installer refuses a sticky non-default profile when HERMES_HOME is
+  # unset; do not silently grade the default home from --check either.
+  if [[ "$name" == "hermes" && -z "${HERMES_HOME:-}" && -f "$HOME/.hermes/active_profile" ]]; then
+    local active
+    active="$(tr -d '[:space:]' < "$HOME/.hermes/active_profile")"
+    if [[ -n "$active" && "$active" != "default" ]]; then
+      printf 'FAIL\tsticky profile %s is active but HERMES_HOME is unset; set HERMES_HOME explicitly\n' "$active"
+      return 0
+    fi
+  fi
   if [[ ! -f "$GLOBAL_CONTRACT_CLI" ]]; then
     printf 'FAIL\tglobal contract CLI missing: %s\n' "$GLOBAL_CONTRACT_CLI"
     return 0
@@ -421,12 +439,12 @@ let s=""; process.stdin.on("data", d => s += d).on("end", () => {
       elif command -v hermes >/dev/null 2>&1; then
         hfirst="$(printf '%s\n' "$hout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
         verdict="FAIL"
-        note="${note:+$note; }skills check FAILED (exit $hrc)${hfirst:+: $hfirst}"
-        echo "    [hermes] skills check FAILED (exit $hrc)${hfirst:+ — $hfirst}"
+        note="${note:+$note; }installer check FAILED (exit $hrc)${hfirst:+: $hfirst}"
+        echo "    [hermes] installer check FAILED (exit $hrc)${hfirst:+ — $hfirst}"
       else
         hfirst="$(printf '%s\n' "$hout" | grep -m1 -E 'check:|Refused|Preserved' || true)"
-        note="${note:+$note; }skills check FAILED (exit $hrc)${hfirst:+: $hfirst} (advisory: hermes not on PATH)"
-        echo "    [hermes] skills check FAILED (exit $hrc)${hfirst:+ — $hfirst} (advisory: hermes not on PATH)"
+        note="${note:+$note; }installer check FAILED (exit $hrc)${hfirst:+: $hfirst} (advisory: hermes not on PATH)"
+        echo "    [hermes] installer check FAILED (exit $hrc)${hfirst:+ — $hfirst} (advisory: hermes not on PATH)"
       fi
     fi
     if [[ "$name" == "droid" ]]; then
@@ -908,7 +926,13 @@ run_one devin    "${DEVIN_CMD[@]}"
 run_one droid    "${DROID_CMD[@]}"
 run_one dsh      "${DSH_CMD[@]}"
 run_one antigravity "${AGY_CMD[@]}"
-run_one hermes   "${HERMES_CMD[@]}"
+if [[ "$CHECK" != "1" ]] && ! is_skipped hermes && ! hermes_identity_ready; then
+  echo ""
+  echo ">>> [hermes] SKIPPED (SOUL.md identity slot missing/empty; run hermes once first)"
+  R_STATUS+=("SKIP"); R_CODE+=("-"); R_NOTE+=("identity slot missing/empty; run hermes once or create SOUL.md")
+else
+  run_one hermes   "${HERMES_CMD[@]}"
+fi
 
 print_summary
 overall=$?

@@ -343,7 +343,7 @@
         "default_root": ".hermes",
         "relative_path": "SOUL.md"
       },
-      "precedence": "SOUL.md is loaded independently and always. One project-instruction type loads first: .hermes.md/HERMES.md walking up to the git root, then the AGENTS.md chain from git root to cwd, then CLAUDE.md only when no AGENTS.md exists, then .cursorrules. A HERMES.md therefore shadows AGENTS.md.",
+      "precedence": "Source observation (Hermes v0.22.5 agent/prompt_builder.py:140-147,1618-1633,1748-1771), not a live probe: SOUL.md is loaded independently and always. One project-instruction type loads first: .hermes.md/HERMES.md walking up to the git root, then the AGENTS.md chain from git root to cwd, then CLAUDE.md only when no AGENTS.md exists, then .cursorrules. A HERMES.md therefore shadows AGENTS.md (the HERMES.md case was measured in P0 M1c; the .hermes.md name and walk order are source-derived).",
       "reload": "A new session loads SOUL.md; measured 2026-10-28 (#1124 M5): the SOUL.md managed region and project AGENTS.md survived a 54→12 message compaction, while the invoked skill body did not. Recovery re-invokes /workflow-next or /kaola-workflow-finalize and resumes from the durable ledger/workflow state.",
       "compatibility_reads": [
         "project AGENTS.md",

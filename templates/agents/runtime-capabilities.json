@@ -309,12 +309,19 @@
       "version_floor": "0.22.5",
       "claim": "Live MacBook probe 2026-10-28 (#1124 M5): `/compress` reduced a 54-message session to 12 messages. The SOUL.md managed-region token and project AGENTS.md token remained visible; the invoked skill body did not survive verbatim (it was folded into the compaction summary) and the model re-loaded the skill to quote it. Recovery is skill re-invocation from the durable ledger/workflow state."
     },
+    "hermes_source_v0225": {
+      "kind": "official_source",
+      "locator": "~/.hermes/hermes-agent (v0.22.5): agent/prompt_builder.py:140-147,1618-1633,1748-1771; hermes_cli/config_defaults.py:1760; agent/shell_hooks.py; agent/system_prompt.py:556; hermes_cli/config.py:526-538; hermes_cli/service_manager.py:282-288",
+      "observed_at": "2026-10-28T00:00:00Z",
+      "version_floor": "0.22.5",
+      "claim": "Source observation (not a live probe): prompt_builder.py implements one project-context type, first found (`.hermes.md`/`HERMES.md` walking up to the git root, then the AGENTS.md chain, then CLAUDE.md only when no AGENTS.md exists, then .cursorrules), with SOUL.md independent; config_defaults.py defines `hooks: {}` and shell_hooks.py/plugin hooks are the host hook surface; system_prompt.py replaces DEFAULT_AGENT_IDENTITY when SOUL.md is non-empty; config.py seeds DEFAULT_SOUL_MD only when SOUL.md is missing or a known legacy template; service_manager.py treats SOUL.md as a live-profile identity marker; the bundled/optional v0.22.5 skill tree contains none of workflow-init, workflow-next, or kaola-workflow-finalize."
+    },
     "hermes_live_probe_20261028": {
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1124",
       "observed_at": "2026-10-28T00:00:00Z",
       "version_floor": "0.22.5",
-      "claim": "MacBook P0 live matrix 2026-10-28 (#1124): `hermes acp` initialize returned protocolVersion 1, loadSession/fork/list/resume, and auth methods deepseek + hermes-setup; the first session/new started a per-HERMES_HOME shared gateway. ACP cwd drove AGENTS.md discovery and the KW worktree cwd returned KW=YES/BLOCKED=NO; an install-tree cwd skipped project context; /p0-probe expanded over ACP while an uninstalled /workflow-next returned an explicit unknown-command error; edits went through session/request_permission while terminal commands did not; deepseek:deepseek-flash read back as model deepseek-flash/provider deepseek; a viewer closed after tool_call left the gateway turn running; session/cancel returned cancelled and session/load resumed with the fixture ledger/workflow-state readable. Mini was not reachable and remains N/A."
+      "claim": "MacBook P0 live matrix 2026-10-28 (#1124): `hermes acp` initialize returned protocolVersion 1, loadSession/fork/list/resume, and auth methods deepseek + hermes-setup; the first session/new started a per-HERMES_HOME shared gateway. ACP cwd drove AGENTS.md discovery and the KW worktree cwd returned KW=YES/BLOCKED=NO; an install-tree cwd skipped project context; /p0-probe expanded over ACP while an uninstalled /workflow-next returned an explicit unknown-command error; edits went through session/request_permission while terminal commands did not; deepseek:deepseek-flash read back as model deepseek-flash/provider deepseek; a viewer closed after tool_call left the gateway turn running; session/cancel returned cancelled and session/load resumed with the fixture ledger/workflow-state readable. No authorized remote channel was available; Mini remains N/A and requires Mini-side execution."
     }
   },
   "runtimes": {
@@ -799,7 +806,8 @@
         "hermes_skills",
         "hermes_curator_update",
         "hermes_compaction",
-        "hermes_live_probe_20261028"
+        "hermes_live_probe_20261028",
+        "hermes_source_v0225"
       ],
       "capabilities": {
         "instruction_loading": "direct",

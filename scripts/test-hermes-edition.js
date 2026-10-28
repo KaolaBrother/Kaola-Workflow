@@ -32,13 +32,16 @@ assert.deepStrictEqual([hermes.evidence].flat().sort(), [
   'hermes_live_probe_20261028',
   'hermes_skills',
   'hermes_soul',
-].sort(), 'Hermes evidence covers the seven P0 entries');
+  'hermes_source_v0225',
+].sort(), 'Hermes evidence covers the seven P0 entries and one source observation');
 for (const id of hermes.evidence) {
-  assert(adapters.evidence[id] && adapters.evidence[id].kind === 'runtime_probe',
-    'Hermes evidence ' + id + ' is a runtime_probe');
-  assert(adapters.evidence[id].locator.includes('/Kaola-Workflow/issues/1124')
+  const source = id === 'hermes_source_v0225';
+  assert(adapters.evidence[id]
+    && adapters.evidence[id].kind === (source ? 'official_source' : 'runtime_probe'),
+    'Hermes evidence ' + id + ' is a runtime_probe (or the one source observation)');
+  assert((source || adapters.evidence[id].locator.includes('/Kaola-Workflow/issues/1124'))
     && adapters.evidence[id].observed_at.startsWith('2026-10-28'),
-    'Hermes evidence ' + id + ' is anchored to #1124 on 2026-10-28');
+    'Hermes evidence ' + id + ' is anchored to its source/#1124 on 2026-10-28');
 }
 assert(hermes.capabilities.instruction_loading === 'direct',
   'Hermes instruction_loading is direct (P0 M1)');
@@ -201,6 +204,17 @@ try {
     && /SOUL\.md/.test(preCheck.stderr),
     'pre-install --check names the global contract, hermes-local target, and SOUL.md: ' + preCheck.stderr);
 
+  // m4: an unknown forge is the documented exit 2 before staging, not a node stack.
+  // spawn-class: cli-contract
+  const badForge = spawnSync('bash',
+    [path.join(REPO, 'install-hermes.sh'), '--global', '--forge=bogus'],
+    { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
+  assert.strictEqual(badForge.status, 2, 'unknown forge exits 2: ' + badForge.stdout + badForge.stderr);
+  assert(/unknown forge/i.test(badForge.stderr + badForge.stdout),
+    'unknown forge reports the friendly error: ' + badForge.stderr);
+  assert(!/\n\s+at /m.test(badForge.stderr + badForge.stdout),
+    'unknown forge does not leak a node stack');
+
   // spawn-class: environment
   const installed = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global', '--forge=github'],
     { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
@@ -310,6 +324,36 @@ try {
       assert.strictEqual(body.reason, 'forge_mismatch',
         'Hermes guard refusal is forge_mismatch');
       assert(!fs.existsSync(ghMarker), 'gh was not called before the Hermes guard refusal');
+
+      // Positive control (m6): the same seam must actually be consulted when the
+      // repository resolves to the installed github forge.
+      git(['remote', 'set-url', 'origin', 'https://github.com/example/a.git']);
+      const ghMarker2 = path.join(guardRepo, 'gh-positive.calls');
+      const ghMock2 = path.join(guardRepo, 'gh-positive-mock.js');
+      fs.writeFileSync(ghMock2, [
+        "const fs = require('fs');",
+        'fs.appendFileSync(' + JSON.stringify(ghMarker2) + ", 'called\\n');",
+        "const args = process.argv.slice(2).join(' ');",
+        "if (args.includes('issue')) process.stdout.write(JSON.stringify({number:1,title:'probe',body:'',state:'OPEN',labels:[],url:'https://github.com/example/a/issues/1',author:{login:'probe'},assignees:[],milestone:null,comments:[]})+'\\n');",
+        "else process.stdout.write('[]\\n');",
+      ].join('\n'));
+      // spawn-class: cli-contract
+      const positive = spawnSync(process.execPath, [
+        path.join(fixture.hermesHome, 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js'),
+        'startup', '--target-issue', '1', '--json',
+      ], {
+        cwd: guardRepo, encoding: 'utf8', timeout: 60000,
+        env: { HOME: fixture.home, HERMES_HOME: fixture.hermesHome,
+          PATH: fixture.bin + path.delimiter + process.env.PATH,
+          KAOLA_GH_MOCK_SCRIPT: ghMock2 },
+      });
+      assert(fs.existsSync(ghMarker2),
+        'positive control: a github-origin repo consults the gh seam');
+      assert.strictEqual(positive.status, 0,
+        'positive control: github-origin startup succeeds: ' + positive.stdout + positive.stderr);
+      const positiveBody = JSON.parse(String(positive.stdout).trim().split('\n').pop());
+      assert.strictEqual(positiveBody.verdict, 'green',
+        'positive control: the claim is green: ' + positive.stdout);
     } finally {
       fs.rmSync(guardRepo, { recursive: true, force: true });
     }
@@ -335,6 +379,142 @@ try {
     'uninstall preserves unrelated user skills');
 } finally {
   fs.rmSync(fixture.home, { recursive: true, force: true });
+}
+
+// B1: SOUL.md is Hermes' identity slot. Missing, empty, and whitespace-only files
+// must be refused without creating or changing the file (Hermes seeds it itself).
+for (const state of ['missing', 'empty', 'whitespace']) {
+  const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-b1-' + state + '-'));
+  try {
+    const hermesHome = path.join(home, '.hermes');
+    const carrier = path.join(hermesHome, 'SOUL.md');
+    if (state !== 'missing') {
+      fs.mkdirSync(hermesHome, { recursive: true });
+      fs.writeFileSync(carrier, state === 'empty' ? '' : '  \n\t\n');
+    }
+    const before = state === 'missing' ? null : fs.readFileSync(carrier);
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    // spawn-class: environment
+    const r = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
+    assert.notStrictEqual(r.status, 0, 'B1 ' + state + ': install is refused');
+    assert(/identity slot|SOUL\.md/i.test(r.stderr + r.stdout),
+      'B1 ' + state + ': refusal names the identity slot: ' + r.stderr + r.stdout);
+    if (state === 'missing') {
+      assert(!fs.existsSync(carrier), 'B1 missing: installer did not create SOUL.md');
+    } else {
+      assert(fs.readFileSync(carrier).equals(before), 'B1 ' + state + ': SOUL.md is byte-identical');
+    }
+    assert(!fs.existsSync(path.join(hermesHome, 'skills')),
+      'B1 ' + state + ': no skills are written');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// m5: nested skill/support symlinks are refused before the first write.
+for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
+  const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-nested-link-'));
+  try {
+    const hermesHome = path.join(home, '.hermes');
+    write(path.join(hermesHome, 'SOUL.md'), '# Owner identity\n\nKeep this byte.\n');
+    const external = path.join(home, 'external');
+    write(path.join(external, 'SKILL.md'), 'foreign\n');
+    write(path.join(external, 'kaola-workflow-claim.js'), 'foreign\n');
+    if (kind === 'skill-dir') {
+      fs.mkdirSync(path.join(hermesHome, 'skills'), { recursive: true });
+      fs.symlinkSync(external, path.join(hermesHome, 'skills', 'workflow-next'));
+    } else if (kind === 'skill-file') {
+      fs.mkdirSync(path.join(hermesHome, 'skills', 'workflow-next'), { recursive: true });
+      fs.symlinkSync(path.join(external, 'SKILL.md'), path.join(hermesHome, 'skills', 'workflow-next', 'SKILL.md'));
+    } else {
+      fs.mkdirSync(path.join(hermesHome, 'kaola-workflow', 'scripts'), { recursive: true });
+      fs.symlinkSync(path.join(external, 'kaola-workflow-claim.js'),
+        path.join(hermesHome, 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js'));
+    }
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    // spawn-class: environment
+    const r = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
+    assert.notStrictEqual(r.status, 0, 'm5 ' + kind + ': install is refused');
+    assert(/symlink/i.test(r.stderr + r.stdout), 'm5 ' + kind + ': refusal names the symlink');
+    assert.strictEqual(fs.readFileSync(path.join(external, 'SKILL.md'), 'utf8'), 'foreign\n',
+      'm5 ' + kind + ': external skill bytes are untouched');
+    assert.strictEqual(fs.readFileSync(path.join(external, 'kaola-workflow-claim.js'), 'utf8'), 'foreign\n',
+      'm5 ' + kind + ': external script bytes are untouched');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// m7: an owner-edited managed region makes uninstall refuse with a non-zero exit.
+{
+  const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-uninstall-conflict-'));
+  try {
+    const hermesHome = path.join(home, '.hermes');
+    write(path.join(hermesHome, 'SOUL.md'), '# Owner identity\n\nKeep this byte.\n');
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    // spawn-class: environment
+    const installedHome = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
+    assert.strictEqual(installedHome.status, 0, installedHome.stderr || installedHome.stdout);
+    const carrier = path.join(hermesHome, 'SOUL.md');
+    const edited = fs.readFileSync(carrier, 'utf8').replace(
+      /(<!-- KW-GLOBAL-CONTRACT-MANAGED-START -->\n)/,
+      '$1owner edit\n');
+    fs.writeFileSync(carrier, edited);
+    // spawn-class: cli-contract
+    const refused = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global', '--uninstall'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
+    assert.notStrictEqual(refused.status, 0, 'm7: uninstall exits non-zero on an owner-edited region');
+    assert(/left in place|OWNER_CONFLICT/i.test(refused.stderr + refused.stdout),
+      'm7: uninstall reports the carrier left in place: ' + refused.stderr + refused.stdout);
+    assert.strictEqual(fs.readFileSync(carrier, 'utf8'), edited,
+      'm7: owner-edited carrier is left byte-identical');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// B1 install-all amplification: with no identity slot, the wrapper skips Hermes
+// instead of letting the installer create SOUL.md.
+{
+  const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-install-all-skip-'));
+  try {
+    const env = { ...process.env, HOME: home };
+    delete env.HERMES_HOME;
+    // spawn-class: environment
+    const r = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--yes',
+      '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 180000 });
+    assert.strictEqual(r.status, 0, 'B1 install-all: wrapper stays green: ' + r.stdout + r.stderr);
+    assert(/\[hermes\] SKIPPED/.test(r.stdout) && /identity slot missing\/empty/.test(r.stdout),
+      'B1 install-all: Hermes is skipped with the identity-slot reason: ' + r.stdout);
+    assert(!fs.existsSync(path.join(home, '.hermes', 'SOUL.md')),
+      'B1 install-all: no SOUL.md is created');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// m10: install-all --check must not grade the default home when a non-default
+// profile is sticky-active and HERMES_HOME is unset.
+{
+  const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-sticky-check-'));
+  try {
+    write(path.join(home, '.hermes', 'active_profile'), 'work\n');
+    const env = { ...process.env, HOME: home };
+    delete env.HERMES_HOME;
+    // spawn-class: cli-contract
+    const r = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--check',
+      '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 180000 });
+    assert.notStrictEqual(r.status, 0, 'm10: sticky-profile check is not green');
+    assert(/sticky profile .*active but HERMES_HOME is unset/.test(r.stdout + r.stderr),
+      'm10: --check names the sticky-profile refusal: ' + r.stdout + r.stderr);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 // A symlinked SOUL.md is refused before the first write.

@@ -28,8 +28,10 @@
 #                           carrier, as the LAST install step; no other runtime's home is written)
 #   $HERMES_HOME/kaola-workflow/scripts  (support scripts)
 #
-# Hermes reads HERMES_HOME for its profile home (measured; P0 M9). This installer
-# never writes config.yaml, .env, credentials, hooks, or any Hermes plugin surface.
+# Hermes reads HERMES_HOME for its profile home (measured; P0 M9). SOUL.md is the
+# owner's identity slot: this installer refuses a missing/empty/whitespace-only file
+# rather than creating one (round-1 B1). It never writes config.yaml, .env, credentials,
+# hooks, or any Hermes plugin surface.
 #
 # Project scope is deliberately not implemented in P1 (D4): Hermes project skills
 # require the owner to trust the root in config.yaml's skills.trusted_project_dirs,
@@ -63,6 +65,10 @@ Usage: ./install-hermes.sh [--global] [--forge=github|gitlab|gitea] [--check] [-
 Hermes is global-only in Kaola-Workflow P1 (D4, #1124): project scope requires the
 owner to trust the repository in Hermes' skills.trusted_project_dirs, and this
 installer never writes the owner's config. --project/--target is refused.
+
+Hermes owns its identity slot: SOUL.md must already exist and have non-whitespace
+content. If it is absent or empty, run `hermes` once (or write your identity), then
+rerun this installer. Kaola-Workflow never creates or seeds SOUL.md.
 
 Uninstall removes ONLY Kaola-deployed artifacts: the deployed skills (by source-tree
 directory name — never a blind rm of a dir), the support scripts (by manifest name),
@@ -107,18 +113,13 @@ case "$HOME_ROOT" in
   *) echo "Install error: HERMES_HOME must be an absolute path: $HOME_ROOT" >&2; exit 2 ;;
 esac
 
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/kw-hermes-install.XXXXXX")"
-cleanup() { rm -rf "$STAGE"; }
-trap cleanup EXIT
-
-echo "Kaola-Workflow · hermes edition ($FORGE) — staging generated artifacts..."
-node "$SCRIPT_DIR/scripts/sync-hermes-edition.js" --forge="$FORGE" --tree-root="$STAGE" --write
-
 FORGE_HELPER="$SCRIPT_DIR/scripts/runtime-edition-forge.js"
 if [[ ! -f "$FORGE_HELPER" ]]; then
   echo "Install error: forge layout helper missing: $FORGE_HELPER" >&2
   exit 1
 fi
+# Validate the forge BEFORE staging/sync so an unknown value is the documented
+# friendly exit 2, not a node stack from the generator.
 if ! FORGE_SUFFIX="$(node "$FORGE_HELPER" --forge="$FORGE" --out-suffix)"; then
   echo "Install error: unknown forge \"$FORGE\" (expected github, gitlab, or gitea)" >&2
   exit 2
@@ -128,6 +129,13 @@ if ! FORGE_SCRIPTS_DIR="$(node "$FORGE_HELPER" --forge="$FORGE" --scripts-dir)";
   exit 1
 fi
 
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/kw-hermes-install.XXXXXX")"
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+echo "Kaola-Workflow · hermes edition ($FORGE) — staging generated artifacts..."
+node "$SCRIPT_DIR/scripts/sync-hermes-edition.js" --forge="$FORGE" --tree-root="$STAGE" --write
+
 SOURCE_TREE="$STAGE/.kw-hermes$FORGE_SUFFIX"
 SUPPORT_DEST="$HOME_ROOT/kaola-workflow/scripts"
 SKILLS_DEST="$HOME_ROOT/skills"
@@ -135,16 +143,54 @@ SUPPORT_MANIFEST=()
 while IFS= read -r line; do [[ -n "$line" ]] && SUPPORT_MANIFEST+=("$line"); done \
   < <(node "$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js" --forge="$FORGE" --scripts)
 
-# Refuse a symlinked carrier or destination before the first write. The global
-# contract also refuses SOUL.md symlinks; this catches the whole install early.
+# Refuse a symlinked carrier, destination, or per-entry target before the first
+# write. The global contract also refuses SOUL.md symlinks; this catches the whole
+# install early, including a symlinked skills/<name>/ or support-script file.
 preflight_symlinks() {
-  local path
+  local path name src
   for path in "$HOME_ROOT/SOUL.md" "$SKILLS_DEST" "$SUPPORT_DEST"; do
     if [[ -L "$path" ]]; then
       echo "Install error: refusing to write through symlink: $path" >&2
       exit 2
     fi
   done
+  for src in "$SOURCE_TREE/skills/"*; do
+    [[ -d "$src" ]] || continue
+    name="$(basename "$src")"
+    for path in "$SKILLS_DEST/$name" "$SKILLS_DEST/$name/SKILL.md"; do
+      if [[ -L "$path" ]]; then
+        echo "Install error: refusing to write through symlink: $path" >&2
+        exit 2
+      fi
+    done
+  done
+  for name in "${SUPPORT_MANIFEST[@]}"; do
+    path="$SUPPORT_DEST/$name"
+    if [[ -L "$path" ]]; then
+      echo "Install error: refusing to write through symlink: $path" >&2
+      exit 2
+    fi
+  done
+}
+
+# B1 (#1124 round-1 review): Hermes owns its identity slot. A missing or
+# whitespace-only SOUL.md is what lets Hermes seed its own default identity on the
+# next run; creating it here would replace that identity and could mint a phantom
+# live profile. The installer refuses instead of creating the file.
+preflight_identity() {
+  local carrier="$HOME_ROOT/SOUL.md"
+  if [[ ! -e "$carrier" ]]; then
+    echo "Install error: $carrier is missing. Hermes owns this identity slot; run \`hermes\` once (or write an owner identity) so Hermes seeds its default identity, then rerun this installer. Kaola-Workflow does not create SOUL.md." >&2
+    exit 2
+  fi
+  if [[ ! -f "$carrier" ]]; then
+    echo "Install error: $carrier is not a regular file; refusing to write it." >&2
+    exit 2
+  fi
+  if ! grep -q '[^[:space:]]' "$carrier"; then
+    echo "Install error: $carrier is empty. Hermes owns this identity slot; let Hermes seed its default identity (or write an owner identity) before installing the Kaola-Workflow region. Kaola-Workflow does not create SOUL.md." >&2
+    exit 2
+  fi
 }
 
 # Install or check the managed SOUL.md carrier through the per-target
@@ -227,10 +273,11 @@ uninstall_global_carrier() {
   status="$(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "UNKNOWN"); } catch (_) { console.log("UNKNOWN"); }' "$output")"
   if [[ "$rc" -eq 0 ]]; then
     echo "hermes global contract carrier: $status"
-  else
-    echo "warning: hermes global contract carrier left in place ($status, exit $rc)" >&2
-    printf '%s\n' "$output" >&2
+    return 0
   fi
+  echo "warning: hermes global contract carrier left in place ($status, exit $rc)" >&2
+  printf '%s\n' "$output" >&2
+  return 1
 }
 
 uninstall_edition() {
@@ -256,8 +303,12 @@ uninstall_edition() {
     rmdir "$SUPPORT_DEST" 2>/dev/null || true
     rmdir "$(dirname "$SUPPORT_DEST")" 2>/dev/null || true
   fi
-  uninstall_global_carrier
-  echo "Hermes edition uninstalled."
+  uninstall_global_carrier || bad=1
+  if [[ "$bad" -eq 0 ]]; then
+    echo "Hermes edition uninstalled."
+  else
+    echo "Hermes edition partially uninstalled; the SOUL.md carrier was left in place." >&2
+  fi
   return "$bad"
 }
 
@@ -270,11 +321,12 @@ if [[ "$CHECK" == 1 ]]; then
 fi
 
 if [[ "$UNINSTALL" == 1 ]]; then
-  uninstall_edition
+  if ! uninstall_edition; then exit 1; fi
   exit 0
 fi
 
 preflight_symlinks
+preflight_identity
 install_support_scripts
 
 mkdir -p "$SKILLS_DEST"

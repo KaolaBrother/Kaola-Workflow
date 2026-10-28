@@ -46,7 +46,8 @@ D1–D5 for this edition are owner-settled in #1124:
 - **M3 / skills.** Flat skills were discovered; `/skill-name` expanded in CLI and ACP. A name that
   collides with a bundled skill in the same tier becomes ambiguous and the slash command is
   unavailable. The three KW names (`workflow-init`, `workflow-next`, `kaola-workflow-finalize`) do
-  not collide with Hermes bundled names at v0.22.5.
+  not collide with Hermes bundled names at v0.22.5 (source-checked against the installed tree; P0
+  did not record this as a live row).
 - **M4 / curator and update.** Copied KW skills have no provenance marker and are reported as
   **unmanaged**: the curator never auto-stales or archives them. `hermes update` seeds/updates only
   bundled-manifest skills, so it does not reseed or prune a non-bundled KW skill.
@@ -103,6 +104,24 @@ does **not** delete another forge's renamed scripts; the active entry is still s
 **P1 resolver guard** refuses a repository that resolves to a different forge before any forge CLI
 call, so the single-forge posture is safe; reinstall with `--forge=<github|gitlab|gitea>` to switch.
 The issue #1123 P3 union-scripts + multi-entry layout is therefore not used here.
+
+## Identity slot and ownership edge cases
+
+- **SOUL.md is required before install.** The installer refuses a missing, empty, or whitespace-only
+  `SOUL.md`; it never creates or seeds the identity slot. Hermes seeds its own default identity only
+  while the file is missing or a known legacy template. Run `hermes` once (or write an owner
+  identity), then rerun the installer. This prevents KW from replacing the default persona or
+  minting an identity marker for a mistyped/new profile.
+- **Owner edits and uninstall.** A changed managed region is refused. Uninstall now exits non-zero
+  when the carrier is left in place; it does not report success over a refused owner conflict. The
+  installer writes the carrier last by design, so a conflict discovered at that step means skills and
+  support scripts were already refreshed; resolve the carrier conflict and rerun.
+- **Known host-side ownership edges (informational).** `hermes profile create --clone` copies a
+  `SOUL.md` containing the KW region into a profile without a KW ownership record;
+  a distribution-owned `SOUL.md` is replaced on `hermes profile update`; and a dashboard atomic
+  write racing this installer's read-modify-write has a vanishingly small lost-update window.
+  These are host behaviors, not KW claims; `install-hermes.sh --check` reports drift rather than
+  guessing ownership.
 
 ## Boundaries
 

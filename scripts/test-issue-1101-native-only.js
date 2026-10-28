@@ -247,6 +247,8 @@ const editions = {
   devin: require('./sync-devin-edition.js'),
   droid: require('./sync-droid-edition.js'),
   dsh: require('./sync-dsh-edition.js'),
+  antigravity: require('./sync-antigravity-edition.js'),
+  hermes: require('./sync-hermes-edition.js'),
 };
 for (const forge of routing.FORGES) {
   for (const source of forgeLayout.commandSources(forge)) {
@@ -261,7 +263,7 @@ for (const forge of routing.FORGES) {
     surfaces.set(`zcode/${forge}/${source.skillName}`,
       editions.zcode.renderSkill(fs.readFileSync(source.absPath, 'utf8'), source.skillName, forge));
   }
-  for (const runtime of ['devin', 'droid', 'dsh']) {
+  for (const runtime of ['devin', 'droid', 'dsh', 'antigravity', 'hermes']) {
     for (const [rel, bytes] of editions[runtime].expected(forge)) surfaces.set(`${runtime}:${rel}`, bytes);
   }
 }
