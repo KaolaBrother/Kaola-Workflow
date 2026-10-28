@@ -83,6 +83,21 @@
   The ZCode P3 assertions run before its exit gate. No release, version bump, or install is
   implied.
 
+### Fixed
+
+- **Hermes edition documentation and scan receipt (#1125 P1 difference set).** `docs/api.md` no
+  longer folds `sync-hermes-edition.js` into the `--print-tree-root` contract: only OpenCode, Kimi,
+  Grok, Cursor, and ZCode implement that probe, while the Cursor, Devin, Droid, DSH, Antigravity,
+  and Hermes installers stage through `--write --tree-root=<DIR>` and never regenerate the
+  repository tree. It also limits the row's hook-rendering claim to editions whose host has a
+  hook surface and records the installer's `SOUL.md` precondition. The P1 candidate's nine
+  rendered skills (github/gitlab/gitea) and the
+  `hermes-local` `SOUL.md` region were re-scanned read-only with the installed Hermes v0.22.5
+  `skills-guard-v10` and threat-pattern scanner from a throwaway staging root; input hashes,
+  commands, and results are receipted in
+  `docs/investigations/2026-10-28-hermes-p1-scan-receipt.md`. No release, version bump, or install
+  is implied.
+
 ## [12.6.0] - 2026-10-26
 
 ### Added
