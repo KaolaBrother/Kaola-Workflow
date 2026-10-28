@@ -17,6 +17,14 @@ function tmpBase() {
   return path.isAbsolute(dir) ? dir : '/tmp';
 }
 
+// Keep the suite runnable under a deliberately bare PATH (e.g. /usr/bin:/bin):
+// child installers need node, but must never need a developer PATH or hermes.
+const HERMETIC_NODE_BIN = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-node-bin-'));
+fs.symlinkSync(process.execPath, path.join(HERMETIC_NODE_BIN, 'node'));
+const HERMETIC_BASE_PATH = HERMETIC_NODE_BIN + path.delimiter
+  + (process.env.PATH || '/usr/bin:/bin');
+process.on('exit', () => { try { fs.rmSync(HERMETIC_NODE_BIN, { recursive: true, force: true }); } catch (_) {} });
+
 const adapters = facts.loadRuntimeAdapters(REPO);
 const hermes = adapters.runtimes.hermes;
 assert(hermes, 'runtime-capabilities declares a Hermes adapter');
@@ -195,7 +203,7 @@ try {
     ...process.env,
     HOME: fixture.home,
     HERMES_HOME: fixture.hermesHome,
-    PATH: fixture.bin + path.delimiter + process.env.PATH,
+    PATH: fixture.bin + path.delimiter + HERMETIC_BASE_PATH,
   };
   const carrier = path.join(fixture.hermesHome, 'SOUL.md');
   const ownerBytes = fs.readFileSync(carrier);
@@ -319,7 +327,7 @@ try {
       ], {
         cwd: guardRepo, encoding: 'utf8', timeout: 60000,
         env: { HOME: fixture.home, HERMES_HOME: fixture.hermesHome,
-          PATH: fixture.bin + path.delimiter + process.env.PATH,
+          PATH: fixture.bin + path.delimiter + HERMETIC_BASE_PATH,
           KAOLA_GH_MOCK_SCRIPT: ghMock },
       });
       assert.strictEqual(guarded.status, 1,
@@ -348,7 +356,7 @@ try {
       ], {
         cwd: guardRepo, encoding: 'utf8', timeout: 60000,
         env: { HOME: fixture.home, HERMES_HOME: fixture.hermesHome,
-          PATH: fixture.bin + path.delimiter + process.env.PATH,
+          PATH: fixture.bin + path.delimiter + HERMETIC_BASE_PATH,
           KAOLA_GH_MOCK_SCRIPT: ghMock2 },
       });
       assert(fs.existsSync(ghMarker2),
@@ -397,7 +405,7 @@ for (const state of ['missing', 'empty', 'whitespace']) {
       fs.writeFileSync(carrier, state === 'empty' ? '' : '  \n\t\n');
     }
     const before = state === 'missing' ? null : fs.readFileSync(carrier);
-    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome, PATH: HERMETIC_BASE_PATH };
     // spawn-class: environment
     const r = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
       { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
@@ -441,7 +449,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
       fs.symlinkSync(path.join(external, 'kaola-workflow-claim.js'),
         path.join(hermesHome, 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js'));
     }
-    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome, PATH: HERMETIC_BASE_PATH };
     // spawn-class: environment
     const r = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
       { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
@@ -462,7 +470,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
   try {
     const hermesHome = path.join(home, '.hermes');
     write(path.join(hermesHome, 'SOUL.md'), '# Owner identity\n\nKeep this byte.\n');
-    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome };
+    const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome, PATH: HERMETIC_BASE_PATH };
     // spawn-class: environment
     const installedHome = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
       { cwd: REPO, env, encoding: 'utf8', timeout: 120000 });
@@ -490,7 +498,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
 {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-install-all-skip-'));
   try {
-    const env = { ...process.env, HOME: home };
+    const env = { ...process.env, HOME: home, PATH: HERMETIC_BASE_PATH };
     delete env.HERMES_HOME;
     // spawn-class: environment
     const r = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--yes',
@@ -513,8 +521,31 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-sticky-check-'));
   try {
     write(path.join(home, '.hermes', 'active_profile'), 'work\n');
-    const env = { ...process.env, HOME: home };
+
+    // Hermetic PATHs: a node-only bin dir plus a separate bin holding ONLY the stub
+    // hermes. Never inherit the developer's PATH or resolve the real installation.
+    const nodeOnly = path.join(home, 'node-only');
+    fs.mkdirSync(nodeOnly);
+    fs.symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
+    const hermesBin = path.join(home, 'hermes-bin');
+    fs.mkdirSync(hermesBin);
+    write(path.join(hermesBin, 'hermes'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' \'Hermes stub 0.22.5\'',
+      'printf \'%s\\n\' \'Config: /tmp/kw-hermes-stub/config.yaml\'',
+    ].join('\n'), 0o755);
+    const basePath = [nodeOnly, '/usr/bin', '/bin'].join(path.delimiter);
+
+    const env = { ...process.env, HOME: home, PATH: [hermesBin, basePath].join(path.delimiter) };
     delete env.HERMES_HOME;
+    // The stub must be the resolved hermes, not the real installation.
+    // spawn-class: environment
+    const stub = spawnSync('hermes', ['--version'], { env, encoding: 'utf8' });
+    assert.strictEqual(stub.status, 0, 'm10: hermetic hermes stub runs');
+    assert(/Hermes stub 0\.22\.5/.test(stub.stdout)
+      && /kw-hermes-stub/.test(stub.stdout),
+      'm10: PATH resolves the hermetic stub: ' + stub.stdout);
+
     // spawn-class: cli-contract
     const r = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--check',
       '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
@@ -523,11 +554,15 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
     assert(/sticky profile .*active but HERMES_HOME is unset/.test(r.stdout + r.stderr),
       'm10: --check names the sticky-profile refusal: ' + r.stdout + r.stderr);
 
-    // n4: when hermes is not on PATH, keep absent-runtime semantics (PLAN/advisory),
-    // not a sticky-profile FAIL against the default home.
-    const noHermesPath = path.dirname(process.execPath) + path.delimiter + '/usr/bin' + path.delimiter + '/bin';
-    const absentEnv = { ...process.env, HOME: home, PATH: noHermesPath };
+    // n4: node-only PATH with no hermes anywhere; keep absent-runtime semantics.
+    const absentEnv = { ...process.env, HOME: home, PATH: basePath };
     delete absentEnv.HERMES_HOME;
+    // spawn-class: environment
+    const absentProbe = spawnSync('sh', ['-c', 'command -v hermes'], { env: absentEnv, encoding: 'utf8' });
+    assert.notStrictEqual(absentProbe.status, 0, 'n4: no hermes is on the hermetic PATH');
+    assert.strictEqual(absentProbe.stdout.trim(), '', 'n4: hermes is absent from the node-only PATH');
+    assert.deepStrictEqual(fs.readdirSync(nodeOnly), ['node'],
+      'n4: the node-only dir contains only node');
     // spawn-class: cli-contract
     const absent = spawnSync('bash', [path.join(REPO, 'install-all.sh'), '--check',
       '--skip=claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh,antigravity'],
@@ -553,7 +588,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
     write(target, 'foreign\n');
     fs.symlinkSync(target, path.join(hermesHome, 'SOUL.md'));
     const env = { ...process.env, HOME: home, HERMES_HOME: hermesHome,
-      PATH: path.join(home, 'bin') + path.delimiter + process.env.PATH };
+      PATH: path.join(home, 'bin') + path.delimiter + HERMETIC_BASE_PATH };
     fs.mkdirSync(path.join(home, 'bin'));
     write(path.join(home, 'bin', 'hermes'), '#!/bin/sh\nexit 0\n', 0o755);
     // spawn-class: environment
@@ -576,7 +611,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-profile-'));
   try {
     write(path.join(home, '.hermes', 'active_profile'), 'work\n');
-    const env = { ...process.env, HOME: home };
+    const env = { ...process.env, HOME: home, PATH: HERMETIC_BASE_PATH };
     delete env.HERMES_HOME;
     // spawn-class: environment
     const r = spawnSync('bash', [path.join(REPO, 'install-hermes.sh'), '--global'],
@@ -595,7 +630,7 @@ for (const kind of ['skill-dir', 'skill-file', 'support-file']) {
 {
   const home = fs.mkdtempSync(path.join(tmpBase(), 'kw-hermes-project-'));
   try {
-    const env = { ...process.env, HOME: home, HERMES_HOME: path.join(home, '.hermes') };
+    const env = { ...process.env, HOME: home, HERMES_HOME: path.join(home, '.hermes'), PATH: HERMETIC_BASE_PATH };
     const project = path.join(home, 'project');
     fs.mkdirSync(project);
     // spawn-class: environment
